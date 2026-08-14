@@ -1,6 +1,5 @@
 import {
   getCanvasNodeSize,
-  type CanvasDocument,
   type CanvasGenerateRequest,
   type CanvasGenerationOutput,
   type CanvasNode,
@@ -168,41 +167,6 @@ export function canRunMediaOperation(context: CanvasSelectionActionContext, acti
   return action.steps.length > 0 && isManagedProjectMediaSelection(context, action.target)
 }
 
-export function canResumeMediaOperation(
-  request: MediaOperationDialogRequest,
-  document: CanvasDocument,
-  createdNodeIds: readonly string[],
-) {
-  if (
-    request.action.steps.length < 2 ||
-    document.id !== request.canvasId ||
-    createdNodeIds.length < 1 ||
-    createdNodeIds.length >= request.action.steps.length
-  ) {
-    return false
-  }
-  const originalSource = request.context.selectedNodes[0]
-  const liveSource = document.nodes.find((node) => node.id === originalSource?.id)
-  const originalSourceReference = originalSource ? projectMediaReferenceIdentity(originalSource, "video") : undefined
-  if (
-    !originalSourceReference ||
-    !liveSource ||
-    originalSourceReference !== projectMediaReferenceIdentity(liveSource, "video")
-  ) {
-    return false
-  }
-  return createdNodeIds.every((nodeId, index) => {
-    const completed = document.nodes.find((node) => node.id === nodeId)
-    const expectedOutput = request.action.steps[index]?.output
-    return (
-      completed !== undefined &&
-      expectedOutput !== undefined &&
-      projectMediaReferenceIdentity(completed, expectedOutput) !== undefined &&
-      document.edges.some((edge) => edge.source === originalSource.id && edge.target === completed.id)
-    )
-  })
-}
-
 export function validateMediaOperationInput(
   editor: MediaOperationEditor,
   input: MediaOperationInput,
@@ -277,10 +241,6 @@ export function createMediaOperationGenerateRequests(
   const node = requireRequestMediaNode(request)
   const anchor = mediaOperationResultAnchor(node, request.context.document.nodes)
   const toolInput = editorToolInput(request.action.editor, input)
-  const createsPendingImage =
-    request.action.target === "image" &&
-    request.action.editor === "immediate" &&
-    request.action.presentation === "cutout-scan"
   return request.action.steps.map((step, index) => ({
     anchor: { x: anchor.x, y: anchor.y + index * 224 },
     context: {
@@ -297,7 +257,7 @@ export function createMediaOperationGenerateRequests(
         role: request.action.target === "image" ? "reference_image" : "reference_video",
       },
     ],
-    ...(createsPendingImage ? { resultMode: { type: "create-pending-node" as const } } : {}),
+    resultMode: { type: "create-pending-node" as const },
     signal,
     toolId: step.toolId,
     ...(toolInput ? { toolInput } : {}),

@@ -8,7 +8,6 @@ import type {
   MediaOperationDialogRequest,
   MediaOperationEditor,
 } from "./media-operation-selection-action"
-import { MediaOperationPartialError } from "./media-operation-runner"
 
 function request(editor: MediaOperationEditor): MediaOperationDialogRequest {
   const node = createMediaNode({
@@ -133,17 +132,10 @@ describe("MediaOperationDialog", () => {
     expect(shouldCloseMediaDialogAfterFailure(freshContext.signal, operation.signal)).toBeTrue()
   })
 
-  test("keeps a partially completed operation open when its selection context refreshes", () => {
+  test("closes a pending admission when its Canvas context becomes stale", () => {
     const context = new AbortController()
     const operation = new AbortController()
     context.abort(new DOMException("Canvas document refreshed", "AbortError"))
-    const failure = new MediaOperationPartialError("Second step failed", {
-      createdNodeIds: ["first-result"],
-      nextRequestIndex: 1,
-      warnings: [],
-    })
-    expect(shouldCloseMediaDialogAfterFailure(context.signal, operation.signal, failure)).toBeFalse()
-    operation.abort(new DOMException("Canceled", "AbortError"))
-    expect(shouldCloseMediaDialogAfterFailure(context.signal, operation.signal, failure)).toBeTrue()
+    expect(shouldCloseMediaDialogAfterFailure(context.signal, operation.signal)).toBeTrue()
   })
 })

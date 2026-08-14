@@ -4,6 +4,8 @@ import type { CanvasGenerationTargetGuard } from "@convax/canvas/application"
 import {
   generationIpcChannels,
   type GenerationCancelRequest,
+  type GenerationCanvasAdmissionRequest,
+  type GenerationCanvasAdmissionResult,
   type GenerationCanvasRequest,
   type GenerationCanvasReconcileRequest,
   type GenerationCanvasReconcileResult,
@@ -21,6 +23,10 @@ import { validateGenerationToolInputShape } from "./generation-tool-input-schema
 export { generationIpcChannels } from "../generation-contracts"
 
 export interface GenerationExecutor {
+  admitCanvas?(
+    request: GenerationCanvasAdmissionRequest,
+    signal?: AbortSignal,
+  ): Promise<GenerationCanvasAdmissionResult>
   cancel?(request: GenerationCancelRequest): Promise<void>
   describeTool(request: GenerationDescribeToolRequest, signal?: AbortSignal): Promise<GenerationToolDescription>
   generate(request: GenerationCanvasRequest, signal?: AbortSignal): Promise<GenerationCanvasResult>
@@ -371,6 +377,60 @@ export function parseGenerationCanvasRequest(input: unknown): GenerationCanvasRe
   }
 }
 
+export function parseGenerationCanvasAdmissionRequest(input: unknown): GenerationCanvasAdmissionRequest {
+  const value = requireRecord(input, "Generation Canvas admission request")
+  requireExactKeys(value, ["steps"], ["steps"], "Generation Canvas admission request")
+  if (!Array.isArray(value.steps) || value.steps.length < 1 || value.steps.length > 16) {
+    throw new Error("Generation Canvas admission steps are invalid")
+  }
+
+  const operationIds = new Set<string>()
+  let expectedRef: GenerationCanvasRequest["ref"] | undefined
+  const steps = value.steps.map((inputStep, stepIndex) => {
+    const step = requireRecord(inputStep, "Generation Canvas admission step")
+    requireExactKeys(step, ["relationAnchorStepIndexes", "request"], ["request"], "Generation Canvas admission step")
+    const request = parseGenerationCanvasRequest(step.request)
+    if (request.resultMode?.type !== "create-pending-node" || request.expectedOutputCount !== 1) {
+      throw new Error("Generation Canvas admission steps must create exactly one pending node")
+    }
+    if (operationIds.has(request.operationId)) {
+      throw new Error("Generation Canvas admission contains a duplicate operation id")
+    }
+    operationIds.add(request.operationId)
+    if (expectedRef && (expectedRef.canvasId !== request.ref.canvasId || expectedRef.scopeId !== request.ref.scopeId)) {
+      throw new Error("Generation Canvas admission steps must target one Canvas")
+    }
+    expectedRef ??= request.ref
+
+    let relationAnchorStepIndexes: number[] | undefined
+    if (step.relationAnchorStepIndexes !== undefined) {
+      if (!Array.isArray(step.relationAnchorStepIndexes) || step.relationAnchorStepIndexes.length > 16) {
+        throw new Error("Generation Canvas admission relation indexes are invalid")
+      }
+      relationAnchorStepIndexes = step.relationAnchorStepIndexes.map((index) => {
+        if (!Number.isSafeInteger(index) || index < 0 || index >= stepIndex) {
+          throw new Error("Generation Canvas admission relation index must reference a prior step")
+        }
+        return index
+      })
+      if (new Set(relationAnchorStepIndexes).size !== relationAnchorStepIndexes.length) {
+        throw new Error("Generation Canvas admission relation indexes contain a duplicate")
+      }
+      if (request.referenceConstraint && relationAnchorStepIndexes.length > 0) {
+        throw new Error("Constrained generation cannot include admission relation indexes")
+      }
+      if ((request.relationAnchorNodeIds?.length ?? 0) + relationAnchorStepIndexes.length > 32) {
+        throw new Error("Generation Canvas admission relation anchors exceed the limit")
+      }
+    }
+    return {
+      ...(relationAnchorStepIndexes === undefined ? {} : { relationAnchorStepIndexes }),
+      request,
+    }
+  })
+  return { steps }
+}
+
 /**
  * Exposes only the generation application operation. Vendor credentials, native
  * paths, arbitrary MCP calls, and Plugin process controls never cross preload.
@@ -422,6 +482,27 @@ export function registerGenerationIpc(executor: GenerationExecutor, options: Gen
     if ([...senders.values()].some((state) => state.controllers.has(operationId))) return
     await executor.cancel?.({ operationId })
   })
+  ipcMain.handle(generationIpcChannels.admitCanvas, async (event, input: unknown) => {
+    if (!options.isTrustedSender(event)) throw new Error("Generation IPC request came from an untrusted renderer")
+    if (disposed) throw new Error("Generation IPC is disposed")
+    if (!executor.admitCanvas) throw new Error("Generation Canvas admission is unavailable")
+    const request = parseGenerationCanvasAdmissionRequest(input)
+    const state = stateFor(event.sender)
+    const operationIds = request.steps.map((step) => step.request.operationId)
+    if (operationIds.some((operationId) => state.controllers.has(operationId))) {
+      throw new Error("Generation operation id is already active")
+    }
+    const controller = new AbortController()
+    for (const operationId of operationIds) state.controllers.set(operationId, controller)
+    try {
+      return await executor.admitCanvas(request, controller.signal)
+    } finally {
+      for (const operationId of operationIds) {
+        if (state.controllers.get(operationId) === controller) state.controllers.delete(operationId)
+      }
+      deleteSenderWhenIdle(state)
+    }
+  })
   ipcMain.handle(generationIpcChannels.listTools, (event, input: unknown) => {
     if (!options.isTrustedSender(event)) throw new Error("Generation IPC request came from an untrusted renderer")
     if (disposed) throw new Error("Generation IPC is disposed")
@@ -457,6 +538,7 @@ export function registerGenerationIpc(executor: GenerationExecutor, options: Gen
   return () => {
     if (disposed) return
     disposed = true
+    ipcMain.removeHandler(generationIpcChannels.admitCanvas)
     ipcMain.removeHandler(generationIpcChannels.cancel)
     ipcMain.removeHandler(generationIpcChannels.generate)
     ipcMain.removeHandler(generationIpcChannels.describeTool)

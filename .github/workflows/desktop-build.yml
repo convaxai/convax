@@ -1,4 +1,4 @@
-name: Manual desktop installers
+name: Manual desktop release
 
 on:
   workflow_dispatch:
@@ -12,13 +12,26 @@ on:
           - prod
           - beta
           - dev
+      version:
+        description: Exact SemVer embedded in installers and update metadata
+        required: true
+        type: string
       confirm_commit:
         description: Exact 40-character main commit SHA to build
         required: true
         type: string
+      release_notes:
+        description: Bounded release notes shown by the client
+        required: true
+        type: string
+      publish:
+        description: Publish the signed artifacts to GitHub Releases and the configured update feed
+        required: true
+        default: false
+        type: boolean
 
 concurrency:
-  group: manual-desktop-installers-${{ github.ref }}
+  group: manual-desktop-release-${{ inputs.channel }}-${{ inputs.version }}
   cancel-in-progress: false
 
 permissions:
@@ -37,12 +50,15 @@ jobs:
     env:
       CONVAX_CHANNEL: ${{ inputs.channel }}
       CONVAX_RELEASE: "true"
+      CONVAX_RELEASE_VERSION: ${{ inputs.version }}
+      CONVAX_UPDATE_BASE_URL: ${{ format('{0}/desktop/{1}', vars.CONVAX_UPDATE_BASE_URL, inputs.channel) }}
+      CONVAX_PACKAGED_PROVENANCE_DENYLIST_B64: ${{ vars.PACKAGED_PROVENANCE_DENYLIST_B64 }}
+      RELEASE_NOTES: ${{ inputs.release_notes }}
       CSC_LINK: ${{ secrets.MAC_CSC_LINK }}
       CSC_KEY_PASSWORD: ${{ secrets.MAC_CSC_KEY_PASSWORD }}
       APPLE_ID: ${{ secrets.APPLE_ID }}
       APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
       APPLE_TEAM_ID: ${{ vars.APPLE_TEAM_ID }}
-      CONVAX_PACKAGED_PROVENANCE_DENYLIST_B64: ${{ vars.PACKAGED_PROVENANCE_DENYLIST_B64 }}
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
@@ -50,58 +66,67 @@ jobs:
       - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
         with:
           bun-version: 1.3.14
-      - name: Validate runner and signing configuration
+      - name: Validate immutable release inputs
         shell: bash
         run: |
           set -euo pipefail
           test "$(uname -m)" = "arm64"
+          [[ "$CONVAX_RELEASE_VERSION" =~ ^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-[0-9A-Za-z.-]+)?$ ]]
+          [[ "$CONVAX_UPDATE_BASE_URL" == https://* ]]
           test -n "$CSC_LINK"
           test -n "$CSC_KEY_PASSWORD"
           test -n "$APPLE_ID"
           test -n "$APPLE_APP_SPECIFIC_PASSWORD"
           test -n "$APPLE_TEAM_ID"
           test -n "$CONVAX_PACKAGED_PROVENANCE_DENYLIST_B64"
+          test -n "$RELEASE_NOTES"
+      - name: Materialize bounded release notes
+        shell: bash
+        run: |
+          set -euo pipefail
+          notes="$RUNNER_TEMP/convax-release-notes.md"
+          printf '%s\n' "$RELEASE_NOTES" > "$notes"
+          test "$(wc -c < "$notes")" -le 8192
+          echo "CONVAX_RELEASE_NOTES_FILE=$notes" >> "$GITHUB_ENV"
       - name: Install dependencies
         run: bun install --frozen-lockfile
-      - name: Typecheck Desktop
+      - name: Validate Desktop
         run: bun --cwd packages/desktop typecheck
-      - name: Build signed and notarized installers
-        run: bun --cwd packages/desktop package:mac
-      - name: Verify signature, notarization ticket, and packaged startup
+      - name: Build signed update artifacts
+        run: bun --cwd packages/desktop package:mac --publish never
+      - name: Verify signature, notarization, update metadata, and packaged startup
         shell: bash
         run: |
           set -euo pipefail
           shopt -s nullglob
           apps=(packages/desktop/dist/mac*/*.app)
           dmgs=(packages/desktop/dist/*.dmg)
-          if [[ ${#apps[@]} -ne 1 ]]; then
-            echo "Expected exactly one packaged macOS application, found ${#apps[@]}" >&2
-            exit 1
-          fi
-          if [[ ${#dmgs[@]} -ne 1 ]]; then
-            echo "Expected exactly one macOS DMG, found ${#dmgs[@]}" >&2
-            exit 1
-          fi
+          zips=(packages/desktop/dist/*.zip)
+          metadata=(packages/desktop/dist/latest-mac.yml)
+          [[ ${#apps[@]} -eq 1 && ${#dmgs[@]} -eq 1 && ${#zips[@]} -eq 1 && ${#metadata[@]} -eq 1 ]]
           codesign --verify --deep --strict --verbose=2 "${apps[0]}"
           xcrun stapler validate "${apps[0]}"
           spctl --assess --type execute --verbose=4 "${apps[0]}"
           codesign --verify --verbose=2 "${dmgs[0]}"
           spctl --assess --type open --context context:primary-signature --verbose=4 "${dmgs[0]}"
+          grep -F "version: $CONVAX_RELEASE_VERSION" "${metadata[0]}"
+          grep -F "sha512:" "${metadata[0]}"
           bun packages/desktop/scripts/desktop-packaged-provenance.ts "${apps[0]}"
           bun --cwd packages/desktop scripts/desktop-packaged-smoke.ts
-      - name: Upload macOS installers
+      - name: Upload macOS update set
         uses: actions/upload-artifact@65c4c4a1ddee5b72f698fdd19549f0f0fb45cf08 # v4.6.0
         with:
-          name: convax-${{ inputs.channel }}-macos-arm64-${{ github.sha }}
+          name: convax-${{ inputs.channel }}-${{ inputs.version }}-macos-arm64
           path: |
             packages/desktop/dist/*.dmg
             packages/desktop/dist/*.zip
             packages/desktop/dist/*.blockmap
+            packages/desktop/dist/latest-mac.yml
           if-no-files-found: error
           retention-days: 14
 
   windows:
-    name: Windows x64 (unsigned)
+    name: Windows x64 (signed)
     if: >-
       github.ref == 'refs/heads/main' &&
       github.actor == 'fearclear' &&
@@ -111,8 +136,14 @@ jobs:
     timeout-minutes: 60
     env:
       CONVAX_CHANNEL: ${{ inputs.channel }}
-      CSC_IDENTITY_AUTO_DISCOVERY: "false"
+      CONVAX_RELEASE: "true"
+      CONVAX_RELEASE_VERSION: ${{ inputs.version }}
+      CONVAX_UPDATE_BASE_URL: ${{ format('{0}/desktop/{1}', vars.CONVAX_UPDATE_BASE_URL, inputs.channel) }}
+      CONVAX_WINDOWS_PUBLISHER_NAME: ${{ vars.WIN_CSC_PUBLISHER_NAME }}
       CONVAX_PACKAGED_PROVENANCE_DENYLIST_B64: ${{ vars.PACKAGED_PROVENANCE_DENYLIST_B64 }}
+      RELEASE_NOTES: ${{ inputs.release_notes }}
+      CSC_LINK: ${{ secrets.WIN_CSC_LINK }}
+      CSC_KEY_PASSWORD: ${{ secrets.WIN_CSC_KEY_PASSWORD }}
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
@@ -120,40 +151,144 @@ jobs:
       - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
         with:
           bun-version: 1.3.14
-      - name: Validate runner architecture
+      - name: Validate immutable release inputs
         shell: pwsh
         run: |
-          if ($env:PROCESSOR_ARCHITECTURE -ne "AMD64") {
-            throw "Expected an AMD64 Windows runner, got $env:PROCESSOR_ARCHITECTURE"
+          if ($env:PROCESSOR_ARCHITECTURE -ne "AMD64") { throw "Expected AMD64" }
+          if ($env:CONVAX_RELEASE_VERSION -notmatch '^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-[0-9A-Za-z.-]+)?$') { throw "Invalid release version" }
+          if (-not $env:CONVAX_UPDATE_BASE_URL.StartsWith("https://")) { throw "HTTPS update feed is required" }
+          foreach ($name in @("CSC_LINK", "CSC_KEY_PASSWORD", "CONVAX_WINDOWS_PUBLISHER_NAME", "CONVAX_PACKAGED_PROVENANCE_DENYLIST_B64")) {
+            if ([string]::IsNullOrWhiteSpace((Get-Item "env:$name").Value)) { throw "$name is required" }
           }
-          if ([string]::IsNullOrWhiteSpace($env:CONVAX_PACKAGED_PROVENANCE_DENYLIST_B64)) {
-            throw "PACKAGED_PROVENANCE_DENYLIST_B64 is required"
-          }
+          if ([string]::IsNullOrWhiteSpace($env:RELEASE_NOTES)) { throw "Release notes are required" }
+      - name: Materialize bounded release notes
+        shell: pwsh
+        run: |
+          $notes = Join-Path $env:RUNNER_TEMP "convax-release-notes.md"
+          Set-Content -Path $notes -Value $env:RELEASE_NOTES -Encoding utf8NoBOM
+          if ((Get-Item $notes).Length -gt 8192) { throw "Release notes exceed 8192 bytes" }
+          "CONVAX_RELEASE_NOTES_FILE=$notes" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
       - name: Install dependencies
         run: bun install --frozen-lockfile
-      - name: Typecheck Desktop
+      - name: Validate Desktop
         run: bun --cwd packages/desktop typecheck
-      - name: Build unsigned installer
-        run: bun --cwd packages/desktop package:win
-      - name: Verify unsigned installer and packaged startup
+      - name: Build signed update artifacts
+        run: bun --cwd packages/desktop package:win --publish never
+      - name: Verify Authenticode, update metadata, and packaged startup
         shell: pwsh
         run: |
-          $installers = @(Get-ChildItem "packages/desktop/dist/*.exe")
-          if ($installers.Count -ne 1) {
-            throw "Expected exactly one Windows installer, found $($installers.Count)"
-          }
+          $installers = @(Get-ChildItem "packages/desktop/dist/*.exe" | Where-Object { $_.Name -ne "elevate.exe" })
+          $metadata = @(Get-ChildItem "packages/desktop/dist/latest.yml")
+          if ($installers.Count -ne 1 -or $metadata.Count -ne 1) { throw "Expected one signed installer and latest.yml" }
           $signature = Get-AuthenticodeSignature $installers[0].FullName
-          if ($signature.Status -ne "NotSigned") {
-            throw "Expected an unsigned Windows installer, got $($signature.Status)"
-          }
+          if ($signature.Status -ne "Valid") { throw "Invalid Authenticode status: $($signature.Status)" }
+          if (-not $signature.SignerCertificate.Subject.Contains($env:CONVAX_WINDOWS_PUBLISHER_NAME)) { throw "Unexpected Windows publisher" }
+          Select-String -Path $metadata[0].FullName -SimpleMatch "version: $env:CONVAX_RELEASE_VERSION", "sha512:"
           bun packages/desktop/scripts/desktop-packaged-provenance.ts packages/desktop/dist/win-unpacked
           bun --cwd packages/desktop scripts/desktop-packaged-smoke.ts
-      - name: Upload Windows installer
+      - name: Upload Windows update set
         uses: actions/upload-artifact@65c4c4a1ddee5b72f698fdd19549f0f0fb45cf08 # v4.6.0
         with:
-          name: convax-${{ inputs.channel }}-windows-x64-unsigned-${{ github.sha }}
+          name: convax-${{ inputs.channel }}-${{ inputs.version }}-windows-x64
           path: |
             packages/desktop/dist/*.exe
             packages/desktop/dist/*.blockmap
+            packages/desktop/dist/latest.yml
           if-no-files-found: error
           retention-days: 14
+
+  publish:
+    name: Publish immutable release and update feed
+    if: inputs.publish == true
+    needs: [macos, windows]
+    permissions:
+      contents: write
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      GH_TOKEN: ${{ github.token }}
+      RELEASE_TAG: desktop/${{ inputs.channel }}/v${{ inputs.version }}
+      RELEASE_CHANNEL: ${{ inputs.channel }}
+      RELEASE_COMMIT: ${{ inputs.confirm_commit }}
+      RELEASE_NOTES: ${{ inputs.release_notes }}
+      RELEASE_VERSION: ${{ inputs.version }}
+      S3_ACCESS_KEY_ID: ${{ secrets.S3_ACCESS_KEY_ID }}
+      S3_BUCKET: ${{ secrets.S3_BUCKET }}
+      S3_ENDPOINT: ${{ secrets.S3_ENDPOINT }}
+      S3_PREFIX: ${{ secrets.S3_PREFIX }}
+      S3_REGION: ${{ secrets.S3_REGION }}
+      S3_SECRET_ACCESS_KEY: ${{ secrets.S3_SECRET_ACCESS_KEY }}
+    steps:
+      - uses: actions/download-artifact@fa0a91b85d4f404e444e00e005971372dc801d16 # v4.1.8
+        with:
+          path: release-assets
+          merge-multiple: true
+      - name: Validate complete cross-platform update set
+        shell: bash
+        run: |
+          set -euo pipefail
+          required=(S3_ACCESS_KEY_ID S3_BUCKET S3_ENDPOINT S3_REGION S3_SECRET_ACCESS_KEY)
+          for name in "${required[@]}"; do test -n "${!name:-}" || { echo "$name is required" >&2; exit 1; }; done
+          [[ "$S3_ENDPOINT" == https://* ]]
+          test "$(find release-assets -maxdepth 1 -name 'latest.yml' | wc -l)" -eq 1
+          test "$(find release-assets -maxdepth 1 -name 'latest-mac.yml' | wc -l)" -eq 1
+          test "$(find release-assets -maxdepth 1 -name '*.exe' | wc -l)" -eq 1
+          test "$(find release-assets -maxdepth 1 -name '*.dmg' | wc -l)" -eq 1
+          test "$(find release-assets -maxdepth 1 -name '*.zip' | wc -l)" -eq 1
+          grep -F "version: $RELEASE_VERSION" release-assets/latest.yml
+          grep -F "version: $RELEASE_VERSION" release-assets/latest-mac.yml
+      - name: Publish or verify immutable GitHub Release
+        shell: bash
+        run: |
+          set -euo pipefail
+          if gh release view "$RELEASE_TAG" >/dev/null 2>&1; then
+            existing_target="$(gh release view "$RELEASE_TAG" --json targetCommitish --jq .targetCommitish)"
+            existing_prerelease="$(gh release view "$RELEASE_TAG" --json isPrerelease --jq .isPrerelease)"
+            expected_prerelease=false
+            if [ "$RELEASE_CHANNEL" != "prod" ]; then expected_prerelease=true; fi
+            if [ "$existing_target" != "$RELEASE_COMMIT" ] || [ "$existing_prerelease" != "$expected_prerelease" ]; then
+              echo "Release $RELEASE_TAG exists with different target or channel metadata" >&2
+              exit 1
+            fi
+            existing_assets="$RUNNER_TEMP/existing-release-assets"
+            mkdir -p "$existing_assets"
+            gh release download "$RELEASE_TAG" --dir "$existing_assets"
+            find release-assets -maxdepth 1 -type f -exec basename {} \; | LC_ALL=C sort > "$RUNNER_TEMP/expected-assets.txt"
+            find "$existing_assets" -maxdepth 1 -type f -exec basename {} \; | LC_ALL=C sort > "$RUNNER_TEMP/existing-assets.txt"
+            diff -u "$RUNNER_TEMP/expected-assets.txt" "$RUNNER_TEMP/existing-assets.txt"
+            while IFS= read -r asset; do
+              cmp -s "release-assets/$asset" "$existing_assets/$asset" || {
+                echo "Release $RELEASE_TAG asset $asset differs; version reuse is forbidden" >&2
+                exit 1
+              }
+            done < "$RUNNER_TEMP/expected-assets.txt"
+            exit 0
+          fi
+          notes="$RUNNER_TEMP/release-notes.md"
+          printf '%s\n' "$RELEASE_NOTES" > "$notes"
+          release_flags=()
+          if [ "$RELEASE_CHANNEL" != "prod" ]; then release_flags+=(--prerelease); fi
+          gh release create "$RELEASE_TAG" release-assets/* \
+            --target "$RELEASE_COMMIT" \
+            --title "Convax $RELEASE_CHANNEL $RELEASE_VERSION" \
+            --notes-file "$notes" \
+            "${release_flags[@]}"
+      - name: Publish artifacts first and update metadata last
+        shell: bash
+        run: |
+          set -euo pipefail
+          command -v aws >/dev/null
+          export AWS_ACCESS_KEY_ID="$S3_ACCESS_KEY_ID"
+          export AWS_SECRET_ACCESS_KEY="$S3_SECRET_ACCESS_KEY"
+          export AWS_DEFAULT_REGION="$S3_REGION"
+          destination="s3://${S3_BUCKET}"
+          if [ -n "${S3_PREFIX:-}" ]; then destination="${destination}/${S3_PREFIX#/}"; fi
+          destination="${destination%/}/desktop/${RELEASE_CHANNEL}"
+          aws --endpoint-url "$S3_ENDPOINT" s3 cp release-assets "$destination" \
+            --recursive \
+            --exclude "*.yml" \
+            --cache-control "public, max-age=31536000, immutable"
+          for metadata in release-assets/latest.yml release-assets/latest-mac.yml; do
+            aws --endpoint-url "$S3_ENDPOINT" s3 cp "$metadata" "$destination/$(basename "$metadata")" \
+              --cache-control "public, max-age=60"
+          done

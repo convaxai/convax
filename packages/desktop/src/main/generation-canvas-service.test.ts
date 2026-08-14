@@ -503,10 +503,12 @@ async function setupPendingGeneration(
     operations?: GenerationOperationStore
     prepareTool?: (tool: GenerationToolSummary, signal?: AbortSignal) => Promise<void>
     dispatchGuard?: () => Promise<void> | void
+    failPendingOperationId?: string
     recovery?: PreparedGenerationRecovery
     referenceImageSize?: { height: number; width: number }
     roundTripPending?: boolean
     taskId?: string
+    toolDescription?: GenerationToolDescription
   } = {},
 ) {
   const projectRoot = await temporaryDirectory()
@@ -562,22 +564,27 @@ async function setupPendingGeneration(
         throw new Error("Pending generation must not add a second Canvas node")
       },
       async createPendingGenerationResource(input) {
+        if (input.operationId === options.failPendingOperationId) {
+          throw new Error("Pending Canvas commit failed")
+        }
         createRequests.push(input)
+        const operationPendingNodeId =
+          input.operationId === "operation-one" ? pendingNodeId : `pending-${input.operationId}`
         const node =
           input.kind === "text"
             ? createCanvasTextNode({
-                id: pendingNodeId,
+                id: operationPendingNodeId,
                 label: input.label ?? "Text",
                 metadata: {},
                 position: input.anchor,
                 resourceState: { status: "ready", text: "" },
               })
             : createMediaNode({
-                id: pendingNodeId,
+                id: operationPendingNodeId,
                 label: input.label ?? "Image",
                 position: input.anchor,
                 resource: {
-                  id: pendingNodeId,
+                  id: operationPendingNodeId,
                   kind: input.kind,
                   metadata: {},
                   state: { status: "ready", url: "" },
@@ -591,15 +598,15 @@ async function setupPendingGeneration(
             ...currentDocument.edges,
             ...(input.relation?.mode === "connect"
               ? input.relation.anchorNodeIds.map((anchorNodeId, index) => ({
-                  id: `pending-edge-${index}`,
+                  id: `pending-edge-${input.operationId}-${index}`,
                   source: anchorNodeId,
-                  target: pendingNodeId,
+                  target: operationPendingNodeId,
                 }))
               : []),
           ],
           nodes: [...currentDocument.nodes, node],
         }
-        currentDocument = startCanvasNodeGenerationRun(withPending, pendingNodeId, {
+        currentDocument = startCanvasNodeGenerationRun(withPending, operationPendingNodeId, {
           operationId: input.operationId,
           prompt: input.prompt,
           toolId: input.toolId,
@@ -609,8 +616,8 @@ async function setupPendingGeneration(
         }
         return persistedCommandResult(
           currentDocument,
-          [pendingNodeId],
-          [...(input.relation?.mode === "connect" ? input.relation.anchorNodeIds : []), pendingNodeId],
+          [operationPendingNodeId],
+          [...(input.relation?.mode === "connect" ? input.relation.anchorNodeIds : []), operationPendingNodeId],
         )
       },
       async replaceGeneratedResource(input) {
@@ -642,6 +649,7 @@ async function setupPendingGeneration(
     result,
     recovery: options.recovery,
     taskId: options.taskId,
+    toolDescription: options.toolDescription,
     run: {
       async finish(input) {
         currentDocument = finishCanvasNodeGenerationRun(
@@ -1563,6 +1571,153 @@ describe("GenerationCanvasService", () => {
     expect(harness.reloadRevisions).toEqual([1, 2])
   })
 
+  test("admits every linked pending result before independent external executions can finish", async () => {
+    let release!: () => void
+    const gate = new Promise<void>((resolve) => {
+      release = resolve
+    })
+    const operationSignals: AbortSignal[] = []
+    const png = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 1, 2, 3, 4])
+    const harness = await setupPendingGeneration(async (_input, signal) => {
+      if (signal) operationSignals.push(signal)
+      await gate
+      return { content: [{ data: png.toString("base64"), mimeType: "image/png", type: "image" }] }
+    })
+    const actor = { id: "renderer:1", kind: "ui" as const }
+    const controller = new AbortController()
+    const stepRequest = (operationId: string, prompt: string): GenerationCanvasRequest =>
+      request({
+        expectedOutputCount: 1,
+        operationId,
+        output: "image",
+        prompt,
+        references: [{ nodeId: harness.reference.id, role: "text" }],
+        resultMode: { type: "create-pending-node" },
+        toolId: "creative-tools/draw",
+      })
+
+    const admissionRequest = {
+      steps: [
+        { request: stepRequest("operation-video", "Create silent video") },
+        {
+          relationAnchorStepIndexes: [0],
+          request: stepRequest("operation-audio", "Extract audio"),
+        },
+      ],
+    }
+    const admission = await harness.service.admitCanvas(admissionRequest, actor, controller.signal)
+
+    expect(admission).toEqual({
+      operations: [
+        { nodeId: "pending-operation-video", operationId: "operation-video" },
+        { nodeId: "pending-operation-audio", operationId: "operation-audio" },
+      ],
+    })
+    expect(harness.createRequests).toHaveLength(2)
+    expect(harness.createRequests[1]?.relation).toMatchObject({
+      anchorNodeIds: [harness.reference.id, "pending-operation-video"],
+      direction: "from-anchor",
+      mode: "connect",
+    })
+    expect(harness.getDocument().nodes.filter((node) => node.data.status === "pending")).toHaveLength(2)
+    await expect(harness.service.admitCanvas(admissionRequest, actor)).resolves.toEqual(admission)
+    expect(harness.createRequests).toHaveLength(2)
+
+    controller.abort(new DOMException("Dialog closed after admission", "AbortError"))
+    for (let attempt = 0; attempt < 40 && operationSignals.length < 2; attempt += 1) {
+      await new Promise((resolve) => setTimeout(resolve, 5))
+    }
+    expect(operationSignals).toHaveLength(2)
+    expect(operationSignals.every((signal) => !signal.aborted)).toBe(true)
+
+    release()
+    for (let attempt = 0; attempt < 20 && harness.replacementRequests.length < 2; attempt += 1) {
+      await new Promise((resolve) => setTimeout(resolve, 5))
+    }
+    expect(harness.replacementRequests).toHaveLength(2)
+  })
+
+  test("starts no external execution when a later pending node cannot be committed", async () => {
+    const harness = await setupPendingGeneration(
+      { content: [{ text: "must not run", type: "text" }] },
+      { failPendingOperationId: "operation-audio" },
+    )
+    const stepRequest = (operationId: string): GenerationCanvasRequest =>
+      request({
+        expectedOutputCount: 1,
+        operationId,
+        output: "image",
+        references: [{ nodeId: harness.reference.id, role: "text" }],
+        resultMode: { type: "create-pending-node" },
+        toolId: "creative-tools/draw",
+      })
+
+    await expect(
+      harness.service.admitCanvas(
+        {
+          steps: [
+            { request: stepRequest("operation-video") },
+            { relationAnchorStepIndexes: [0], request: stepRequest("operation-audio") },
+          ],
+        },
+        { id: "renderer:1", kind: "ui" },
+      ),
+    ).rejects.toThrow("Pending Canvas commit failed")
+
+    for (let attempt = 0; attempt < 20 && harness.runRequests.finish.length < 1; attempt += 1) {
+      await new Promise((resolve) => setTimeout(resolve, 5))
+    }
+    expect(harness.calls).toEqual([])
+    expect(harness.createRequests).toHaveLength(1)
+    expect(harness.runRequests.finish).toHaveLength(1)
+    expect(harness.getDocument().nodes.find((node) => node.id === "pending-operation-video")?.data.status).toBe("error")
+  })
+
+  test("preflights every step schema before creating any pending node", async () => {
+    const harness = await setupPendingGeneration(
+      { content: [{ text: "must not run", type: "text" }] },
+      {
+        toolDescription: {
+          fields: [
+            {
+              id: "quality",
+              kind: "text",
+              label: "Quality",
+              maxLength: 16,
+              minLength: 1,
+              required: true,
+            },
+          ],
+          toolId: "creative-tools/draw",
+        },
+      },
+    )
+    const stepRequest = (operationId: string, toolInput?: Readonly<Record<string, string>>): GenerationCanvasRequest =>
+      request({
+        expectedOutputCount: 1,
+        operationId,
+        output: "image",
+        references: [{ nodeId: harness.reference.id, role: "text" }],
+        resultMode: { type: "create-pending-node" },
+        toolId: "creative-tools/draw",
+        ...(toolInput ? { toolInput } : {}),
+      })
+
+    await expect(
+      harness.service.admitCanvas(
+        {
+          steps: [
+            { request: stepRequest("operation-video", { quality: "high" }) },
+            { relationAnchorStepIndexes: [0], request: stepRequest("operation-audio") },
+          ],
+        },
+        { id: "renderer:1", kind: "ui" },
+      ),
+    ).rejects.toThrow("Generation tool input is required: quality")
+    expect(harness.createRequests).toEqual([])
+    expect(harness.calls).toEqual([])
+  })
+
   test("derives a same-modality pending result frame from the authoritative visual reference", async () => {
     const png = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 1, 2, 3, 4])
     const harness = await setupPendingGeneration(
@@ -2305,7 +2460,7 @@ describe("GenerationCanvasService", () => {
     })
   })
 
-  test("does not create a second pending node when preparation fails after the first node commit", async () => {
+  test("does not create a pending node when tool preparation fails during admission preflight", async () => {
     const harness = await setupPendingGeneration(
       { content: [{ text: "Unused output", type: "text" }] },
       {
@@ -2323,13 +2478,11 @@ describe("GenerationCanvasService", () => {
     const actor = { id: "renderer:1", kind: "ui" as const }
 
     await expect(harness.service.generate(generationRequest, actor)).rejects.toThrow("authorization was denied")
-    await expect(harness.service.generate(generationRequest, actor)).rejects.toThrow("authorization was denied")
 
-    expect(harness.createRequests).toHaveLength(1)
-    expect(harness.runRequests.finish).toHaveLength(1)
+    expect(harness.createRequests).toEqual([])
+    expect(harness.runRequests.finish).toEqual([])
     expect(harness.calls).toEqual([])
-    expect(harness.getDocument().nodes.filter((node) => node.id === harness.pendingNodeId)).toHaveLength(1)
-    expect(harness.getDocument().nodes.find((node) => node.id === harness.pendingNodeId)?.data.status).toBe("error")
+    expect(harness.getDocument().nodes.filter((node) => node.id === harness.pendingNodeId)).toEqual([])
   })
 
   test("fails the card when the final dispatch guard rejects before the tool call", async () => {

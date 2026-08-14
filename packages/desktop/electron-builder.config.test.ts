@@ -1,6 +1,10 @@
 import { describe, expect, test } from "bun:test"
 import { createRequire } from "node:module"
-import { createElectronBuilderConfig, resolveConvaxChannel } from "./electron-builder.config"
+import {
+  createElectronBuilderConfig,
+  resolveConvaxChannel,
+  resolveDesktopUpdateBaseUrl,
+} from "./electron-builder.config"
 
 const require = createRequire(import.meta.url)
 
@@ -102,7 +106,7 @@ describe("Desktop platform artifacts", () => {
   test("matches the OpenCode-style platform target set", () => {
     const config = createElectronBuilderConfig({})
 
-    expect(config.artifactName).toBe("convax-desktop-${os}-${arch}.${ext}")
+    expect(config.artifactName).toBe("convax-desktop-${version}-${os}-${arch}.${ext}")
     expect(config.mac?.target).toEqual(["dmg", "zip"])
     expect(config.win?.target).toEqual(["nsis"])
     expect(config.linux?.target).toEqual(["AppImage", "deb", "rpm"])
@@ -114,12 +118,17 @@ describe("Desktop platform artifacts", () => {
       icon: "resources/icon.png",
     })
     expect(config.win?.icon).toBe("resources/icon.png")
+    expect(config.win?.verifyUpdateCodeSignature).toBe(true)
     expect(config.linux).toMatchObject({ category: "Graphics", icon: "resources/icon.png" })
   })
 
   test("allows unsigned local builds but fails closed for release signing and notarization", () => {
     const local = createElectronBuilderConfig({})
-    const release = createElectronBuilderConfig({ CONVAX_RELEASE: "true" })
+    const release = createElectronBuilderConfig({
+      CONVAX_RELEASE: "true",
+      CONVAX_RELEASE_VERSION: "1.2.3",
+      CONVAX_UPDATE_BASE_URL: "https://updates.example.com/desktop/prod",
+    })
 
     expect(local.forceCodeSigning).toBe(false)
     expect(local.mac?.notarize).toBe(false)
@@ -127,5 +136,27 @@ describe("Desktop platform artifacts", () => {
     expect(release.forceCodeSigning).toBe(true)
     expect(release.mac?.notarize).toBe(true)
     expect(release.dmg?.sign).toBe(true)
+    expect(release.extraMetadata?.version).toBe("1.2.3")
+    expect(release.publish).toEqual([{ provider: "generic", url: "https://updates.example.com/desktop/prod" }])
+    expect(release.electronUpdaterCompatibility).toBe(">=2.16")
+  })
+
+  test("rejects a release without exact version and public HTTPS update metadata", () => {
+    expect(() => createElectronBuilderConfig({ CONVAX_RELEASE: "true" })).toThrow("CONVAX_UPDATE_BASE_URL")
+    expect(() =>
+      createElectronBuilderConfig({
+        CONVAX_RELEASE: "true",
+        CONVAX_RELEASE_VERSION: "latest",
+        CONVAX_UPDATE_BASE_URL: "https://updates.example.com",
+      }),
+    ).toThrow("CONVAX_RELEASE_VERSION")
+    for (const value of [
+      "http://updates.example.com",
+      "https://user:secret@updates.example.com",
+      "https://updates.example.com/feed?token=secret",
+      "https://updates.example.com/feed#latest",
+    ]) {
+      expect(() => resolveDesktopUpdateBaseUrl(value)).toThrow("public HTTPS")
+    }
   })
 })

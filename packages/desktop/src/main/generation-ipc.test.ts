@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, mock, test } from "bun:test"
 
 import type {
+  GenerationCanvasAdmissionRequest,
   GenerationCanvasRequest,
   GenerationCanvasResult,
   GenerationListToolsRequest,
@@ -365,6 +366,57 @@ describe("generation IPC", () => {
     dispose()
   })
 
+  test("admits a bounded linked pending batch under one sender cancellation scope", async () => {
+    const { generationIpcChannels, registerGenerationIpc } = await import("./generation-ipc")
+    const admissionResult = {
+      operations: [
+        { nodeId: "pending-video", operationId: "operation-video" },
+        { nodeId: "pending-audio", operationId: "operation-audio" },
+      ],
+    }
+    const admitCanvas = mock(async (_input: GenerationCanvasAdmissionRequest, _signal?: AbortSignal) => admissionResult)
+    const dispose = registerGenerationIpc(
+      {
+        admitCanvas,
+        describeTool: async () => description,
+        generate: async () => result,
+        listTools: async () => [],
+      },
+      { isTrustedSender: () => true },
+    )
+    const pendingRequest = (operationId: string) => ({
+      ...request,
+      expectedOutputCount: 1,
+      operationId,
+      resultMode: { type: "create-pending-node" as const },
+    })
+    const admissionRequest = {
+      steps: [
+        { request: pendingRequest("operation-video") },
+        { relationAnchorStepIndexes: [0], request: pendingRequest("operation-audio") },
+      ],
+    } satisfies GenerationCanvasAdmissionRequest
+
+    await expect(Promise.resolve(invoke(generationIpcChannels.admitCanvas, admissionRequest))).resolves.toEqual(
+      admissionResult,
+    )
+    expect(admitCanvas).toHaveBeenCalledWith(admissionRequest, expect.any(AbortSignal))
+    await expect(
+      rejectionMessage(
+        Promise.resolve().then(() =>
+          invoke(generationIpcChannels.admitCanvas, {
+            steps: [
+              { request: pendingRequest("operation-video") },
+              { relationAnchorStepIndexes: [1], request: pendingRequest("operation-audio") },
+            ],
+          }),
+        ),
+      ),
+    ).resolves.toContain("must reference a prior step")
+
+    dispose()
+  })
+
   test("passes the exact host-owned return result mode to Main for declared bounded operations", async () => {
     const { generationIpcChannels, registerGenerationIpc } = await import("./generation-ipc")
     const returnResult = { ...result, createdNodeIds: [], outputText: "Imported one media file." }
@@ -586,6 +638,7 @@ describe("generation IPC", () => {
     expect(thirdOwner.listenerCount("destroyed")).toBe(0)
     expect(removedHandlers.sort()).toEqual(
       [
+        generationIpcChannels.admitCanvas,
         generationIpcChannels.cancel,
         generationIpcChannels.describeTool,
         generationIpcChannels.generate,

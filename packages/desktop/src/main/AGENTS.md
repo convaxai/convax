@@ -7,6 +7,8 @@ authority and lifecycle coordination, not reusable domain semantics.
 ## Owns
 
 - Electron application/window lifecycle and native integrations.
+- Packaged macOS/Windows update checks, native update UI, verified download,
+  cancellation/retry, and installation lifecycle.
 - Filesystem/network adapters, private host storage, trusted protocols, and IPC
   handlers.
 - Project Node repositories and composition of Project, Canvas, Workbench, and Agent
@@ -35,6 +37,9 @@ authority and lifecycle coordination, not reusable domain semantics.
   Canvas image-create command. Decode only the admitted Project file or verified
   managed blob, bound memory, fail closed to the Canvas default size, and never use
   renderer-supplied intrinsic dimensions as authority.
+- Forward the closed resource anchor-origin marker with the prepared resource so
+  Canvas can normalize a pointer center from the Main-authoritative final size.
+  Main never computes viewport coordinates or accepts Renderer sizing authority.
 - Bind every IPC, MessagePort, tool, and external-operation request to its trusted
   sender/principal and current Project/Canvas scope. Recheck permissions, identity,
   catalog membership, revision, target, and cancellation after awaited preparation
@@ -76,6 +81,11 @@ authority and lifecycle coordination, not reusable domain semantics.
 - Do not impose an absolute deadline on accepted long-running generation work.
   Bound control-plane requests and inactivity, propagate progress/cancellation, and
   leave terminal execution state to the admitted LRO contract.
+- Canvas-delivery selection actions use one bounded Main admission operation. Run
+  tool lease/schema preflight before pending creation, resolve prior-step relations
+  only from committed Canvas-owned ids, and keep every external call behind one
+  gate until all independent pending nodes/runs are durable. The admission receipt
+  is not a terminal result; sender teardown after it must not cancel retained work.
 - Host-authored portable failures may use only bounded validated display data. Raw
   sidecar, native, filesystem, network, credential, and recovery diagnostics never
   enter Canvas state or renderer-safe projections.
@@ -83,6 +93,12 @@ authority and lifecycle coordination, not reusable domain semantics.
   Bind it to an absolute task-id userData child before startup, own platform-native
   and window branding here, and ignore the entire mode when packaged. Renderer may
   receive the label and id only as non-authoritative presentation data.
+- Keep application updates out of Preload and Renderer. Contact the one configured
+  public HTTPS feed only from a packaged supported platform, expose bounded release
+  facts through native UI, and use the updater's cancellation and signature/hash
+  verification. Installation must await the shared Main shutdown drain; a failed
+  preparation or installer start must preserve or relaunch the current version.
+  Never read signing, notarization, storage, or publication credentials at runtime.
 
 ## Mandatory module routes
 
@@ -105,6 +121,7 @@ For any matching change, read the full routed reference before planning or editi
 | External editor, retired built-in, native media drag                          | [`docs/architecture.md` “Retired built-ins” and “Native Canvas media drag-out”](../../../../docs/architecture.md#retired-built-ins)                                                                                                                            |
 | Any `*-ipc` or protocol handler                                               | [`docs/architecture.md` §10](../../../../docs/architecture.md#10-electron-boundary) plus the Preload and Renderer contracts                                                                                                                                    |
 | Electron Vite, packaged entry, dependency externalization                     | [`docs/architecture.md` §10](../../../../docs/architecture.md#10-electron-boundary) and the Desktop build/packaging tests                                                                                                                                      |
+| Application update, `electron-updater`, signing, notarization, release feed   | [`docs/architecture.md` “Desktop application update” and §10](../../../../docs/architecture.md#desktop-application-update) plus [`docs/desktop-builds.md`](../../../../docs/desktop-builds.md)                                                                 |
 
 ## Capability invariants
 

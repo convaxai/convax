@@ -88,7 +88,8 @@ Canvas owns document and editor semantics independently of Project and Agent.
   source content against the latest snapshot, derives clone node/edge identities,
   preserves Group containment, and commits one guarded `canvas.nodes.duplicate`
   typed intent atomically. Same-Canvas paste uses internal-edge scope.
-- Group fold state is canonical optional Group node data; UI Fold/Unfold and all
+- Group fold state is canonical optional Group node data; UI Fold creates or marks a
+  compact Group, while UI Unfold atomically ungroups that folded container. All
   grouping/layout actions submit owner-defined application commands. Optional Fit
   runs only after the authoritative layout commit succeeds.
 - Group drop/reparent atomically commits parentage with local geometry, and Alt-drag
@@ -100,6 +101,10 @@ Canvas owns document and editor semantics independently of Project and Agent.
   renderer ghosts may use independently decoded hints through that same policy but
   those hints never enter an intent. Normal media load must not create a second
   geometry write when the committed size already matches the intrinsic fit.
+- A pointer drop carries one explicit center-origin anchor already projected into
+  Canvas coordinates. Canvas uses the first prepared resource's final presentation
+  size to normalize it once to the durable top-left placement; non-pointer callers
+  retain the top-left default and Renderer never guesses the authoritative size.
 - Pending generated resources are a persisted resource business lifecycle, not
   renderer-only state. Canvas owns node-id creation, pending/error validation and
   guarded in-place replacement semantics; hosts own external execution and supply
@@ -122,6 +127,11 @@ Canvas owns document and editor semantics independently of Project and Agent.
 - A host-created pending generation node and its `submitting` run are one Canvas
   business command/CAS. Pending owners use the same transitions, target guard,
   terminal presentation and restart interruption as existing replacement targets.
+- Multi-result admission remains a Host scheduler concern: Canvas commits one
+  independent pending node/run command per step and does not own a batch terminal
+  state. Host-resolved prior-result relations may name only already committed
+  Canvas-owned ids, and no external step starts until the Host's admission gate has
+  observed every required pending commit.
 - The collaboration application adapter must close pending creation, start,
   running/task receipt, failure/interruption, and proof-backed generated replacement.
   Portable run-only transitions use the non-undoable
@@ -149,8 +159,8 @@ Canvas owns document and editor semantics independently of Project and Agent.
   focus projection hides cross-scope Group edges without rewriting them. Focused
   resource creation and parentage are one application command/CAS. Groups remain
   expanded unless an explicit persisted Fold state projects them as compact folders;
-  Unfold restores the durable child-container presentation without moving children
-  or rewriting relationships. File-input
+  Unfold removes the folded Group through the existing atomic Ungroup command while
+  preserving child world positions and removing Group relationships. File-input
   inference remains direct and file-only.
 - Plugins are disposable, deterministic and failure-isolated.
 - Canvas owns only host-neutral renderer and toolbar contracts. Installed Web

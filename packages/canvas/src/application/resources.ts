@@ -1,3 +1,4 @@
+import { getCanvasResourcePresentationSize } from "../media-sizing"
 import type { CanvasPendingResourceKind, CanvasPoint, CanvasSize, CanvasUploadItem } from "../types"
 import {
   CanvasCommandValidationError,
@@ -56,6 +57,9 @@ export type CanvasResourceSource =
       path: string
     })
 
+/** Interpretation of the resource placement anchor before it becomes a durable top-left position. */
+export type CanvasResourceAnchorOrigin = "center" | "top-left"
+
 export interface CanvasResourcePreparationRequest extends CanvasDocumentRef {
   signal?: AbortSignal
   sources: readonly CanvasResourceSource[]
@@ -89,6 +93,7 @@ export interface CanvasResourcePreparationPort {
 export interface CanvasAddResourceSourcesRequest extends CanvasDocumentRef {
   actor: CanvasCommandActor
   anchor: CanvasPoint
+  anchorOrigin?: CanvasResourceAnchorOrigin
   /** Host-neutral final guard invoked immediately before Canvas persistence. */
   beforeCommit?: () => Promise<void>
   commandId: string
@@ -307,6 +312,7 @@ export class CanvasResourceBusinessService {
     const fingerprint = stableJson({
       operation: "add",
       anchor: request.anchor,
+      anchorOrigin: request.anchorOrigin ?? "top-left",
       ...(request.parentId === undefined ? {} : { parentId: request.parentId }),
       relation: request.relation,
       sources: request.sources,
@@ -479,6 +485,7 @@ export class CanvasResourceBusinessService {
     if (!Number.isFinite(request.anchor.x) || !Number.isFinite(request.anchor.y)) {
       throw new CanvasCommandValidationError("Placement anchor must contain finite coordinates")
     }
+    validateCanvasResourceAnchorOrigin(request.anchorOrigin)
     if (hostPrepared !== undefined) validatePreparedCanvasResources(hostPrepared, sourceIds)
     if (request.sources.length === 0 && (hostPrepared === undefined || hostPrepared.items.length === 0)) {
       throw new CanvasCommandValidationError("At least one Canvas resource source is required")
@@ -510,7 +517,7 @@ export class CanvasResourceBusinessService {
               warnings: [...(preparedFromSources.warnings ?? []), ...(hostPrepared.warnings ?? [])],
             }
       command = createAddCanvasResourcesCommand({
-        anchor: request.anchor,
+        anchor: resolveCanvasResourcePlacementAnchor(request.anchor, request.anchorOrigin, prepared.items[0]),
         items: prepared.items,
         ...(request.parentId === undefined ? {} : { parentId: request.parentId }),
         relation: request.relation,
@@ -648,6 +655,27 @@ export class CanvasResourceBusinessService {
     })
     return { ...result, warnings: [...preparationWarnings, ...result.warnings] }
   }
+}
+
+function validateCanvasResourceAnchorOrigin(value: CanvasResourceAnchorOrigin | undefined) {
+  if (value !== undefined && value !== "center" && value !== "top-left") {
+    throw new CanvasCommandValidationError("Canvas resource anchor origin is invalid")
+  }
+}
+
+function resolveCanvasResourcePlacementAnchor(
+  anchor: CanvasPoint,
+  origin: CanvasResourceAnchorOrigin | undefined,
+  firstItem: CanvasUploadItem | undefined,
+): CanvasPoint {
+  if (origin !== "center" || !firstItem) return anchor
+  const size = getCanvasResourcePresentationSize(
+    firstItem.kind,
+    firstItem.kind === "image" || firstItem.kind === "video"
+      ? { height: firstItem.height, width: firstItem.width }
+      : undefined,
+  )
+  return { x: anchor.x - size.width / 2, y: anchor.y - size.height / 2 }
 }
 
 function resourceExecutionKey(request: {

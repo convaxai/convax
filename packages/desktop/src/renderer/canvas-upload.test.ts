@@ -31,6 +31,7 @@ describe("desktop Canvas resource transport", () => {
     const result = await addCanvasUploadResources(
       {
         anchor: { x: 20, y: 40 },
+        anchorOrigin: "center",
         canvasId: "canvas-a",
         files: [file],
         projectId: "project-a",
@@ -54,6 +55,7 @@ describe("desktop Canvas resource transport", () => {
     expect(order).toEqual(["token", "add"])
     expect(add).toHaveBeenCalledWith({
       anchor: { x: 20, y: 40 },
+      anchorOrigin: "center",
       canvasId: "canvas-a",
       commandId: "renderer:add",
       localFiles: [

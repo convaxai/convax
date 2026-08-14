@@ -542,6 +542,7 @@ const pluginServiceClient = {
 } satisfies PluginServiceClient
 
 const generationClient = {
+  admitCanvas: (input) => ipcRenderer.invoke(generationIpcChannels.admitCanvas, input),
   cancel: (input) => ipcRenderer.invoke(generationIpcChannels.cancel, input),
   describeTool: (input) => ipcRenderer.invoke(generationIpcChannels.describeTool, input),
   generate: (input) => ipcRenderer.invoke(generationIpcChannels.generate, input),
