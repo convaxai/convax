@@ -1,7 +1,8 @@
 # Convax × AuthX × Nexus 本地集成执行契约
 
-状态：目标架构与跨仓实施契约。本文描述尚待 AuthX、Nexus 和
-`convax-plugins` 共同完成的接口；计划、未提交代码、测试桩和历史验收都不是完成证据。
+状态：目标架构、跨仓实施契约与执行记录。AuthX、Nexus 和 `convax-plugins` 的本地实现及打包
+Convax 三模态验收已完成；生产发布仍受第 16.2 节的外部凭据前置条件阻塞。未满足该前置条件前，
+不得把本地通过或任一单仓部署表述为整体上线完成。
 
 本文取代此前的 Nexus Hosted Auth、Hosted Product Session、Data Token、Nexus
 Inference Key 和客户端选择 ProviderConnection 方案。旧凭据不得迁移、兼容或回退。
@@ -609,4 +610,51 @@ Nexus runtime HTTP 协议和 OS credential store 由 verified companion 消费�
 它只收紧已有外部 public-client authorization 的 credential、预配置 Application integration 与
 Application-token 规则。
 
-在 AuthX、Nexus、`convax-plugins` 三仓实现、测试和打包本地验收全部完成前，整体状态是 **未完成**。
+AuthX、Nexus、`convax-plugins` 三仓实现、测试和打包本地验收已经完成。生产数据库迁移、Secret
+一致性、Worker 发布和线上 smoke 必须作为一个发布单元完成；当前执行状态见下一节。
+
+## 16. 2026-08-14 执行记录
+
+### 16.1 已完成
+
+- AuthX Console 已成为唯一 Nexus integration 启停入口；启用命令写入 durable desired state，后台
+  reconcile 使用同一外部幂等键自动创建或复用 Nexus Convax Application。
+- AuthX 只保存 `nexus_application_id`、Application version 和 desired/observed state；Nexus 继续拥有
+  Workspace、Plan、Quota policy、ProviderConnection、Usage 和 Billing 事实。
+- Nexus 直接验证 AuthX Convax Application Access Token。没有 AuthX Token 换 Nexus Token、Nexus
+  Inference Key、客户端 bootstrap/connect 或第二个登录/consent。
+- 停用先阻止 AuthX 新授予/刷新 `nexus:access`，再把同一个 Nexus Application 置为 `DISABLED`；
+  重新启用复用同一个 `nexus_application_id`，Application version 单调推进。
+- 本地生命周期验收通过：首次启用后 direct AuthX Token 的 Nexus status 为 `200`；停用后旧 Token
+  返回 `401 application_disabled` 且 AuthX 拒绝签发新的 Nexus scope；重新启用后同一个 Nexus
+  Application 使用新 direct AuthX Token 再次返回 `200`。
+- 打包的 macOS Convax Dev 应用通过真实本地 AuthX、Nexus、companion 和 fake-provider 生成并提交：
+  PNG 4,431 bytes、WAV 7,724 bytes、MP4 37,809 bytes。Nexus 记录 8 次 invocation、8 次 settlement、
+  0 个 active reservation；没有调用真实或付费 Provider。
+- AuthX Cloudflare production preflight 通过；Nexus deployment adapter 77 项测试、类型检查、Wrangler
+  类型生成和 API/Gateway/Worker/Console 四项 dry-run 通过。既有 Application Access Binding 管理接口
+  保持在 Management OpenAPI/SDK 中，避免 Console 兼容性回退。
+- AuthX 生产 D1 已在迁移前完成全量 SQL 导出和 Time Travel bookmark；远端 Worker 的当前 100%
+  active version 已记录为发布回滚基线。
+
+### 16.2 生产发布阻塞项
+
+本次没有执行半套生产发布。唯一不可由仓库或 Cloudflare只读接口恢复的前置条件是 Nexus 生产
+PostgreSQL 凭据：生产数据库只通过 Hyperdrive/VPC 暴露，Cloudflare 不回传 Origin password；本机
+钥匙串、进程环境和仓库外 `.env` 检查均没有非本地 `DATABASE_URL`。现有连接全部指向
+`127.0.0.1` 或 `localhost`，仓库的生产迁移门禁会正确拒绝它们。
+
+继续发布时，外部 Operator 必须通过 Secret Manager 向当前 shell 注入 Nexus 生产
+`DATABASE_URL`，不得把值写入 Git、文档、命令行参数或日志。还必须满足：
+
+1. 先备份 Nexus PostgreSQL，并执行且验证 additive migration
+   `20260814000000_authx_convax_application_integration`；
+2. 向 AuthX API、AuthX Jobs 和 Nexus API 注入同一份新 integration credential；
+3. 向 Nexus Gateway 补齐与现网 API/Worker 相同的 `NEXUS_INTERNAL_SERVICE_CREDENTIAL`，若旧值无法
+   从 Secret Manager 取得，则必须单独批准 API/Worker/Gateway 三方原子轮换，不得猜值；
+4. 按 Nexus API/Gateway/Console、AuthX D1 migration、AuthX Jobs/API/Console 的受控顺序发布；
+5. 以 direct AuthX Token 重跑 enable/disable/reenable、status 和图片/音频/视频线上 smoke，并确认
+   invocation/settlement 对齐、active reservation 为 0 后，才把整体状态改为已上线。
+
+阻塞期间不部署 AuthX Console 或任一新 Nexus Worker，避免把可见的 Enable 开关指向尚未迁移的
+Nexus 数据库，也避免制造无法按同一回滚点恢复的跨服务半状态。
