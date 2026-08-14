@@ -17,7 +17,7 @@ import {
 import { readBoundedAuthorityFile } from "./bounded-authority-file"
 import { FileMarketplaceSourceStore, type AcceptedMarketplaceCatalog } from "./marketplace-source-store"
 import { marketplaceRepositoryFromDescriptorUrl, PinnedHttpsFetcher } from "./pinned-https-fetch"
-import { projectRegistryPackageRuntimeSurface } from "./marketplace-runtime-surface"
+import { projectRegistryPackageRuntimeProjection } from "./marketplace-runtime-surface"
 
 interface PersistedNetworkSource {
   descriptor: MarketplaceDescriptor
@@ -359,6 +359,7 @@ export class NetworkMarketplaceManager {
       if (!accepted?.catalog.registry) continue
       for (const item of accepted.catalog.registry.packages) {
         if (item.yanked) continue
+        const runtimeProjection = projectRegistryPackageRuntimeProjection(item)
         output.push({
           catalogRevision: accepted.catalog.revision,
           catalogSequence: accepted.catalog.sequence,
@@ -370,7 +371,10 @@ export class NetworkMarketplaceManager {
           official: false,
           ...(item.ownerPluginId === undefined ? {} : { ownerPluginId: item.ownerPluginId }),
           presentation: item.presentation,
-          runtimeSurface: projectRegistryPackageRuntimeSurface(item),
+          ...(runtimeProjection.pluginCategories.length === 0
+            ? {}
+            : { pluginCategories: runtimeProjection.pluginCategories }),
+          runtimeSurface: runtimeProjection.runtimeSurface,
           sourceKey: source.sourceKey,
           sourceKind: "network",
           sourceOrder: source.sourceOrder,

@@ -3,7 +3,7 @@ import { Window } from "happy-dom"
 import { act } from "react"
 import { createRoot, type Root } from "react-dom/client"
 
-import type { MarketplaceClient } from "../marketplace-contracts"
+import type { MarketplaceClient, MarketplacePluginCategory } from "../marketplace-contracts"
 import { preloadMarketplaceProjection } from "./marketplace-projection-cache"
 import { MarketplaceSurface } from "./marketplace-view"
 
@@ -342,6 +342,62 @@ test("renders one aggregated card and requires an explicit source choice", async
   expect(marketplace.install).not.toHaveBeenCalled()
   await act(async () => button("Confirm and install").click())
   expect(marketplace.install).toHaveBeenCalledWith({ selectionToken: "o".repeat(24) })
+})
+
+test("renders Plugin category tags and filters the catalog locally", async () => {
+  const listCatalog = mock(async () => ({
+    cards: [
+      {
+        categories: ["video", "image"] as MarketplacePluginCategory[],
+        description: "Creates media",
+        id: "media-plugin",
+        kind: "plugin" as const,
+        name: "Media Plugin",
+        otherSourceCount: 0,
+      },
+      {
+        categories: ["service"] as MarketplacePluginCategory[],
+        description: "Connects an account",
+        id: "service-plugin",
+        kind: "plugin" as const,
+        name: "Service Plugin",
+        otherSourceCount: 0,
+      },
+      {
+        categories: ["skill"] as MarketplacePluginCategory[],
+        description: "Owns a workflow",
+        id: "skill-plugin",
+        kind: "plugin" as const,
+        name: "Skill Plugin",
+        otherSourceCount: 0,
+      },
+      {
+        description: "A standalone Skill",
+        id: "standalone-skill",
+        kind: "skill" as const,
+        name: "Standalone Skill",
+        otherSourceCount: 0,
+      },
+    ],
+    revision: 1,
+  }))
+  await render(client({ listCatalog }))
+
+  expect(document.querySelector('[data-plugin-category="image"]')?.textContent).toBe("Image")
+  expect(document.body.textContent).toContain("Standalone Skill")
+
+  await act(async () => button("Image").click())
+  expect(document.body.textContent).toContain("Media Plugin")
+  expect(document.body.textContent).not.toContain("Service Plugin")
+  expect(document.body.textContent).not.toContain("Standalone Skill")
+
+  await act(async () => button("Skill").click())
+  expect(document.body.textContent).toContain("Skill Plugin")
+  expect(document.body.textContent).not.toContain("Standalone Skill")
+
+  await act(async () => button("All").click())
+  expect(document.body.textContent).toContain("Standalone Skill")
+  expect(listCatalog).toHaveBeenCalledTimes(1)
 })
 
 test("requires exact-source confirmation even when the aggregated identity has one source", async () => {

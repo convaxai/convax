@@ -25,7 +25,8 @@ import {
 import { readBoundedAuthorityFile } from "./bounded-authority-file"
 import {
   parsePluginRuntimeSurface,
-  projectRegistryPackageRuntimeSurface,
+  projectRegistryPackageRuntimeProjection,
+  type MarketplaceCatalogRuntimeProjection,
   type MarketplaceRuntimeSurface,
 } from "./marketplace-runtime-surface"
 import type { VerifiedMarketplaceCandidate } from "./marketplace-artifact-installer"
@@ -176,7 +177,7 @@ export class PackagedMarketplaceProduct {
   readonly lock: MarketplaceProductLock
   readonly registry: RegistryV2
   readonly showcase: ShowcaseV2
-  readonly #builtinRuntimeSurfaces: ReadonlyMap<string, MarketplaceRuntimeSurface>
+  readonly #builtinRuntimeProjections: ReadonlyMap<string, MarketplaceCatalogRuntimeProjection>
   readonly #paths: ReadonlyMap<string, PackagedPath>
   readonly #root: string
   readonly #builtinArchive: Uint8Array
@@ -184,7 +185,7 @@ export class PackagedMarketplaceProduct {
   private constructor(input: {
     builtin: BuiltinBundle
     builtinArchive: Uint8Array
-    builtinRuntimeSurfaces: ReadonlyMap<string, MarketplaceRuntimeSurface>
+    builtinRuntimeProjections: ReadonlyMap<string, MarketplaceCatalogRuntimeProjection>
     descriptor: MarketplaceDescriptor
     lock: MarketplaceProductLock
     paths: ReadonlyMap<string, PackagedPath>
@@ -194,7 +195,7 @@ export class PackagedMarketplaceProduct {
   }) {
     this.builtin = input.builtin
     this.#builtinArchive = Uint8Array.from(input.builtinArchive)
-    this.#builtinRuntimeSurfaces = new Map(input.builtinRuntimeSurfaces)
+    this.#builtinRuntimeProjections = new Map(input.builtinRuntimeProjections)
     this.descriptor = input.descriptor
     this.lock = input.lock
     this.#paths = input.paths
@@ -232,7 +233,7 @@ export class PackagedMarketplaceProduct {
     }
     const builtinArchive = await read(manifest.lock.resolved.builtinBundle)
     const builtin = parseBuiltinBundleArchive(builtinArchive)
-    const builtinRuntimeSurfaces = projectPackagedBuiltinRuntimeSurfaces(builtin, builtinArchive)
+    const builtinRuntimeProjections = projectPackagedBuiltinRuntimeProjections(builtin, builtinArchive)
     const descriptor = parseMarketplaceDescriptor(
       JSON.parse(
         new TextDecoder("utf-8", { fatal: true }).decode(await read(manifest.lock.resolved.official.descriptor)),
@@ -263,7 +264,7 @@ export class PackagedMarketplaceProduct {
     return new PackagedMarketplaceProduct({
       builtin,
       builtinArchive,
-      builtinRuntimeSurfaces,
+      builtinRuntimeProjections,
       descriptor,
       lock: manifest.lock,
       paths,
@@ -382,8 +383,12 @@ export class PackagedMarketplaceProduct {
     const officialSourceKey = this.#officialSourceKey()
     const builtinKey = builtinSourceKey()
     return [
-      ...this.builtin.members.map(
-        (member): SourceQualifiedItem => ({
+      ...this.builtin.members.map((member): SourceQualifiedItem => {
+        const runtimeProjection =
+          member.kind === "skill"
+            ? { pluginCategories: [], runtimeSurface: "none" as const }
+            : requireBuiltinRuntimeProjection(this.#builtinRuntimeProjections, member.id, member.version)
+        return {
           catalogRevision: this.builtin.release.id,
           catalogSequence: this.lock.policy.revision,
           compatibility: { convax: "*" },
@@ -393,20 +398,21 @@ export class PackagedMarketplaceProduct {
           marketplaceId: this.lock.policy.builtin.marketplaceId,
           official: false,
           presentation: { name: member.id },
-          runtimeSurface:
-            member.kind === "skill"
-              ? "none"
-              : requireBuiltinRuntimeSurface(this.#builtinRuntimeSurfaces, member.id, member.version),
+          ...(runtimeProjection.pluginCategories.length === 0
+            ? {}
+            : { pluginCategories: runtimeProjection.pluginCategories }),
+          runtimeSurface: runtimeProjection.runtimeSurface,
           sourceKey: builtinKey,
           sourceKind: "builtin",
           sourceOrder: 0,
           version: member.version,
-        }),
-      ),
+        }
+      }),
       ...this.registry.packages
         .filter((item) => !item.yanked)
-        .map(
-          (item): SourceQualifiedItem => ({
+        .map((item): SourceQualifiedItem => {
+          const runtimeProjection = projectRegistryPackageRuntimeProjection(item)
+          return {
             catalogRevision: this.registry.revision,
             catalogSequence: this.registry.sequence,
             compatibility: item.compatibility,
@@ -417,13 +423,16 @@ export class PackagedMarketplaceProduct {
             official: true,
             ...(item.ownerPluginId === undefined ? {} : { ownerPluginId: item.ownerPluginId }),
             presentation: item.presentation,
-            runtimeSurface: projectRegistryPackageRuntimeSurface(item),
+            ...(runtimeProjection.pluginCategories.length === 0
+              ? {}
+              : { pluginCategories: runtimeProjection.pluginCategories }),
+            runtimeSurface: runtimeProjection.runtimeSurface,
             sourceKey: officialSourceKey,
             sourceKind: "network",
             sourceOrder: 0,
             version: item.version,
-          }),
-        ),
+          }
+        }),
     ]
   }
 
@@ -446,23 +455,23 @@ function builtinIdentity(id: string, version: string) {
   return `${id}\0${version}`
 }
 
-function requireBuiltinRuntimeSurface(
-  surfaces: ReadonlyMap<string, MarketplaceRuntimeSurface>,
+function requireBuiltinRuntimeProjection(
+  projections: ReadonlyMap<string, MarketplaceCatalogRuntimeProjection>,
   id: string,
   version: string,
 ) {
-  const surface = surfaces.get(builtinIdentity(id, version))
-  if (surface === undefined) {
+  const projection = projections.get(builtinIdentity(id, version))
+  if (projection === undefined) {
     throw new Error("Packaged Builtin Plugin runtime projection is unavailable")
   }
-  return surface
+  return projection
 }
 
-export function projectPackagedBuiltinRuntimeSurfaces(
+export function projectPackagedBuiltinRuntimeProjections(
   bundle: BuiltinBundle,
   archive: Uint8Array,
-): ReadonlyMap<string, MarketplaceRuntimeSurface> {
-  const surfaces = new Map<string, MarketplaceRuntimeSurface>()
+): ReadonlyMap<string, MarketplaceCatalogRuntimeProjection> {
+  const projections = new Map<string, MarketplaceCatalogRuntimeProjection>()
   for (const member of bundle.members) {
     if (member.kind !== "plugin") continue
     const artifact = readBuiltinBundleMember(archive, projectBuiltinMemberDelivery(bundle, member))
@@ -479,7 +488,22 @@ export function projectPackagedBuiltinRuntimeSurfaces(
       })
     }
     const projected = parsePluginRuntimeSurface(value, member)
-    surfaces.set(builtinIdentity(member.id, member.version), projected.runtimeSurface)
+    projections.set(builtinIdentity(member.id, member.version), {
+      pluginCategories: projected.pluginCategories,
+      runtimeSurface: projected.runtimeSurface,
+    })
   }
-  return surfaces
+  return projections
+}
+
+export function projectPackagedBuiltinRuntimeSurfaces(
+  bundle: BuiltinBundle,
+  archive: Uint8Array,
+): ReadonlyMap<string, MarketplaceRuntimeSurface> {
+  return new Map(
+    [...projectPackagedBuiltinRuntimeProjections(bundle, archive)].map(([identity, projection]) => [
+      identity,
+      projection.runtimeSurface,
+    ]),
+  )
 }

@@ -152,6 +152,11 @@ For any matching change, read the full routed reference before planning or editi
   never arbitrary URLs, paths, digests, SourceKeys, or transport configuration.
   Network access and immutable artifacts follow the accepted source identity and
   security high-water decisions.
+- Project Marketplace Plugin categories from the same exact validated manifest used
+  for runtime-surface presentation: Service contribution, image/video generation
+  output, and owned Skills. Keep the categories bound to the representative source
+  and expose only the bounded display enum; it is never runtime readiness or grant
+  evidence.
 - Preserve Registry `ownerPluginId` through source qualification and remove
   Plugin-owned Skills from standalone choices before creating a transition. Managed
   Skill recovery never infers publication from a directory name: retry only the

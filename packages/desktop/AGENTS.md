@@ -190,6 +190,13 @@ contract and its routed references.
   Strictly reject malformed, oversized, unknown-field, or Main-authority-shaped
   cache data; never accept it as Marketplace, installation, grant, or ActiveSet
   authority.
+- Derive Plugin Marketplace categories only from the exact validated manifest:
+  `service`, image/video generation outputs, and owned Skills. Carry only that
+  bounded display enum through the source representative and Renderer cache. Tag
+  filtering stays local to Renderer and never selects a source or authorizes work.
+  Adding or changing this Main-to-Renderer card projection bumps both the Desktop
+  protocol and the disposable display-cache schema so a stale Main or cache cannot
+  make a current filter silently appear empty.
 - Plugin Services seed from the last complete safe Renderer projection across
   remounts and cold windows, then revalidate inventory, status, and optional usage
   independently in the background. Keep old values visible during refresh; reject

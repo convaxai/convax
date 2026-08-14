@@ -430,6 +430,19 @@ fetch, install, or open releases from Registry v1. A package publication is admi
 only through a source-qualified Marketplace v2 candidate and the immutable ActiveSet
 installer.
 
+Plugin catalog categories are a bounded Host-derived display projection rather than
+another authoring field. Desktop reparses the exact source-qualified Plugin manifest
+through `@convax/plugin-sdk`, then projects `service` from a Service contribution,
+`video` and `image` from generation tool outputs, and `skill` from owned Skills.
+`@convax/marketplace` owns that four-value taxonomy and keeps it attached to the same
+representative source as the card's name and description. Renderer may cache and
+filter these values as presentation only; they never select a source, establish
+runtime readiness, grant authority, or authorize installation/execution. The
+Main-to-Renderer card projection is part of the Desktop IPC compatibility line:
+category support advances it to `convax.desktop-ipc/40`, and Renderer uses display
+cache schema `convax.marketplace-display-cache/2` so an older category-free cache or
+Main cannot silently produce empty current filters.
+
 Installed Plugin snapshots contain the complete contribution closure. One global
 ActivePluginSet selects exact snapshot digests and resolves global Skill names and
 other cross-Plugin constraints before a single compare-and-swap pointer change.
@@ -686,7 +699,7 @@ boundary checker fails closed until those admissions are complete.
 | Top-level sidebar size/visibility/resize transaction                  | `WorkbenchLayoutController`                              | Desktop supplies pixels, events, animation and persistence                                                       |
 | Agent sessions                                                        | `@convax/agent-runtime` scoped by the host               | Never stored in Project Canvas state                                                                             |
 | OpenCode Skill discovery                                              | `@convax/agent-runtime`                                  | Runtime sees generic directories, never Desktop ownership metadata                                               |
-| Marketplace protocol and Catalog grouping                             | `@convax/marketplace`                                    | Headless validation and source-qualified projections only                                                        |
+| Marketplace protocol, Plugin category taxonomy and Catalog grouping   | `@convax/marketplace`                                    | Headless validation and source-qualified display projections only                                                |
 | Marketplace sources and source security decisions                     | Desktop main                                             | Per-SourceKey isolation; cache is never authoritative                                                            |
 | Installed capability source binding                                   | Desktop main `InstallRecord` store                       | One exact SourceKey per `{kind,id}`; only an explicit product-locked retired Official lineage may migrate source |
 | MCP metadata, setup grant and runtime preference                      | Desktop main                                             | Separate install/setup/enable decisions; Agent Runtime stays generic                                             |
@@ -1233,7 +1246,9 @@ This one-time confirmed reset is the only admitted cleanup path.
 ```text
 Builtin + Official + user Network + Host Local adapters
   -> source-qualified validated entries
-  -> @convax/marketplace display groups by {kind,id}
+  -> Desktop derives bounded Plugin categories from exact validated contributions
+  -> @convax/marketplace display groups by {kind,id} with one representative source
+  -> Renderer may filter the safe projection by service, video, image or skill
   -> explicit exact-source confirmation and sender-scoped SelectionToken
   -> Desktop Plugin install transition publishes static bytes, exact execution authorization and InstallRecord
   -> MCP or narrowly admitted product-lock setup may independently publish an ExecutionGrant

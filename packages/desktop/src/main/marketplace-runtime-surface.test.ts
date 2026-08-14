@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test"
 
 import {
   parsePluginRuntimeSurface,
+  projectRegistryPackagePluginCategories,
   projectRegistryPackageRuntimeSurface,
 } from "./marketplace-runtime-surface"
 
@@ -50,6 +51,50 @@ describe("Marketplace runtime-surface projection", () => {
     ).toBe(expected)
   })
 
+  test("derives bounded categories from the validated Plugin contribution surface", () => {
+    const value = manifest({
+      contributes: {
+        generation: {
+          models: [],
+          tools: [
+            {
+              acceptedInputs: [],
+              description: "Create an image",
+              id: "image.create",
+              output: "image",
+              title: "Create image",
+            },
+            {
+              acceptedInputs: [],
+              description: "Create a video",
+              id: "video.create",
+              output: "video",
+              title: "Create video",
+            },
+          ],
+        },
+        service: { actions: [] },
+        skills: [{ name: "runtime-helper", path: "skills/runtime-helper" }],
+      },
+      runtime: { command: "runtime-fixture", type: "mcp-stdio" },
+    })
+    expect(parsePluginRuntimeSurface(value).pluginCategories).toEqual(["service", "video", "image", "skill"])
+    expect(
+      projectRegistryPackagePluginCategories({
+        delivery: {
+          kind: "artifact",
+          sha256: "a".repeat(64),
+          size: 1,
+          url: "https://github.com/acme/plugins/releases/download/runtime-surface-fixture-v1.0.0/plugin.zip",
+        },
+        id: "runtime-surface-fixture",
+        kind: "plugin",
+        manifest: value,
+        version: "1.0.0",
+      }),
+    ).toEqual(["service", "video", "image", "skill"])
+  })
+
   test.each([
     manifest({ schema: "convax.plugin/7" }),
     manifest({ contributes: { generationTools: [] } }),
@@ -70,6 +115,19 @@ describe("Marketplace runtime-surface projection", () => {
   })
 
   test("keeps Skill and validated MCP display policy independent of Plugin manifests", () => {
+    expect(
+      projectRegistryPackagePluginCategories({
+        delivery: {
+          kind: "artifact",
+          sha256: "b".repeat(64),
+          size: 1,
+          url: "https://github.com/acme/plugins/releases/download/skill-v1.0.0/skill.zip",
+        },
+        id: "skill",
+        kind: "skill",
+        version: "1.0.0",
+      }),
+    ).toEqual([])
     expect(
       projectRegistryPackageRuntimeSurface({
         delivery: {

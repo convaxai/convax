@@ -1,6 +1,9 @@
+import type { MarketplacePluginCategory as MarketplaceOwnerPluginCategory } from "@convax/marketplace"
+
 export type MarketplaceCapabilityKind = "mcp-server" | "plugin" | "skill"
 export type MarketplaceCapabilityState = "attention" | "disabled" | "ready" | "setup-required"
 export type MarketplacePluginRuntimeState = "available" | "unavailable-for-session"
+export type MarketplacePluginCategory = MarketplaceOwnerPluginCategory
 
 export interface MarketplaceCatalogSourceChoice {
   confirmationToken: string
@@ -13,6 +16,7 @@ export interface MarketplaceCatalogSourceChoice {
 }
 
 export interface MarketplaceCatalogCard {
+  categories?: MarketplacePluginCategory[]
   description: string
   id: string
   installed?: {

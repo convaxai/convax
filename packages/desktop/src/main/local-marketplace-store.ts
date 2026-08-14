@@ -702,6 +702,7 @@ export class LocalMarketplaceStore {
     const byPath = new Map(files.map((file) => [file.path, file]))
     let delivery: SourceQualifiedItem["delivery"]
     let description = ""
+    let pluginCategories: NonNullable<SourceQualifiedItem["pluginCategories"]> = []
     let runtimeSurface: SourceQualifiedItem["runtimeSurface"] = "none"
     if (candidate.kind === "mcp-server") {
       const serverJson = decodeJson(byPath.get("server.json")!.bytes, "server.json")
@@ -747,6 +748,7 @@ export class LocalMarketplaceStore {
           candidate,
         )
         const manifest = parsed.manifest
+        pluginCategories = parsed.pluginCategories
         runtimeSurface = parsed.runtimeSurface
         description = manifest.description
       } else {
@@ -766,6 +768,7 @@ export class LocalMarketplaceStore {
       marketplaceId: this.#marketplaceId,
       official: false,
       presentation: { description, name: candidate.id },
+      ...(pluginCategories.length === 0 ? {} : { pluginCategories }),
       runtimeSurface,
       sourceKey,
       sourceKind: "local",

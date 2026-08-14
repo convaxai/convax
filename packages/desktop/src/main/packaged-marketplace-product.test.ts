@@ -13,7 +13,11 @@ import {
   type MarketplaceProductLock,
 } from "@convax/marketplace"
 
-import { PackagedMarketplaceProduct, projectPackagedBuiltinRuntimeSurfaces } from "./packaged-marketplace-product"
+import {
+  PackagedMarketplaceProduct,
+  projectPackagedBuiltinRuntimeProjections,
+  projectPackagedBuiltinRuntimeSurfaces,
+} from "./packaged-marketplace-product"
 
 interface ZipEntry {
   readonly bytes: Uint8Array
@@ -209,6 +213,35 @@ describe("Packaged Builtin Plugin runtime-surface projection", () => {
     const fixture = builtinFixture(manifest(surface))
     const projected = projectPackagedBuiltinRuntimeSurfaces(fixture.bundle, fixture.archive)
     expect(projected.get(`builtin-fixture\0${"1.0.0"}`)).toBe(expected)
+  })
+
+  test("carries manifest-derived categories with the Builtin runtime projection", () => {
+    const fixture = builtinFixture(
+      manifest("agent", {
+        contributes: {
+          generation: {
+            models: [],
+            tools: [
+              {
+                acceptedInputs: [],
+                description: "Create video",
+                id: "video.create",
+                output: "video",
+                title: "Create video",
+              },
+            ],
+          },
+          skills: [{ name: "video-helper", path: "skills/video-helper" }],
+        },
+        hooks: undefined,
+        runtime: { command: "builtin-fixture", type: "mcp-stdio" },
+      }),
+    )
+    const projected = projectPackagedBuiltinRuntimeProjections(fixture.bundle, fixture.archive)
+    expect(projected.get(`builtin-fixture\0${"1.0.0"}`)).toMatchObject({
+      pluginCategories: ["video", "skill"],
+      runtimeSurface: "agent-and-convax",
+    })
   })
 
   test("fails closed when the artifact manifest identity differs from the bundle member", () => {
@@ -407,12 +440,12 @@ test("exposes packaged recovery bytes only for one exact retired Plugin binding"
         fromSourceIdentity: retired.sourceKey,
         pluginId: "legacy-tools",
         toSourceIdentity: computeSourceKey({
-        deliveryPolicy: "github-pages-releases",
-        descriptorUrl: policy.official.descriptorUrl,
-        kind: "network",
-        marketplaceId: "convax-official",
-        repository: { name: "convax-plugins", owner: "convaxai" },
-      }),
+          deliveryPolicy: "github-pages-releases",
+          descriptorUrl: policy.official.descriptorUrl,
+          kind: "network",
+          marketplaceId: "convax-official",
+          repository: { name: "convax-plugins", owner: "convaxai" },
+        }),
       },
     ])
     for (const mismatch of [
