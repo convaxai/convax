@@ -176,6 +176,28 @@ flowchart TB
       Composition --> Main
     end
 
+    subgraph ShortcutRouting["Renderer shortcut routing · transient only"]
+      ShortcutRegistry["Scoped Shortcut Registry<br/>feature registrations"]
+      ShortcutScope["Scope router + conflict arbitration<br/>application · conversation · Canvas · node input"]
+      CommandShortcut["CommandShortcut<br/>consuming one-shot"]
+      HoldShortcut["HoldShortcut<br/>consuming held lifecycle"]
+      GestureModifier["GestureModifier<br/>non-consuming pointer modifier"]
+      ShortcutRelease["Release coordinator<br/>keyup · scope/focus · blur · visibility · dispose"]
+      GestureAdapter["Renderer Canvas gesture adapter<br/>Space pan · later dragstart"]
+
+      ShortcutRegistry --> ShortcutScope
+      ShortcutScope --> CommandShortcut
+      ShortcutScope --> HoldShortcut
+      ShortcutScope --> GestureModifier
+      ShortcutRelease -->|clears| HoldShortcut
+      ShortcutRelease -->|clears| GestureModifier
+      HoldShortcut -->|typed held-state port| GestureAdapter
+      GestureModifier -->|typed held-state port| GestureAdapter
+    end
+
+    Renderer --> ShortcutRegistry
+    Renderer --> ShortcutRelease
+
     subgraph Packages["Headless and publishable packages"]
       Workbench["@convax/workbench"]
       Project["@convax/project"]
@@ -199,6 +221,10 @@ flowchart TB
       Project --> UI
       PluginSdk --> PluginApi
     end
+
+    CommandShortcut -->|typed canRunShortcut / runShortcut port| Canvas
+    GestureAdapter -->|host-neutral gesture semantics| Canvas
+    GestureAdapter -->|opaque native drag request| Preload
 
     ProtocolDescriptor["Packaged current protocol descriptor<br/>generated from owner schemas · exact protocolDigest"]
     Collaboration --> ProtocolDescriptor
