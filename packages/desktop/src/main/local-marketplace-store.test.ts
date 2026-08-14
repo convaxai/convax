@@ -93,6 +93,24 @@ describe("LocalMarketplaceStore", () => {
     expect(await fs.readFile(path.join(root, "index-v1.json"), "utf8")).not.toContain(root)
   })
 
+  test("reads an exact imported Skill snapshot for Marketplace details without exposing its native path", async () => {
+    const root = await directory("detail-store")
+    const source = await directory("detail-source")
+    await fs.mkdir(path.join(source, "references"))
+    await fs.writeFile(path.join(source, "SKILL.md"), "---\nname: detail-skill\ndescription: Detail skill\n---\n")
+    await fs.writeFile(path.join(source, "references", "guide.md"), "# Guide\n")
+    const store = localStore({ marketplaceId: "convax-local", root })
+    const identity = await store.initialize()
+    const imported = await store.importDirectory(source)
+    const item = await store.projectCatalogItem(imported, computeSourceKey({ kind: "local", ...identity }))
+
+    await expect(store.readSkillDetailFiles(item)).resolves.toMatchObject({
+      "SKILL.md": expect.any(Uint8Array),
+      "references/guide.md": expect.any(Uint8Array),
+    })
+    expect(JSON.stringify(await store.readSkillDetailFiles(item))).not.toContain(root)
+  })
+
   test("projects only canonical v8 contribution fields into Local runtime surfaces", async () => {
     const root = await directory("runtime-surface-store")
     const store = localStore({ marketplaceId: "convax-local", root })

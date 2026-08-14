@@ -1,11 +1,12 @@
-import { Button, Input, LoadingSpinner, cn } from "@convax/ui"
-import { Download, PackagePlus, Pause, Play, RefreshCw, Store, Trash2, Wrench } from "lucide-react"
+import { Button, Dialog, DialogContent, DialogDescription, DialogTitle, Input, LoadingSpinner, cn } from "@convax/ui"
+import { Download, PackagePlus, Pause, Play, RefreshCw, Store, Trash2, Wrench, X } from "lucide-react"
 import { useCallback, useEffect, useRef, useState } from "react"
 
 import type {
   MarketplaceAddPreview,
   MarketplaceCatalogCard,
   MarketplaceCatalogSourceChoice,
+  MarketplaceCapabilityDetails,
   MarketplaceClient,
   MarketplaceInstalledCapability,
   MarketplacePluginCategory,
@@ -16,6 +17,7 @@ import {
   preloadMarketplaceProjection,
   refreshMarketplaceProjection,
 } from "./marketplace-projection-cache"
+import { SkillDetailDialog, SkillShowcaseMedia } from "./skill-catalog-preview"
 
 export interface MarketplaceSurfaceProps {
   className?: string
@@ -28,6 +30,15 @@ type PluginCategoryFilter = "all" | MarketplacePluginCategory
 
 const pluginCategoryOrder: readonly MarketplacePluginCategory[] = ["service", "video", "image", "skill"]
 
+function filterCatalog(
+  catalog: readonly MarketplaceCatalogCard[],
+  category: PluginCategoryFilter,
+): readonly MarketplaceCatalogCard[] {
+  if (category === "all") return catalog
+  if (category === "skill") return catalog.filter((card) => card.kind === "skill")
+  return catalog.filter((card) => card.kind === "plugin" && card.categories?.includes(category))
+}
+
 interface SourceChoiceRequest {
   mode: "install" | "update"
   pendingKey: string
@@ -38,6 +49,14 @@ type CapabilityAction = "disable" | "enable" | "install" | "setup" | "uninstall"
 interface CapabilityOperation {
   action: CapabilityAction
   label: string
+}
+
+interface SelectedCapabilityDetails {
+  description: string
+  id: string
+  installed: boolean
+  kind: MarketplaceCatalogCard["kind"]
+  name: string
 }
 
 function capabilityPendingKey(kind: MarketplaceCatalogCard["kind"], id: string) {
@@ -61,8 +80,13 @@ export function MarketplaceSurface({ className, client, locale }: MarketplaceSur
   )
   const [capabilityErrors, setCapabilityErrors] = useState<ReadonlyMap<string, string>>(() => new Map())
   const [visibleCapabilityErrorKey, setVisibleCapabilityErrorKey] = useState<string>()
+  const [selectedDetails, setSelectedDetails] = useState<SelectedCapabilityDetails>()
+  const [capabilityDetails, setCapabilityDetails] = useState<MarketplaceCapabilityDetails | null>(null)
+  const [capabilityDetailsError, setCapabilityDetailsError] = useState<string | null>(null)
+  const [capabilityDetailsLoading, setCapabilityDetailsLoading] = useState(false)
   const [error, setError] = useState<string>()
   const capabilityErrorRefs = useRef(new Map<string, HTMLParagraphElement>())
+  const capabilityDetailsRequestRef = useRef(0)
   const latestRefreshPromiseRef = useRef<Promise<void> | null>(null)
   const pendingKeysRef = useRef(new Set<string>())
   const refreshRequestRef = useRef(0)
@@ -99,10 +123,7 @@ export function MarketplaceSurface({ className, client, locale }: MarketplaceSur
   )
 
   const catalog = projection?.catalog ?? []
-  const visibleCatalog =
-    pluginCategoryFilter === "all"
-      ? catalog
-      : catalog.filter((card) => card.kind === "plugin" && card.categories?.includes(pluginCategoryFilter))
+  const visibleCatalog = filterCatalog(catalog, pluginCategoryFilter)
   const installed = projection?.installed ?? []
   const pluginRuntimeState = projection?.pluginRuntimeState ?? "available"
   const sources = projection?.sources ?? []
@@ -174,14 +195,15 @@ export function MarketplaceSurface({ className, client, locale }: MarketplaceSur
           allCategories: "全部",
           catalog: "扩展",
           choose: "选择来源",
-          filterByCategory: "按插件分类筛选",
+          filterByCategory: "按扩展分类筛选",
           import: "导入…",
           install: "安装",
           installed: "已安装",
           loading: "正在加载扩展…",
+          loadingDetails: "正在加载详情…",
           marketplaceUrl: "Marketplace URL",
           marketplaces: "Marketplace",
-          noCategoryMatches: "没有符合此分类的插件。",
+          noCategoryMatches: "没有符合此分类的扩展。",
           preview: "预览",
           progressDisable: "正在停用…",
           progressEnable: "正在启用…",
@@ -192,20 +214,22 @@ export function MarketplaceSurface({ className, client, locale }: MarketplaceSur
           progressUninstall: "正在卸载…",
           progressUpdate: "正在更新…",
           update: "更新",
+          viewDetails: "查看详情",
         }
       : {
           add: "Add Marketplace",
           allCategories: "All",
           catalog: "Extensions",
           choose: "Choose a source",
-          filterByCategory: "Filter by Plugin category",
+          filterByCategory: "Filter extensions by category",
           import: "Import…",
           install: "Install",
           installed: "Installed",
           loading: "Loading extensions…",
+          loadingDetails: "Loading details…",
           marketplaceUrl: "Marketplace URL",
           marketplaces: "Marketplaces",
-          noCategoryMatches: "No Plugins match this category.",
+          noCategoryMatches: "No extensions match this category.",
           preview: "Preview",
           progressDisable: "Disabling…",
           progressEnable: "Enabling…",
@@ -216,7 +240,39 @@ export function MarketplaceSurface({ className, client, locale }: MarketplaceSur
           progressUninstall: "Uninstalling…",
           progressUpdate: "Updating…",
           update: "Update",
+          viewDetails: "View details",
         }
+
+  const openCapabilityDetails = useCallback(
+    async (selection: SelectedCapabilityDetails) => {
+      const request = ++capabilityDetailsRequestRef.current
+      setSelectedDetails(selection)
+      setCapabilityDetails(null)
+      setCapabilityDetailsError(null)
+      setCapabilityDetailsLoading(true)
+      try {
+        const details = await client.getCapabilityDetails({ id: selection.id, kind: selection.kind })
+        if (request === capabilityDetailsRequestRef.current) setCapabilityDetails(details)
+      } catch {
+        if (request === capabilityDetailsRequestRef.current) setCapabilityDetailsError(safeFailure)
+      } finally {
+        if (request === capabilityDetailsRequestRef.current) setCapabilityDetailsLoading(false)
+      }
+    },
+    [client, safeFailure],
+  )
+  const closeCapabilityDetails = useCallback(() => {
+    capabilityDetailsRequestRef.current += 1
+    setSelectedDetails(undefined)
+    setCapabilityDetails(null)
+    setCapabilityDetailsError(null)
+    setCapabilityDetailsLoading(false)
+  }, [])
+  const loadSelectedShowcase = useCallback(
+    (media: "animation" | "poster") =>
+      Promise.resolve(media === "poster" ? (capabilityDetails?.showcase ?? null) : null),
+    [capabilityDetails?.showcase],
+  )
   const kindLabel = (kind: MarketplaceCatalogCard["kind"]) =>
     kind === "plugin" ? "Plugin" : kind === "skill" ? "Skill" : "MCP Server"
   const pluginCategoryLabel = (category: MarketplacePluginCategory) =>
@@ -396,11 +452,26 @@ export function MarketplaceSurface({ className, client, locale }: MarketplaceSur
                 const pluginUnavailable = card.kind === "plugin" && pluginRuntimeState === "unavailable-for-session"
                 return (
                   <article
-                    className="rounded-xl border border-border-subtle bg-surface-panel p-4"
+                    className="group relative cursor-pointer rounded-xl border border-border-subtle bg-surface-panel p-4 transition-colors hover:border-border hover:bg-interactive-hover/40 active:bg-interactive-pressed/40"
                     key={`${card.kind}:${card.id}`}
                   >
-                    <div className="flex items-start justify-between gap-4">
-                      <div>
+                    <button
+                      aria-label={`${text.viewDetails}: ${card.name}`}
+                      className="absolute inset-0 z-0 cursor-pointer rounded-xl border-0 bg-transparent p-0 outline-none focus-visible:ring-2 focus-visible:ring-ring/50 focus-visible:ring-offset-2 focus-visible:ring-offset-background"
+                      data-marketplace-card-details-target="true"
+                      onClick={() =>
+                        void openCapabilityDetails({
+                          description: card.description,
+                          id: card.id,
+                          installed: card.installed !== undefined,
+                          kind: card.kind,
+                          name: card.name,
+                        })
+                      }
+                      type="button"
+                    />
+                    <div className="pointer-events-none relative z-[1] flex items-start justify-between gap-4">
+                      <div className="min-w-0">
                         <div className="flex items-center gap-2">
                           <h3 className="font-semibold">{card.name}</h3>
                           <span className="rounded bg-control-background px-1.5 py-0.5 text-[10px] uppercase text-text-tertiary">
@@ -408,19 +479,6 @@ export function MarketplaceSurface({ className, client, locale }: MarketplaceSur
                           </span>
                         </div>
                         <p className="mt-1 text-sm text-text-secondary">{card.description}</p>
-                        {card.categories?.length ? (
-                          <div className="mt-2 flex flex-wrap gap-1.5">
-                            {card.categories.map((category) => (
-                              <span
-                                className="rounded-full bg-control-background px-2 py-0.5 text-xs text-text-secondary"
-                                data-plugin-category={category}
-                                key={category}
-                              >
-                                {pluginCategoryLabel(category)}
-                              </span>
-                            ))}
-                          </div>
-                        ) : null}
                         {card.otherSourceCount > 0 ? (
                           <p className="mt-2 text-xs text-text-tertiary">
                             {locale === "zh-CN"
@@ -429,7 +487,10 @@ export function MarketplaceSurface({ className, client, locale }: MarketplaceSur
                           </p>
                         ) : null}
                       </div>
-                      <div className="flex items-center gap-2">
+                      <div
+                        className="pointer-events-auto relative z-10 flex shrink-0 items-center gap-2"
+                        data-marketplace-card-controls="true"
+                      >
                         {card.installed ? (
                           <>
                             {card.updateAvailable ? (
@@ -512,7 +573,7 @@ export function MarketplaceSurface({ className, client, locale }: MarketplaceSur
                     {pendingOperation ? (
                       <p
                         aria-live="polite"
-                        className="mt-3 text-xs text-text-secondary"
+                        className="pointer-events-none relative z-[1] mt-3 text-xs text-text-secondary"
                         data-capability-progress={`${card.kind}:${card.id}`}
                         role="status"
                       >
@@ -521,7 +582,7 @@ export function MarketplaceSurface({ className, client, locale }: MarketplaceSur
                     ) : null}
                     {capabilityError ? (
                       <p
-                        className="mt-3 rounded-lg border border-destructive/30 bg-destructive/5 px-3 py-2 text-sm text-destructive outline-none"
+                        className="pointer-events-none relative z-[1] mt-3 rounded-lg border border-destructive/30 bg-destructive/5 px-3 py-2 text-sm text-destructive outline-none"
                         data-capability-error={`${card.kind}:${card.id}`}
                         ref={(element) => {
                           if (element) capabilityErrorRefs.current.set(pendingKey, element)
@@ -550,17 +611,35 @@ export function MarketplaceSurface({ className, client, locale }: MarketplaceSur
             const pluginUnavailable = capability.kind === "plugin" && pluginRuntimeState === "unavailable-for-session"
             return (
               <article
-                className="rounded-xl border border-border-subtle bg-surface-panel p-4"
+                className="group relative cursor-pointer rounded-xl border border-border-subtle bg-surface-panel p-4 transition-colors hover:border-border hover:bg-interactive-hover/40 active:bg-interactive-pressed/40"
                 key={`${capability.kind}:${capability.id}`}
               >
-                <div className="flex items-center justify-between gap-4">
-                  <div>
+                <button
+                  aria-label={`${text.viewDetails}: ${capability.name}`}
+                  className="absolute inset-0 z-0 cursor-pointer rounded-xl border-0 bg-transparent p-0 outline-none focus-visible:ring-2 focus-visible:ring-ring/50 focus-visible:ring-offset-2 focus-visible:ring-offset-background"
+                  data-marketplace-card-details-target="true"
+                  onClick={() =>
+                    void openCapabilityDetails({
+                      description: "",
+                      id: capability.id,
+                      installed: true,
+                      kind: capability.kind,
+                      name: capability.name,
+                    })
+                  }
+                  type="button"
+                />
+                <div className="pointer-events-none relative z-[1] flex items-stretch justify-between gap-4">
+                  <div className="min-w-0 self-center">
                     <h3 className="font-semibold">{capability.name}</h3>
                     <p className="text-xs text-text-tertiary">
                       {capability.sourceLabel} · {capability.version} · {installedStateLabel(capability)}
                     </p>
                   </div>
-                  <div className="flex gap-2">
+                  <div
+                    className="pointer-events-auto relative z-10 flex shrink-0 gap-2"
+                    data-marketplace-card-controls="true"
+                  >
                     {capability.updateAvailable ? (
                       <Button
                         aria-busy={pendingOperation?.action === "update"}
@@ -685,7 +764,7 @@ export function MarketplaceSurface({ className, client, locale }: MarketplaceSur
                 {pendingOperation ? (
                   <p
                     aria-live="polite"
-                    className="mt-3 text-xs text-text-secondary"
+                    className="pointer-events-none relative z-[1] mt-3 text-xs text-text-secondary"
                     data-capability-progress={`${capability.kind}:${capability.id}`}
                     role="status"
                   >
@@ -694,7 +773,7 @@ export function MarketplaceSurface({ className, client, locale }: MarketplaceSur
                 ) : null}
                 {capabilityError ? (
                   <p
-                    className="mt-3 rounded-lg border border-destructive/30 bg-destructive/5 px-3 py-2 text-sm text-destructive outline-none"
+                    className="pointer-events-none relative z-[1] mt-3 rounded-lg border border-destructive/30 bg-destructive/5 px-3 py-2 text-sm text-destructive outline-none"
                     data-capability-error={`${capability.kind}:${capability.id}`}
                     ref={(element) => {
                       if (element) capabilityErrorRefs.current.set(pendingKey, element)
@@ -802,6 +881,147 @@ export function MarketplaceSurface({ className, client, locale }: MarketplaceSur
           ))}
         </div>
       ) : null}
+
+      {selectedDetails?.kind === "skill" ? (
+        <SkillDetailDialog
+          busy={false}
+          details={
+            capabilityDetails?.kind === "skill"
+              ? {
+                  description: capabilityDetails.description,
+                  files: capabilityDetails.files ?? [],
+                  id: capabilityDetails.id,
+                  name: capabilityDetails.name,
+                  version: capabilityDetails.version,
+                }
+              : null
+          }
+          error={capabilityDetailsError}
+          installed={selectedDetails.installed}
+          locale={locale}
+          loading={capabilityDetailsLoading}
+          onClose={closeCapabilityDetails}
+          onInstall={() => undefined}
+          onRetry={() => void openCapabilityDetails(selectedDetails)}
+          onUninstall={() => undefined}
+          readOnly
+          readOnlyLabel={capabilityDetails?.sourceLabel}
+          showcase={capabilityDetails?.showcase}
+          skill={{
+            description: selectedDetails.description,
+            id: selectedDetails.id,
+            installed: selectedDetails.installed,
+            name: selectedDetails.name,
+          }}
+        />
+      ) : null}
+
+      <Dialog
+        onOpenChange={(open) => {
+          if (!open) closeCapabilityDetails()
+        }}
+        open={selectedDetails !== undefined && selectedDetails.kind !== "skill"}
+      >
+        {selectedDetails && selectedDetails.kind !== "skill" ? (
+          <DialogContent className="max-w-3xl overflow-hidden p-0">
+            <header className="flex items-start justify-between gap-5 border-b border-border-subtle px-6 py-5">
+              <div className="min-w-0">
+                <div className="flex flex-wrap items-center gap-2">
+                  <DialogTitle>{capabilityDetails?.name ?? selectedDetails.name}</DialogTitle>
+                  <span className="rounded bg-control-background px-2 py-0.5 text-[10px] uppercase text-text-tertiary">
+                    {kindLabel(selectedDetails.kind)}
+                  </span>
+                  {capabilityDetails?.version ? (
+                    <span className="rounded-full border border-border-subtle px-2 py-0.5 text-[11px] text-text-secondary">
+                      v{capabilityDetails.version}
+                    </span>
+                  ) : null}
+                </div>
+                <DialogDescription className="mt-2 max-w-2xl">
+                  {capabilityDetails?.description ?? selectedDetails.description}
+                </DialogDescription>
+              </div>
+              <Button
+                aria-label={locale === "zh-CN" ? "关闭详情" : "Close details"}
+                onClick={closeCapabilityDetails}
+                size="icon-sm"
+                variant="ghost"
+              >
+                <X />
+              </Button>
+            </header>
+            {capabilityDetailsLoading ? (
+              <div className="grid min-h-72 place-items-center" role="status">
+                <div className="flex items-center gap-2 text-sm text-text-secondary">
+                  <LoadingSpinner size="sm" />
+                  {text.loadingDetails}
+                </div>
+              </div>
+            ) : capabilityDetailsError ? (
+              <div className="grid min-h-72 place-items-center p-6">
+                <div
+                  className="max-w-lg rounded-xl border border-destructive/30 bg-destructive/5 p-4 text-sm text-destructive"
+                  role="alert"
+                >
+                  <p>{capabilityDetailsError}</p>
+                  <Button
+                    className="mt-3"
+                    onClick={() => void openCapabilityDetails(selectedDetails)}
+                    size="sm"
+                    variant="outline"
+                  >
+                    {locale === "zh-CN" ? "重试" : "Retry"}
+                  </Button>
+                </div>
+              </div>
+            ) : capabilityDetails ? (
+              <div className="grid gap-5 p-6 md:grid-cols-[minmax(0,1.45fr)_minmax(220px,0.75fr)]">
+                <div>
+                  {capabilityDetails.showcase ? (
+                    <SkillShowcaseMedia
+                      className="rounded-xl border border-border-subtle"
+                      load={loadSelectedShowcase}
+                      name={capabilityDetails.name}
+                    />
+                  ) : (
+                    <div className="grid aspect-video place-items-center rounded-xl border border-dashed border-border-subtle bg-control-background text-sm text-text-tertiary">
+                      {locale === "zh-CN" ? "暂无预览图" : "No preview image"}
+                    </div>
+                  )}
+                </div>
+                <dl className="grid content-start gap-4 rounded-xl border border-border-subtle bg-control-background p-4 text-sm">
+                  <div>
+                    <dt className="text-xs text-text-tertiary">{locale === "zh-CN" ? "来源" : "Source"}</dt>
+                    <dd className="mt-1 font-medium">{capabilityDetails.sourceLabel}</dd>
+                  </div>
+                  {capabilityDetails.runtimeScope ? (
+                    <div>
+                      <dt className="text-xs text-text-tertiary">
+                        {locale === "zh-CN" ? "运行范围" : "Runtime scope"}
+                      </dt>
+                      <dd className="mt-1 font-medium">
+                        {capabilityDetails.runtimeScope === "agent-and-convax" ? "Agent + Convax" : "Agent"}
+                      </dd>
+                    </div>
+                  ) : null}
+                  {capabilityDetails.categories?.length ? (
+                    <div>
+                      <dt className="text-xs text-text-tertiary">{locale === "zh-CN" ? "分类" : "Categories"}</dt>
+                      <dd className="mt-2 flex flex-wrap gap-1.5">
+                        {capabilityDetails.categories.map((category) => (
+                          <span className="rounded-full bg-surface-panel px-2 py-0.5 text-xs" key={category}>
+                            {pluginCategoryLabel(category)}
+                          </span>
+                        ))}
+                      </dd>
+                    </div>
+                  ) : null}
+                </dl>
+              </div>
+            ) : null}
+          </DialogContent>
+        ) : null}
+      </Dialog>
 
       {sourceChoices.length > 0 ? (
         <div aria-modal="true" className="fixed inset-0 z-[200] grid place-items-center bg-black/40 p-6" role="dialog">

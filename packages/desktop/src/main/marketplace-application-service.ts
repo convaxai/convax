@@ -16,6 +16,7 @@ import {
 import type {
   MarketplaceCatalogSnapshot,
   MarketplaceCatalogSourceChoice,
+  MarketplaceCapabilityDetails,
   MarketplaceCapabilityKind,
   MarketplaceInstalledCapability,
   MarketplaceInventory,
@@ -145,6 +146,7 @@ export interface MarketplaceApplicationServiceOptions {
   prepareFixedArtifact?(
     item: SourceQualifiedItem,
   ): Promise<{ artifactBytes: Uint8Array; companionBytes: Readonly<Record<string, Uint8Array>> } | null>
+  projectDetails?(item: SourceQualifiedItem): Promise<Pick<MarketplaceCapabilityDetails, "files" | "showcase">>
   refreshFixedSource?(id: string): Promise<boolean>
   readFixedArtifact(item: SourceQualifiedItem): Promise<Uint8Array>
   reservedBuiltinIdentities?: readonly {
@@ -567,6 +569,34 @@ export class MarketplaceApplicationService implements MarketplaceApplicationPort
           })),
       ],
       revision: this.#revision,
+    }
+  }
+
+  async getCapabilityDetails(identity: {
+    id: string
+    kind: MarketplaceCapabilityKind
+  }): Promise<MarketplaceCapabilityDetails> {
+    const [state, catalog] = await Promise.all([this.#options.state.read(), this.#standaloneCatalog()])
+    const candidates = catalog.filter((item) => item.id === identity.id && item.kind === identity.kind)
+    if (candidates.length === 0) throw new Error("Marketplace capability details are unavailable")
+    const installed = state.installations.filter((record) => record.id === identity.id && record.kind === identity.kind)
+    const group = aggregateCatalog(
+      candidates,
+      installed.map(({ id, kind, sourceKey, version }) => ({ id, kind, sourceKey, version })),
+    )[0]
+    if (!group) throw new Error("Marketplace capability details are unavailable")
+    const item = group.representative
+    const projected = (await this.#options.projectDetails?.(item)) ?? {}
+    return {
+      ...(item.pluginCategories?.length ? { categories: [...item.pluginCategories] } : {}),
+      description: item.presentation.description ?? "",
+      ...projected,
+      id: item.id,
+      kind: item.kind,
+      name: item.presentation.name,
+      ...(item.kind === "skill" ? {} : { runtimeScope: runtimeSurface(item) as "agent" | "agent-and-convax" }),
+      sourceLabel: item.marketplaceId,
+      version: item.version,
     }
   }
 

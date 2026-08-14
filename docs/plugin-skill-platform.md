@@ -45,6 +45,14 @@ runtime-readiness claim, or installation decision. Catalog aggregation keeps the
 on the same representative source as the displayed Plugin metadata, and Renderer
 filtering is local presentation only.
 
+Marketplace details remain a Host-owned presentation of the same source-qualified
+representative as the card. The Renderer identifies only the capability kind and id;
+Desktop Main derives and revalidates the immutable package. Skill file trees use the
+bounded, non-executable preview projection, and optional Showcase posters are
+returned only after size, digest, and media-signature validation. These details do
+not grant authority, select a source, expose a native path or release URL, or become
+part of the persisted Marketplace card cache.
+
 Desktop resolves a command against the current installed Plugin id and sends it
 only to the exact owning iframe generation through an opaque frame lease. A stale
 frame, remount, node ownership change, missing command, or missing Host icon token

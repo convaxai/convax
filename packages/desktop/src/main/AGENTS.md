@@ -164,6 +164,12 @@ For any matching change, read the full routed reference before planning or editi
   output, and owned Skills. Keep the categories bound to the representative source
   and expose only the bounded display enum; it is never runtime readiness or grant
   evidence.
+- Project Marketplace details from the exact current Catalog representative selected
+  for the card. A detail request accepts only `{kind,id}`; derive SourceKey and
+  release authority in Main, revalidate immutable Skill package identity before
+  creating bounded file previews, and verify Showcase poster size, digest, and
+  media signature before returning bytes. Optional presentation failure must not
+  hide otherwise valid metadata or Skill files.
 - Preserve Registry `ownerPluginId` through source qualification and remove
   Plugin-owned Skills from standalone choices before creating a transition. Managed
   Skill recovery never infers publication from a directory name: retry only the

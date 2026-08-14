@@ -690,6 +690,36 @@ export class LocalMarketplaceStore {
     return path.join(this.#root, "packages", ...input.snapshotKey.split("/"))
   }
 
+  async readSkillDetailFiles(item: SourceQualifiedItem): Promise<Readonly<Record<string, Uint8Array>>> {
+    const delivery = item.delivery
+    if (
+      item.sourceKind !== "local" ||
+      item.marketplaceId !== this.#marketplaceId ||
+      item.kind !== "skill" ||
+      delivery.kind !== "artifact"
+    ) {
+      throw new Error("Local Marketplace Skill detail identity is invalid")
+    }
+    const candidate = (await this.list()).packages.find(
+      (entry) =>
+        entry.kind === item.kind &&
+        entry.id === item.id &&
+        entry.version === item.version &&
+        entry.digest === delivery.sha256,
+    )
+    if (!candidate) throw new Error("Local Marketplace Skill detail snapshot is unavailable")
+    const files = await inventory(this.resolveSnapshotDirectory(candidate))
+    if (
+      digestInventory(files) !== candidate.digest ||
+      detectKind(files) !== candidate.kind ||
+      canonicalJson(packageIdentity(candidate.kind, files)) !==
+        canonicalJson({ id: candidate.id, version: candidate.version })
+    ) {
+      throw new Error("Local Marketplace Skill detail snapshot no longer matches its immutable identity")
+    }
+    return Object.fromEntries(files.map((file) => [file.path, Uint8Array.from(file.bytes)]))
+  }
+
   async projectCatalogItem(candidate: LocalMarketplacePackage, sourceKey: SourceKey): Promise<SourceQualifiedItem> {
     const files = await inventory(this.resolveSnapshotDirectory(candidate))
     if (

@@ -14,7 +14,7 @@ import {
   Trash2,
   X,
 } from "lucide-react"
-import { useEffect, useMemo, useRef, useState } from "react"
+import { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import { createPortal } from "react-dom"
 import type {
   DesktopSkillCatalogItem,
@@ -357,6 +357,7 @@ export interface SkillDetailDialogProps {
   onUninstall(): void
   readOnly?: boolean
   readOnlyLabel?: string
+  showcase?: DesktopSkillShowcase
   skill: DesktopSkillCatalogItem
 }
 
@@ -375,6 +376,7 @@ export function SkillDetailDialog({
   onUninstall,
   readOnly = false,
   readOnlyLabel,
+  showcase,
   skill,
 }: SkillDetailDialogProps) {
   const tree = useMemo(() => buildSkillFileTree(details?.files ?? []), [details])
@@ -382,6 +384,10 @@ export function SkillDetailDialog({
   const [selectedPath, setSelectedPath] = useState(defaultPath)
   const [expanded, setExpanded] = useState<ReadonlySet<string>>(() => new Set(ancestorDirectoryPaths(defaultPath)))
   const [copiedPath, setCopiedPath] = useState<string>()
+  const loadDetailShowcase = useCallback(
+    (media: DesktopSkillShowcaseMedia) => Promise.resolve(media === "poster" ? (showcase ?? null) : null),
+    [showcase],
+  )
   const overlay = useRef<HTMLDivElement>(null)
   const dialog = useRef<HTMLElement>(null)
   const closeButton = useRef<HTMLButtonElement>(null)
@@ -534,6 +540,13 @@ export function SkillDetailDialog({
         ) : details ? (
           <div className="grid min-h-0 flex-1 grid-cols-[minmax(210px,0.28fr)_minmax(0,1fr)]">
             <aside className="min-h-0 overflow-y-auto border-r border-border bg-muted/15 p-3">
+              {showcase ? (
+                <SkillShowcaseMedia
+                  className="mb-3 rounded-lg border border-border"
+                  load={loadDetailShowcase}
+                  name={details.name}
+                />
+              ) : null}
               <h3 className="px-2 pb-2 text-[11px] font-semibold uppercase tracking-[0.12em] text-muted-foreground">
                 {appMessage(locale, "capabilities.skillFiles")}
               </h3>

@@ -83,6 +83,16 @@ function client(overrides: Partial<MarketplaceClient> = {}): MarketplaceClient {
     confirmUpdate: mock(async ({ confirmationToken }) => ({ selectionToken: confirmationToken })),
     disable: mock(async () => undefined),
     enable: mock(async () => undefined),
+    getCapabilityDetails: mock(async ({ id, kind }) => ({
+      description: "One capability from two sources",
+      ...(kind === "skill" ? { files: [] } : {}),
+      id,
+      kind,
+      name: "Example",
+      ...(kind === "skill" ? {} : { runtimeScope: "agent" as const }),
+      sourceLabel: "Convax Official",
+      version: "1.0.0",
+    })),
     importCapability: mock(async () => null),
     install: mock(async () => ({
       id: "example",
@@ -344,7 +354,7 @@ test("renders one aggregated card and requires an explicit source choice", async
   expect(marketplace.install).toHaveBeenCalledWith({ selectionToken: "o".repeat(24) })
 })
 
-test("renders Plugin category tags and filters the catalog locally", async () => {
+test("keeps category tags out of list items and filters Skill as a first-class catalog kind", async () => {
   const listCatalog = mock(async () => ({
     cards: [
       {
@@ -383,7 +393,7 @@ test("renders Plugin category tags and filters the catalog locally", async () =>
   }))
   await render(client({ listCatalog }))
 
-  expect(document.querySelector('[data-plugin-category="image"]')?.textContent).toBe("Image")
+  expect(document.querySelector("[data-plugin-category]")).toBeNull()
   expect(document.body.textContent).toContain("Standalone Skill")
 
   await act(async () => button("Image").click())
@@ -392,12 +402,167 @@ test("renders Plugin category tags and filters the catalog locally", async () =>
   expect(document.body.textContent).not.toContain("Standalone Skill")
 
   await act(async () => button("Skill").click())
-  expect(document.body.textContent).toContain("Skill Plugin")
-  expect(document.body.textContent).not.toContain("Standalone Skill")
+  expect(document.body.textContent).toContain("Standalone Skill")
+  expect(document.body.textContent).not.toContain("Skill Plugin")
+  expect(document.body.textContent).not.toContain("Media Plugin")
 
   await act(async () => button("All").click())
   expect(document.body.textContent).toContain("Standalone Skill")
   expect(listCatalog).toHaveBeenCalledTimes(1)
+})
+
+test("opens details from the card while keeping capability actions independent", async () => {
+  const getCapabilityDetails = mock(client().getCapabilityDetails)
+  const beginInstall = mock(client().beginInstall)
+  await render(client({ beginInstall, getCapabilityDetails }))
+
+  const card = document.querySelector<HTMLElement>("article")!
+  expect(card.className).toContain("cursor-pointer")
+  expect(
+    [...card.querySelectorAll("button")].some((candidate) => candidate.textContent?.trim() === "View details"),
+  ).toBe(false)
+
+  await act(async () => card.querySelector<HTMLButtonElement>('[data-marketplace-card-details-target="true"]')!.click())
+  expect(getCapabilityDetails).toHaveBeenCalledTimes(1)
+  await act(async () => button("Close details").click())
+
+  await act(async () => button("Install Example").click())
+  expect(beginInstall).toHaveBeenCalledTimes(1)
+  expect(getCapabilityDetails).toHaveBeenCalledTimes(1)
+})
+
+test("opens Plugin Showcase details and restores the Skill file tree", async () => {
+  const getCapabilityDetails = mock(async ({ id }: { id: string; kind: "mcp-server" | "plugin" | "skill" }) =>
+    id === "detail-plugin"
+      ? {
+          categories: ["image" as const],
+          description: "Plugin detail description",
+          id,
+          kind: "plugin" as const,
+          name: "Detail Plugin",
+          runtimeScope: "agent-and-convax" as const,
+          showcase: {
+            altText: "Plugin preview",
+            bytes: Uint8Array.from([0x89, 0x50, 0x4e, 0x47]),
+            mimeType: "image/png" as const,
+            size: 4,
+          },
+          sourceLabel: "Convax Official",
+          version: "2.0.0",
+        }
+      : {
+          description: "Skill detail description",
+          files: [
+            { content: "# Detail Skill", kind: "text" as const, path: "SKILL.md", size: 14 },
+            { content: "# Guide", kind: "text" as const, path: "references/guide.md", size: 7 },
+          ],
+          id,
+          kind: "skill" as const,
+          name: "Detail Skill",
+          sourceLabel: "Convax Official",
+          version: "1.0.0",
+        },
+  )
+  await render(
+    client({
+      getCapabilityDetails,
+      listCatalog: mock(async () => ({
+        cards: [
+          {
+            categories: ["image" as const],
+            description: "Plugin card",
+            id: "detail-plugin",
+            kind: "plugin" as const,
+            name: "Detail Plugin",
+            otherSourceCount: 0,
+          },
+          {
+            description: "Skill card",
+            id: "detail-skill",
+            kind: "skill" as const,
+            name: "Detail Skill",
+            otherSourceCount: 0,
+          },
+        ],
+        revision: 1,
+      })),
+    }),
+  )
+  const card = (name: string) =>
+    [...document.querySelectorAll<HTMLElement>("article")].find((article) => article.textContent?.includes(name))!
+
+  await act(async () =>
+    card("Detail Plugin").querySelector<HTMLButtonElement>('[data-marketplace-card-details-target="true"]')!.click(),
+  )
+  expect(getCapabilityDetails).toHaveBeenCalledWith({ id: "detail-plugin", kind: "plugin" })
+  expect(document.body.textContent).toContain("Plugin detail description")
+  expect(document.body.textContent).toContain("Convax Official")
+  expect(document.body.textContent).toContain("Agent + Convax")
+  await act(async () => button("Close details").click())
+
+  await act(async () =>
+    card("Detail Skill").querySelector<HTMLButtonElement>('[data-marketplace-card-details-target="true"]')!.click(),
+  )
+  expect(getCapabilityDetails).toHaveBeenCalledWith({ id: "detail-skill", kind: "skill" })
+  expect(document.body.textContent).toContain("SKILL.md")
+  expect(document.body.textContent).toContain("references")
+  expect(document.body.textContent).toContain("# Detail Skill")
+})
+
+test("ignores a stale detail response after another capability is opened", async () => {
+  const first = deferred<Awaited<ReturnType<MarketplaceClient["getCapabilityDetails"]>>>()
+  const getCapabilityDetails = mock(({ id }: { id: string; kind: "mcp-server" | "plugin" | "skill" }) =>
+    id === "first"
+      ? first.promise
+      : Promise.resolve({
+          description: "Second details",
+          id,
+          kind: "plugin" as const,
+          name: "Second",
+          runtimeScope: "agent" as const,
+          sourceLabel: "Second source",
+          version: "2.0.0",
+        }),
+  )
+  await render(
+    client({
+      getCapabilityDetails,
+      listCatalog: mock(async () => ({
+        cards: [
+          { description: "First card", id: "first", kind: "plugin" as const, name: "First", otherSourceCount: 0 },
+          { description: "Second card", id: "second", kind: "plugin" as const, name: "Second", otherSourceCount: 0 },
+        ],
+        revision: 1,
+      })),
+    }),
+  )
+  const open = async (name: string) => {
+    const article = [...document.querySelectorAll<HTMLElement>("article")].find((entry) =>
+      entry.textContent?.includes(name),
+    )!
+    await act(async () =>
+      article.querySelector<HTMLButtonElement>('[data-marketplace-card-details-target="true"]')!.click(),
+    )
+  }
+
+  await open("First")
+  await act(async () => button("Close details").click())
+  await open("Second")
+  expect(document.body.textContent).toContain("Second details")
+  await act(async () => {
+    first.resolve({
+      description: "Stale first details",
+      id: "first",
+      kind: "plugin",
+      name: "First",
+      runtimeScope: "agent",
+      sourceLabel: "First source",
+      version: "1.0.0",
+    })
+    await first.promise
+  })
+  expect(document.body.textContent).toContain("Second details")
+  expect(document.body.textContent).not.toContain("Stale first details")
 })
 
 test("requires exact-source confirmation even when the aggregated identity has one source", async () => {

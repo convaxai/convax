@@ -7,6 +7,7 @@ import {
   computeSourceKey,
   parseMarketplaceDescriptor,
   parseRegistryV2,
+  parseShowcaseV2,
   sha256Hex,
   type MarketplaceDescriptor,
   type RegistryV2,
@@ -392,6 +393,40 @@ export class NetworkMarketplaceManager {
     )
     if (!resolved) throw new Error("Marketplace package metadata is unavailable")
     return structuredClone(resolved)
+  }
+
+  async resolveShowcasePresentation(item: Pick<SourceQualifiedItem, "id" | "kind" | "sourceKey" | "version">) {
+    const source = (await this.#readGraph()).sources.find((entry) => entry.sourceKey === item.sourceKey)
+    if (!source) return null
+    const accepted = await this.#sourceStore(item.sourceKey).readAccepted()
+    const registry = accepted?.catalog.registry
+    if (
+      !registry?.packages.some(
+        (entry) => entry.id === item.id && entry.kind === item.kind && entry.version === item.version && !entry.yanked,
+      )
+    ) {
+      return null
+    }
+    const repository = {
+      owner: source.descriptor.repository.owner,
+      repository: source.descriptor.repository.name,
+    }
+    const showcase = parseShowcaseV2(
+      parseJson(
+        await this.#fetcher.fetch(source.descriptor.showcase.v2.url, "showcase", {
+          declaredUrl: source.descriptor.showcase.v2.url,
+          maxBytes: 8 * 1024 * 1024,
+          repository,
+        }),
+        "Marketplace Showcase",
+      ),
+      registry,
+      source.descriptor,
+    )
+    const presentation = showcase.packages.find(
+      (entry) => entry.id === item.id && entry.kind === item.kind && entry.version === item.version,
+    )
+    return presentation ? structuredClone(presentation.presentation) : null
   }
 
   async repositoryAuthority(sourceKey: SourceKey) {

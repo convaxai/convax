@@ -99,6 +99,7 @@ function harness(options: {
   networkRefresh?: (id: string) => Promise<void>
   preinstalledPolicy?: ConstructorParameters<typeof MarketplaceApplicationService>[0]["preinstalledPolicy"]
   prepareFixedArtifact?: ConstructorParameters<typeof MarketplaceApplicationService>[0]["prepareFixedArtifact"]
+  projectDetails?: ConstructorParameters<typeof MarketplaceApplicationService>[0]["projectDetails"]
   pluginRuntimeState?: ConstructorParameters<typeof MarketplaceApplicationService>[0]["pluginRuntimeState"]
   pluginUpdateRecoveryBindings?: ConstructorParameters<
     typeof MarketplaceApplicationService
@@ -185,6 +186,7 @@ function harness(options: {
       : {}),
     ...(options.preinstalledPolicy ? { preinstalledPolicy: options.preinstalledPolicy } : {}),
     ...(options.prepareFixedArtifact ? { prepareFixedArtifact: options.prepareFixedArtifact } : {}),
+    ...(options.projectDetails ? { projectDetails: options.projectDetails } : {}),
     ...(options.refreshFixedSource ? { refreshFixedSource: options.refreshFixedSource } : {}),
     readFixedArtifact: async (item) => {
       preparedOutsideMutation = true
@@ -493,6 +495,54 @@ test("projects only the representative Plugin source categories into catalog car
       },
     ],
   })
+})
+
+test("projects details from the same installed representative used by the catalog", async () => {
+  const state = await stateStore()
+  const builtin = skill({
+    id: "detail-plugin",
+    kind: "plugin",
+    pluginCategories: ["service"],
+    runtimeSurface: "agent-and-convax",
+  })
+  const installedSource = skill({
+    id: builtin.id,
+    kind: "plugin",
+    marketplaceId: "installed-marketplace",
+    pluginCategories: ["image", "skill"],
+    runtimeSurface: "agent",
+    sourceKey: sourceB,
+    sourceKind: "network",
+    sourceOrder: 4,
+  })
+  await state.update((draft) => {
+    draft.installations.push({
+      artifactDigest: sha256Hex(canonicalJson(installedSource.delivery)),
+      id: installedSource.id,
+      kind: installedSource.kind,
+      revision: 1,
+      runtimeSurface: installedSource.runtimeSurface,
+      sourceKey: installedSource.sourceKey,
+      version: installedSource.version,
+    })
+  })
+  let projectedSource: SourceKey | undefined
+  const { service } = harness({
+    candidates: [builtin, installedSource],
+    projectDetails: async (item) => {
+      projectedSource = item.sourceKey
+      return {}
+    },
+    state,
+  })
+
+  await expect(service.getCapabilityDetails({ id: builtin.id, kind: "plugin" })).resolves.toMatchObject({
+    categories: ["image", "skill"],
+    id: builtin.id,
+    runtimeScope: "agent",
+    sourceLabel: "installed-marketplace",
+  })
+  expect(projectedSource).toBe(sourceB)
 })
 
 test("isolates a corrupt Local authority while keeping unrelated Network catalog available", async () => {

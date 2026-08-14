@@ -22,6 +22,10 @@ between trusted Main and untrusted Renderer code. It owns no business state.
   credentials, cookies, authorization URLs, transport choices, or raw diagnostics.
 - Treat every returned catalog, status, model, and capability object as a
   renderer-safe projection, not authority. Main revalidates the real request.
+- Marketplace detail lookup forwards only a bounded capability `{kind,id}` and
+  returns Main-projected metadata, bounded Skill file previews, and optional
+  verified Showcase bytes. Never add SourceKey, artifact URL, digest, or native
+  path parameters to this bridge.
 - Keep Project and Canvas references portable and scoped. Never translate them into
   native paths in Preload.
 - Editable-text save forwards only the bounded content update plus its original

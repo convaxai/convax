@@ -436,12 +436,26 @@ through `@convax/plugin-sdk`, then projects `service` from a Service contributio
 `video` and `image` from generation tool outputs, and `skill` from owned Skills.
 `@convax/marketplace` owns that four-value taxonomy and keeps it attached to the same
 representative source as the card's name and description. Renderer may cache and
-filter these values as presentation only; they never select a source, establish
-runtime readiness, grant authority, or authorize installation/execution. The
+filter these values as presentation only: `service`, `video`, and `image` select
+Plugin cards with the derived category, while `skill` selects first-class Skill
+cards and never Plugins merely because they own Skills. Catalog list cards do not
+repeat the category chips. These controls never select a source, establish runtime
+readiness, grant authority, or authorize installation/execution. The
 Main-to-Renderer card projection is part of the Desktop IPC compatibility line:
-category support advances it to `convax.desktop-ipc/40`, and Renderer uses display
+category support advanced it to `convax.desktop-ipc/40`, and Renderer uses display
 cache schema `convax.marketplace-display-cache/2` so an older category-free cache or
 Main cannot silently produce empty current filters.
+
+Marketplace card details are an on-demand projection from the same exact Catalog
+representative used for the visible card. Renderer submits only `{kind,id}`; Desktop
+Main resolves the SourceKey and immutable artifact. Skill details revalidate that
+artifact before producing the existing bounded, non-executable file preview, while
+optional Showcase posters cross IPC only after declared size, SHA-256, and media
+file-signature validation. A failed poster leaves metadata and Skill files visible.
+Detail bytes are not persisted in the disposable card cache, and no native path,
+source URL, artifact URL, or source-selection input crosses to Renderer. This typed
+bridge advances the Desktop compatibility line to `convax.desktop-ipc/41` without a
+Marketplace display-cache schema change.
 
 Installed Plugin snapshots contain the complete contribution closure. One global
 ActivePluginSet selects exact snapshot digests and resolves global Skill names and
@@ -1252,7 +1266,8 @@ Builtin + Official + user Network + Host Local adapters
   -> source-qualified validated entries
   -> Desktop derives bounded Plugin categories from exact validated contributions
   -> @convax/marketplace display groups by {kind,id} with one representative source
-  -> Renderer may filter the safe projection by service, video, image or skill
+  -> Renderer filters Plugin categories by service/video/image or selects first-class Skills
+  -> on demand, Desktop projects details from that same representative and verifies optional Showcase bytes
   -> explicit exact-source confirmation and sender-scoped SelectionToken
   -> Desktop Plugin install transition publishes static bytes, exact execution authorization and InstallRecord
   -> MCP or narrowly admitted product-lock setup may independently publish an ExecutionGrant
@@ -1267,6 +1282,15 @@ digests, native paths, commands, headers, source identities, and runtime methods
 derived in Main. A short-lived `SelectionToken` binds the exact source, Catalog
 revision, version, metadata, artifact, and current-target companion that the user
 reviewed; any change produces a stale-selection result.
+
+Opening a Marketplace detail is not installation or source selection. Main repeats
+Catalog aggregation for the requested `{kind,id}`, binds the result to the same
+installed-or-preferred representative used by the card, and lazily projects only
+safe metadata. For Skills it reads the exact immutable package and returns a bounded
+file tree/text preview; for supported entries it may also return digest-verified
+Showcase poster bytes. Renderer cannot request another source, path, URL, digest, or
+package revision, and a stale detail response cannot replace the currently selected
+dialog.
 
 Import uses one Main-owned directory chooser and accepts exactly one root marker:
 `manifest.json`, `SKILL.md`, or `server.json`. Main performs a bounded no-follow
