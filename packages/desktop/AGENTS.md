@@ -142,6 +142,12 @@ contract and its routed references.
   Main-owned adapter over Project Files compare-and-replace, ProjectIndex version
   publication, and the Canvas resource relink operation. Filesystem notifications
   remain refresh hints and never substitute for that transaction path.
+- Renderer composes Canvas's transient editable-text write-behind store across
+  Canvas mounts. A Canvas-to-Canvas Workbench change starts or joins background save
+  and never prompts or waits; Project teardown drains the store. Each background
+  request carries the originating mounted Canvas session lease, Main validates that
+  exact lease at admission, and only the active Project must remain stable through
+  relink so a later active Canvas cannot retarget or cancel the admitted save.
 - Card conversations infer only direct incoming file nodes. Image/video replacement
   cards may persist one opaque output-tool override. Text cards isolate model and
   options by output for the mounted composer and create a separate pending media

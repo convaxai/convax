@@ -20,6 +20,11 @@ Canvas owns document and editor semantics independently of Project and Agent.
 
 - Use host-neutral `scopeId`; Canvas must not know Project roots, `.convax`, Electron,
   Workbench, OpenCode, or native persistence.
+- Canvas owns editable-text draft semantics and the transient write-behind store
+  keyed by scope/document/node. Stage each edit immediately, autosave through the
+  injected text-resource port, keep failures for retry across remounts, and let an
+  ordinary document switch start or join that save without prompting or waiting.
+  Host composition may drain the store before its scope is torn down.
 - Version persisted schema changes and provide migration tests by default. A breaking
   cutover requires an explicit canonical architecture decision and rejection tests;
   unknown or unsupported documents never become partially hydrated live state.

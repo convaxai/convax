@@ -2502,9 +2502,10 @@ function startApplication() {
     const disposeCanvasTextResourceIpc = registerCanvasTextResourceIpc(projectManager, canvasApplication, {
       ...ipcSecurity,
       currentResources: collaborationFacade.projectIndexes,
+      getActiveProjectId: () => activeCollaborationProjectId,
       preparation: canvasResourcePreparation,
-      resolveActiveCanvas,
       resources: canvasResources,
+      sessions: collaborationCanvasSessions,
     })
     const disposeGenerationIpc = registerGenerationIpc(
       {

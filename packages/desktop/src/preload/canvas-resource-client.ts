@@ -45,9 +45,12 @@ export function createCanvasTextResourcePreloadClient(
       let result: unknown
       try {
         result = await options.invoke(canvasTextResourceIpcChannel, {
+          canvasId: input.canvasId,
           content: input.content,
           contentRevision: input.contentRevision,
           nodeId: input.nodeId,
+          projectId: input.projectId,
+          sessionId: input.sessionId,
         })
       } catch {
         throw new Error("Could not save the Canvas text resource")
@@ -98,9 +101,11 @@ export function createCanvasResourcePreloadClient(options: CanvasResourcePreload
       }
       if (
         input.pending !== undefined &&
-        (localFiles.length > 0 || sources.length > 0 ||
+        (localFiles.length > 0 ||
+          sources.length > 0 ||
           (input.pending.kind !== "image" && input.pending.kind !== "video") ||
-          typeof input.pending.label !== "string" || !input.pending.label)
+          typeof input.pending.label !== "string" ||
+          !input.pending.label)
       ) {
         throw new Error("Pending Canvas resource request is invalid")
       }
@@ -209,14 +214,19 @@ export function createCanvasResourcePreloadClient(options: CanvasResourcePreload
       } else {
         throw new Error("Canvas relink source is invalid")
       }
-      return invokeCanvasResourceRelink(options, canvasResourceRelinkIpcChannel, {
-        canvasId: input.canvasId,
-        commandId: input.commandId,
-        nodeId: input.nodeId,
-        projectId: input.projectId,
-        sessionId: input.sessionId,
-        source,
-      }, input)
+      return invokeCanvasResourceRelink(
+        options,
+        canvasResourceRelinkIpcChannel,
+        {
+          canvasId: input.canvasId,
+          commandId: input.commandId,
+          nodeId: input.nodeId,
+          projectId: input.projectId,
+          sessionId: input.sessionId,
+          source,
+        },
+        input,
+      )
     },
     async readConnectedImage(input) {
       let result: unknown
@@ -228,13 +238,18 @@ export function createCanvasResourcePreloadClient(options: CanvasResourcePreload
       return requireConnectedImageReadResult(result)
     },
     saveEditableCopy(input) {
-      return invokeCanvasResourceRelink(options, canvasResourceSaveEditableCopyIpcChannel, {
-        canvasId: input.canvasId,
-        commandId: input.commandId,
-        nodeId: input.nodeId,
-        projectId: input.projectId,
-        sessionId: input.sessionId,
-      }, input)
+      return invokeCanvasResourceRelink(
+        options,
+        canvasResourceSaveEditableCopyIpcChannel,
+        {
+          canvasId: input.canvasId,
+          commandId: input.commandId,
+          nodeId: input.nodeId,
+          projectId: input.projectId,
+          sessionId: input.sessionId,
+        },
+        input,
+      )
     },
   }
 }

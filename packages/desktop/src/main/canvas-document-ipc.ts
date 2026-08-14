@@ -169,9 +169,12 @@ interface ActiveCanvasScope {
 }
 
 interface CanvasTextResourceMainRequest {
+  canvasId: string
   content: string
   contentRevision: string
   nodeId: string
+  projectId: string
+  sessionId: Id128
 }
 
 export function registerCanvasTextResourceIpc(
@@ -179,10 +182,11 @@ export function registerCanvasTextResourceIpc(
   application: Pick<CanvasApplicationService, "query">,
   options: {
     currentResources: Pick<ProjectIndexCurrentBlobReferencePort, "queryCurrentResources">
+    getActiveProjectId(): string | null
     isTrustedSender(event: IpcMainInvokeEvent): boolean
     preparation: Pick<ProjectCanvasResourcePreparation, "prepare">
-    resolveActiveCanvas(event: IpcMainInvokeEvent): Promise<ActiveCanvasScope | null>
     resources: Pick<CanvasResourceBusinessService, "relinkPreparedResource">
+    sessions: Pick<CanvasCollaborationSessionOwner, "queryRenderer">
   },
 ) {
   const writer = createCanvasTextResourceWriter({
@@ -196,10 +200,14 @@ export function registerCanvasTextResourceIpc(
     if (!options.isTrustedSender(event)) throw new Error("Canvas IPC request came from an untrusted renderer")
     try {
       const input = requireCanvasTextResourceMainRequest(value)
-      const active = await options.resolveActiveCanvas(event)
-      if (!active) throw new CanvasTextResourceRequestError("Canvas text resource request has no live Workbench scope")
-      const current = await options.resolveActiveCanvas(event)
-      if (!sameActiveCanvasScope(active, current)) {
+      const ref = { canvasId: input.canvasId, scopeId: input.projectId }
+      if (options.getActiveProjectId() !== input.projectId) {
+        throw new CanvasTextResourceRequestError(
+          "Canvas text resource request does not match the invoking window's live Workbench scope",
+        )
+      }
+      await options.sessions.queryRenderer(ref, input.sessionId)
+      if (options.getActiveProjectId() !== input.projectId) {
         throw new CanvasTextResourceRequestError(
           "Canvas text resource request does not match the invoking window's live Workbench scope",
         )
@@ -209,19 +217,18 @@ export function registerCanvasTextResourceIpc(
       const result = await writer.save({
         actor: { id: `desktop:renderer:${event.sender.id}`, kind: "renderer" },
         async beforeRelink() {
-          const latest = await options.resolveActiveCanvas(event)
-          if (!sameActiveCanvasScope(active, latest)) {
+          if (options.getActiveProjectId() !== input.projectId) {
             throw new CanvasTextResourceRequestError(
               "Canvas text resource request does not match the invoking window's live Workbench scope",
             )
           }
         },
-        canvasId: active.canvasId,
+        canvasId: input.canvasId,
         commandId: `canvas-text-save:${ordinarySha256(new TextEncoder().encode(`${input.nodeId}\0${nextContentRevision}`))}`,
         content: input.content,
         expectedContentRevision: input.contentRevision,
         nodeId: input.nodeId,
-        scopeId: active.projectId,
+        scopeId: input.projectId,
       })
       return { contentRevision: result.contentRevision }
     } catch (error) {
@@ -240,10 +247,18 @@ class CanvasTextResourceRequestError extends Error {}
 function requireCanvasTextResourceMainRequest(value: unknown): CanvasTextResourceMainRequest {
   if (!isRecord(value)) throw new CanvasTextResourceRequestError("Canvas text resource request must be an object")
   for (const key of Object.keys(value)) {
-    if (key !== "content" && key !== "contentRevision" && key !== "nodeId") {
+    if (
+      key !== "canvasId" &&
+      key !== "content" &&
+      key !== "contentRevision" &&
+      key !== "nodeId" &&
+      key !== "projectId" &&
+      key !== "sessionId"
+    ) {
       throw new CanvasTextResourceRequestError(`Canvas text resource request contains unsupported field: ${key}`)
     }
   }
+  const canvasId = requireNonEmptyString(value.canvasId, "Canvas text Canvas id")
   const content = requireString(value.content, "Canvas text content")
   if (Buffer.byteLength(content, "utf8") > 16 * 1024 * 1024) {
     throw new CanvasTextResourceRequestError("Canvas text content is too large")
@@ -254,7 +269,10 @@ function requireCanvasTextResourceMainRequest(value: unknown): CanvasTextResourc
   }
   const nodeId = requireNonEmptyString(value.nodeId, "Canvas text node id")
   if (nodeId.length > 256) throw new CanvasTextResourceRequestError("Canvas text node id is too long")
-  return { content, contentRevision, nodeId }
+  const projectId = requireNonEmptyString(value.projectId, "Canvas text Project id")
+  const sessionId = parseId128(value.sessionId)
+  if (!sessionId) throw new CanvasTextResourceRequestError("Canvas text session id is invalid")
+  return { canvasId, content, contentRevision, nodeId, projectId, sessionId }
 }
 
 function sameActiveCanvasScope(left: ActiveCanvasScope, right: ActiveCanvasScope | null) {
@@ -372,12 +390,15 @@ export function registerCanvasResourceIpc(
               durationMs: performance.now() - startedAt,
               stage,
             })
-          } catch { /* Diagnostics never affect a Canvas command. */ }
+          } catch {
+            /* Diagnostics never affect a Canvas command. */
+          }
         }
       }
       const sourceBytes = options.diagnostics
         ? input.sources.reduce(
-            (total, source) => total + (source.kind === "new-text" ? new TextEncoder().encode(source.text).byteLength : 0),
+            (total, source) =>
+              total + (source.kind === "new-text" ? new TextEncoder().encode(source.text).byteLength : 0),
             0,
           )
         : 0
@@ -396,37 +417,39 @@ export function registerCanvasResourceIpc(
       try {
         if (input.externalFiles.length > 0 && input.sources.length > 0) {
           if (!preparation.prepare) throw new Error("Canvas resource source preparation is unavailable")
-          sourcePrepared = await trace("canvas-prepare", sourceBytes, () => preparation.prepare!({
-            canvasId: active.canvasId,
-            scopeId: active.projectId,
-            sources: input.sources,
-          }))
+          sourcePrepared = await trace("canvas-prepare", sourceBytes, () =>
+            preparation.prepare!({
+              canvasId: active.canvasId,
+              scopeId: active.projectId,
+              sources: input.sources,
+            }),
+          )
         }
         result = input.pending
           ? await (() => {
               if (!resources.createPendingResource) throw new Error("Pending Canvas resource creation is unavailable")
               return resources.createPendingResource({
-              actor: request.actor,
-              anchor: request.anchor,
-              canvasId: request.canvasId,
-              commandId: request.commandId,
-              kind: input.pending.kind,
-              label: input.pending.label,
-              ...(input.parentId === undefined ? {} : { parentId: input.parentId }),
-              relation: request.relation,
-              scopeId: request.scopeId,
+                actor: request.actor,
+                anchor: request.anchor,
+                canvasId: request.canvasId,
+                commandId: request.commandId,
+                kind: input.pending.kind,
+                label: input.pending.label,
+                ...(input.parentId === undefined ? {} : { parentId: input.parentId }),
+                relation: request.relation,
+                scopeId: request.scopeId,
               })
             })()
           : input.externalFiles.length
-          ? await preparation.withAdmittedLocalFiles(
-              { files: input.externalFiles, projectId: active.projectId },
-              (localPrepared: CanvasResourcePreparationResult) =>
-                resources.addPreparedResources(
-                  sourcePrepared ? { ...request, sources: [] } : request,
-                  mergeCanvasResourcePreparation(sourcePrepared, localPrepared),
-                ),
-            )
-          : await trace("canvas-submit", sourceBytes, () => resources.addResources(request))
+            ? await preparation.withAdmittedLocalFiles(
+                { files: input.externalFiles, projectId: active.projectId },
+                (localPrepared: CanvasResourcePreparationResult) =>
+                  resources.addPreparedResources(
+                    sourcePrepared ? { ...request, sources: [] } : request,
+                    mergeCanvasResourcePreparation(sourcePrepared, localPrepared),
+                  ),
+              )
+            : await trace("canvas-submit", sourceBytes, () => resources.addResources(request))
       } catch (error) {
         console.error("Canvas resource mutation failed", error)
         const failure =
@@ -445,12 +468,14 @@ export function registerCanvasResourceIpc(
         }
         throw error
       }
-      const delivery = await trace("response-projection-invalidation", 0, () => options.sessions.deliverApplicationCommit({
-        ref: { canvasId: active.canvasId, scopeId: active.projectId },
-        rendererActorId: `desktop:renderer:${event.sender.id}`,
-        sessionId: input.sessionId,
-        result,
-      }))
+      const delivery = await trace("response-projection-invalidation", 0, () =>
+        options.sessions.deliverApplicationCommit({
+          ref: { canvasId: active.canvasId, scopeId: active.projectId },
+          rendererActorId: `desktop:renderer:${event.sender.id}`,
+          sessionId: input.sessionId,
+          result,
+        }),
+      )
       return {
         createdNodeIds: result.createdNodeIds,
         delivery,
@@ -769,7 +794,14 @@ function requireCanvasResourceRelinkGuard(value: unknown, allowedKeys: readonly 
 }
 
 function requireCanvasResourceRelinkMainRequest(value: unknown): CanvasResourceRelinkMainRequest {
-  const guard = requireCanvasResourceRelinkGuard(value, ["canvasId", "commandId", "nodeId", "projectId", "sessionId", "source"])
+  const guard = requireCanvasResourceRelinkGuard(value, [
+    "canvasId",
+    "commandId",
+    "nodeId",
+    "projectId",
+    "sessionId",
+    "source",
+  ])
   if (!isRecord(value) || !isRecord(value.source)) throw new Error("Canvas resource relink source must be an object")
   const source = value.source
   if (source.kind === "host-file" || source.kind === "host-directory") {
@@ -970,13 +1002,17 @@ function requireCanvasResourceMainRequest(value: unknown): CanvasResourceMainReq
       sourcePath: requireNonEmptyString(item.sourcePath, "External source path"),
     }
   })
-  const pending: CanvasResourceMainRequest["pending"] = value.pending === undefined
-    ? undefined
-    : isRecord(value.pending) &&
-        (value.pending.kind === "image" || value.pending.kind === "video") &&
-        typeof value.pending.label === "string" && value.pending.label.length > 0
-      ? { kind: value.pending.kind, label: value.pending.label }
-      : (() => { throw new Error("Pending Canvas resource request is invalid") })()
+  const pending: CanvasResourceMainRequest["pending"] =
+    value.pending === undefined
+      ? undefined
+      : isRecord(value.pending) &&
+          (value.pending.kind === "image" || value.pending.kind === "video") &&
+          typeof value.pending.label === "string" &&
+          value.pending.label.length > 0
+        ? { kind: value.pending.kind, label: value.pending.label }
+        : (() => {
+            throw new Error("Pending Canvas resource request is invalid")
+          })()
   if (pending && (value.sources.length > 0 || externalFiles.length > 0)) {
     throw new Error("Pending Canvas resource cannot include admitted sources")
   }
