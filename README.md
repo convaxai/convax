@@ -2,87 +2,88 @@
 
 **English** · [简体中文](README-CN.md)
 
-Convax is a desktop visual workspace for turning project files, ideas, and AI-assisted work into connected, editable canvases. It brings local files, multiple canvases, an Agent, and installable creative tools into one focused workspace.
+**A visual workspace for human and AI work.** Convax brings real project files, editable canvases, a context-aware Agent, and installable creative tools into one desktop workspace.
 
-## Highlights
+[Website](https://convax.microvoid.io/) · [GitHub](https://github.com/convaxai/convax) · [Issues](https://github.com/convaxai/convax/issues)
 
-### Work with real projects
+> [!WARNING]
+> **Convax is currently in _Developer Preview_ and evolving rapidly. Breaking changes will happen.** Project data, Plugin contracts, workflows, and other interfaces may change without compatibility guarantees. Keep backups of important work and expect frequent updates.
 
-- Create a clean Project or open an existing local folder.
-- Browse files and folders in a hierarchical tree, with hover previews for supported files.
-- Create, import, rename, move, and delete Project files in Convax, or open and reveal them with your system tools.
-- Move files and folders within the Project tree, or drag them from the tree onto the Canvas and into Agent context.
+[![Convax overview](docs/images/convax-overview.jpg)](https://convax.microvoid.io/)
 
-### Organize work across multiple canvases
+## Keep the whole workflow visible
 
-- Keep multiple independent Canvases inside each Project.
-- Switch Projects together with their files and Canvas collection.
-- Arrange text, images, audio, video, files, folders, and Agent nodes on an infinite Canvas.
-- Connect, move, resize, duplicate, and remove nodes, then pan, zoom, reveal, or fit the view as needed.
-- Reopen a Project and continue from its persisted Canvas documents.
+Creative work usually gets split across folders, whiteboards, chat threads, and specialist tools. Convax keeps those pieces connected and editable in the same Project, so the result is more than the latest answer in a conversation.
 
-### Collaborate with a project-aware Agent
+### 1. Start from real project files
 
-- Attach Project files, folders, Canvases, and Skills directly to a conversation.
-- Ask the Agent to inspect Canvas content, add resources, update relationships, or bring relevant nodes into view.
-- Use the same Canvas operations from the Agent and the visual interface, so automated work follows product behavior.
+- Create a new Project or open an existing local folder.
+- Browse, preview, import, rename, move, delete, open, and reveal files without leaving the workspace.
+- Drag files and folders directly onto a Canvas or into Agent context.
+- Keep generated media and Canvas-created notes as ordinary, user-visible Project files.
 
-The built-in coding Agent is powered by OpenCode.
+### 2. Turn the process into an editable Canvas
 
-### Extend Convax with Skills and Plugins
+- Use multiple infinite Canvases inside one Project.
+- Arrange and connect text, images, audio, video, files, folders, and interactive tools.
+- Move, resize, group, duplicate, organize, and reveal work without flattening it into a static export.
+- Reopen the Project and continue from the same persisted Canvas state.
 
-- Discover and manage reusable Agent Skills from the global capability center.
-- Add Plugins that contribute custom Canvas cards, toolbar actions, and interactive creative surfaces.
-- Let authorized Plugins work with the active Project, Canvas, or Agent through scoped capabilities.
-- Keep portable Plugin node state with the Canvas, including when a node is duplicated or a Project is reopened.
+### 3. Give the Agent the context you mean
 
-One Registry example is:
+- Attach selected nodes, files, folders, Skills, or a complete Canvas to a conversation.
+- Ask the Agent to inspect content, create resources, update relationships, organize nodes, or bring relevant work into view.
+- Keep context explicit: the Agent works with the Project and Canvas material you choose instead of relying on a detached chat history.
+- Use the built-in coding Agent powered by [OpenCode](https://opencode.ai/).
 
-- **3D Director Desk** for arranging characters, props, and cameras in an interactive 3D scene whose state stays with the Canvas node.
+### 4. Bring specialist tools into the workspace
 
-### Shape the workspace around your task
+- Install Skills that add reusable Agent workflows.
+- Install Plugins that contribute generation tools, Canvas actions, custom cards, services, and interactive creative surfaces.
+- Keep Plugin work scoped to the Project and task that needs it.
+- Preserve portable Plugin node state with the Canvas when reopening a Project or duplicating a node.
 
-- Resize or collapse the Project and Agent sidebars while keeping part of the Canvas visible.
-- Adjust the Files and Canvases sections in the Project sidebar.
-- Manage language, Skills, and Plugins from global Settings.
+Examples presented on the Convax website include:
 
-## Run from source
+- **Convax Account** for connected chat and live image generation.
+- **ChatCut** for authenticated, editable video workflows using connected Canvas media.
+- **FFmpeg Tools** for reviewed media transforms.
+- **3D Director Desk** for arranging characters, props, panoramas, and cameras in an interactive scene.
 
-Convax uses Bun for workspace scripts.
+## Interface at a glance
+
+| Area                | What it is for                                                                                                |
+| ------------------- | ------------------------------------------------------------------------------------------------------------- |
+| **Project sidebar** | Switch Canvases, browse the real file tree, preview assets, and drag material into the workspace.             |
+| **Infinite Canvas** | Keep briefs, references, relationships, generated results, and specialist tools in one visible working model. |
+| **Agent panel**     | Converse with the exact files, nodes, and Canvas context currently relevant to the task.                      |
+
+The Project and Agent sidebars can be resized or collapsed, and the Files and Canvases sections can be adjusted to fit the current task.
+
+## Example workflows
+
+- **Creative direction:** connect briefs, references, shot ideas, and generated assets without losing the reasoning between them.
+- **Image workflows:** keep source material, generation, comparison, and review on the same Canvas.
+- **Video production:** organize media, transforms, timelines, and specialist tools around one Project.
+- **Research and planning:** turn files, notes, web material, and Agent output into a structure you can revisit and continue editing.
+
+## Run Convax from source
+
+Install [Bun](https://bun.sh/) and run:
 
 ```bash
 bun install
 bun dev
 ```
 
-Run the full validation suite with:
+Useful development commands:
 
 ```bash
-bun check
-```
-
-Compile the workspace, build native distribution media for the current platform,
-or run automation against the final packaged executable instead of the Electron SDK:
-
-```bash
-bun run build
-bun run package
+bun check             # Run the repository validation suite
+bun run build         # Compile the workspace
+bun run package       # Build native distribution media for this platform
 bun run smoke:packaged
 ```
-
-`build` compiles code only. `package` writes the current platform's DMG/ZIP,
-NSIS, or Linux distribution media below `packages/desktop/dist/`.
-During packaging, Convax downloads the current `ffmpeg-tools` Plugin ZIP and the
-exact host companion from the fixed official Registry, verifies their declared
-size, SHA-256, target, and safe ZIP contents, and embeds them as a remote-provenance
-first-install seed. A missing target or failed verification fails the package build.
-`smoke:packaged` produces only the unpacked application to keep CI fast, then
-temporarily enables a loopback-only DevTools Protocol endpoint for assertions;
-that endpoint is not embedded in or enabled by the artifact. It uses a fresh
-profile and verifies that FFmpeg installs from the embedded seed while Registry
-network access is unavailable. On macOS, smoke uses Electron's test Keychain and
-never reads or mutates the developer's login Keychain. The smoke prints the retained
-application and executable paths when it finishes.
 
 Local and pull-request packages are intentionally unsigned. `CONVAX_CHANNEL`
 selects the side-by-side `dev`, `beta`, or `prod` identity. A public release is
@@ -102,32 +103,12 @@ macOS notarization. It is not required for source development or packaged smoke.
 Release credentials live only in GitHub; see [Desktop Releases and Client
 Updates](docs/desktop-builds.md).
 
-### Build-time feature switches
+## Architecture
 
-The Services and Skill & Plugin settings are included by default. Product builds can hide either setting in both
-global Settings and the lower-left application menu by setting these compile-time environment variables to `false`
-or `0`:
+Convax is a Bun monorepo. Headless packages own Project, Canvas, collaboration, Agent-runtime, Plugin, Marketplace, and UI contracts; the Electron desktop package composes those capabilities with native adapters, while the API, Web, deployment, and documentation apps remain separate delivery surfaces. See [Architecture](docs/architecture.md) for the full ownership and dependency contract.
 
-- `CONVAX_FEATURE_SERVICES`
-- `CONVAX_FEATURE_SKILLS_AND_PLUGINS`
+Related references:
 
-For example, to hide both settings in a Desktop build:
-
-```bash
-CONVAX_FEATURE_SERVICES=0 CONVAX_FEATURE_SKILLS_AND_PLUGINS=0 bun --cwd packages/desktop build
-```
-
-Only `true`, `false`, `1`, and `0` are accepted so a misspelled value fails the build.
-
-## Documentation
-
-Preview the documentation site locally:
-
-```bash
-bun run dev:docs
-```
-
-- [Architecture](docs/architecture.md)
 - [Plugin and Skill platform](docs/plugin-skill-platform.md)
 - [Plugin-to-Host change governance](docs/plugin-host-change-governance.md)
 - [Canvas selection and actions](docs/canvas-selection-context.md)
