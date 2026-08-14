@@ -9,48 +9,9 @@
 > [!WARNING]
 > **Convax 目前处于 _开发者预览_ 阶段，正在快速迭代。未来将出现破坏兼容性的变更。** Project 数据、Plugin 合同、工作流和其他接口都可能在没有兼容性保证的情况下变化。请备份重要工作，并预期版本会频繁更新。
 
-[![Convax 产品概览](docs/images/convax-overview.jpg)](https://convax.microvoid.io/)
+![由 Project 文件、无限 Canvas 和 Agent 上下文组成的 Convax 工作区](docs/images/convax-workspace.jpg)
 
-## 让完整工作流始终可见
-
-创作过程通常散落在文件夹、白板、聊天记录和各种专业工具里。Convax 把这些内容保留在同一个 Project 中，让文件、思考过程、Agent 操作和最终结果始终彼此关联，并且可以继续编辑。
-
-### 1. 从真实项目文件开始
-
-- 新建 Project，或直接打开已有的本地文件夹。
-- 在工作区中浏览、预览、导入、重命名、移动、删除、打开和定位文件。
-- 把文件与文件夹直接拖到 Canvas，或加入 Agent 上下文。
-- 生成的媒体和 Canvas 创建的笔记仍然是普通、用户可见的 Project 文件。
-
-### 2. 把过程组织成可编辑的 Canvas
-
-- 在一个 Project 中使用多个无限 Canvas。
-- 组织并连接文本、图片、音频、视频、文件、文件夹和交互式工具。
-- 移动、缩放、分组、复制、整理和定位内容，不必把过程压扁成一次性的静态导出。
-- 重新打开 Project 后，从已经持久化的 Canvas 状态继续工作。
-
-### 3. 给 Agent 你真正想表达的上下文
-
-- 把选中的节点、文件、文件夹、Skill 或完整 Canvas 附加到对话中。
-- 让 Agent 查看内容、创建资源、调整关系、整理节点，或把相关工作带回视野。
-- 上下文始终显式可控：Agent 使用你选择的 Project 与 Canvas 内容，而不是依赖脱离项目的聊天历史。
-- 内置 Coding Agent 基于 [OpenCode](https://opencode.ai/)。
-
-### 4. 把专业工具带进工作空间
-
-- 安装 Skill，为 Agent 增加可复用工作流。
-- 安装 Plugin，增加生成工具、Canvas 操作、自定义卡片、服务和交互式创作界面。
-- Plugin 能力只作用于真正需要它的 Project 和任务范围。
-- 重新打开 Project 或复制节点时，Plugin 节点的可移植状态会继续跟随 Canvas 保存。
-
-Convax 官网展示的示例包括：
-
-- **Convax Account**：连接对话与实时图片生成。
-- **ChatCut**：使用已连接的 Canvas 媒体进入经过认证、可继续编辑的视频工作流。
-- **FFmpeg Tools**：执行经过确认的媒体转换。
-- **3D Director Desk**：在交互式场景中布置角色、道具、全景和相机。
-
-## 界面一览
+## 一个工作区，三个相互连接的区域
 
 | 区域               | 用途                                                             |
 | ------------------ | ---------------------------------------------------------------- |
@@ -60,7 +21,47 @@ Convax 官网展示的示例包括：
 
 Project 与 Agent 侧边栏可以调整宽度或收起，Files 与 Canvases 区域也可以按当前任务重新分配空间。
 
-## 典型工作流
+## Convax 能做什么
+
+### 直接使用真实项目文件
+
+- 新建 Project，或直接打开已有的本地文件夹。
+- 在工作区中浏览、预览、导入、重命名、移动、删除、打开和定位文件。
+- 把文件与文件夹拖到 Canvas，或加入 Agent 上下文。
+- 生成的媒体和 Canvas 创建的笔记仍然是普通、用户可见的 Project 文件。
+
+![Project 文件始终保持关联，并且可以移动到 Canvas](docs/images/convax-projects.jpg)
+
+### 把完整过程保留在可编辑的无限 Canvas 上
+
+- 在一个 Project 中使用多个彼此独立的 Canvas。
+- 组织并连接文本、图片、音频、视频、文件、文件夹和交互式工具。
+- 移动、缩放、分组、复制、整理和定位内容，不必把过程压扁成一次性的静态导出。
+- 重新打开 Project 后，从已经持久化的 Canvas 状态继续工作。
+
+![Canvas 上相互连接的需求、参考、方向与结果](docs/images/convax-canvas.jpg)
+
+### 与理解所选上下文的 Agent 协作
+
+- 把选中的节点、文件、文件夹、Skill 或完整 Canvas 附加到对话中。
+- 让 Agent 查看内容、创建资源、调整关系、整理节点，或把相关工作带回视野。
+- 上下文始终显式可控，并限定在你选择的 Project 与 Canvas 内容中。
+- 内置 Coding Agent 基于 [OpenCode](https://opencode.ai/)。
+
+![Agent 使用选中的 Canvas 上下文执行任务](docs/images/convax-agent.jpg)
+
+### 使用 Skill 和 Plugin 增加专业工作流
+
+- 安装 Skill，为 Agent 增加可复用工作流。
+- 安装 Plugin，增加生成工具、Canvas 操作、自定义卡片、服务和交互式创作界面。
+- 只向 Plugin 授予它真正需要的 Project、Canvas 或 Agent 能力。
+- 重新打开 Project 或复制节点时，Plugin 节点的可移植状态会继续跟随 Canvas 保存。
+
+![Skill 和 Plugin 为 Convax 增加范围明确的能力](docs/images/convax-extensions.jpg)
+
+Convax Account 用于连接对话与实时图片生成，ChatCut 提供可继续编辑的视频工作流，FFmpeg Tools 执行经过确认的媒体转换，3D Director Desk 则用于在交互式场景中布置角色、道具、全景和相机。
+
+## 常见工作流
 
 - **创意方向：**连接需求、参考、镜头想法和生成资产，同时保留它们之间的推导过程。
 - **图片工作流：**把源素材、生成、对比和评审留在同一个 Canvas 上。
