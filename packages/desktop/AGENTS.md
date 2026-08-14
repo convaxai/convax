@@ -93,8 +93,13 @@ contract and its routed references.
   keyboard routing. Focus scopes register DOM roots and feature/chord bindings;
   the deepest focus scope wins, application features alone may fall back, and one
   deterministic priority/registration-order winner handles a conflict within a
-  scope. Scope changes, blur, visibility loss, and disposal release all held
-  features. Do not add parallel global listeners for application/workspace/Canvas
+  scope. Scope changes, top-level Window blur, visibility loss, and disposal release
+  all held features; descendant DOM blur inside the active scope must not impersonate
+  Window focus loss. A transient pointer-created `activeElement === body` gap is
+  rechecked on the next frame; explicit registered-scope transitions stay immediate,
+  and a sustained outside-root focus releases the held feature. A fresh non-repeat matching keydown releases and replaces a stale held
+  feature when a native operating-system loop swallowed keyup; repeat events never
+  restart it. Do not add parallel global listeners for application/workspace/Canvas
   command routing or move DOM focus into Workbench.
 - Main's Canvas application service is authoritative. Mounted UI submits closed
   commands through its originating session lease, installs the returned projection

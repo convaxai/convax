@@ -1341,13 +1341,15 @@ try {
         await settle()
       }
       const holdExternalDrag = () => {
+        let consumed = false
         if (window.convax.platform === "darwin") {
-          dispatchKey("keydown", "Meta", { metaKey: true })
-          dispatchKey("keydown", "Shift", { metaKey: true, shiftKey: true })
+          consumed = dispatchKey("keydown", "Meta", { metaKey: true })
+          consumed = dispatchKey("keydown", "Shift", { metaKey: true, shiftKey: true }) || consumed
         } else {
-          dispatchKey("keydown", "Control", { ctrlKey: true })
-          dispatchKey("keydown", "Shift", { ctrlKey: true, shiftKey: true })
+          consumed = dispatchKey("keydown", "Control", { ctrlKey: true })
+          consumed = dispatchKey("keydown", "Shift", { ctrlKey: true, shiftKey: true }) || consumed
         }
+        if (consumed) throw new Error("External drag shortcut consumed its native modifier event")
       }
       const releaseExternalDrag = () => {
         if (window.convax.platform === "darwin") {
@@ -1482,6 +1484,14 @@ try {
 
       canvas.focus({ preventScroll: true })
       holdExternalDrag()
+      await waitFor(() => dragState() === "ready", "external drag missed-keyup setup")
+      holdExternalDrag()
+      await waitFor(() => dragState() === "ready", "external drag fresh-keydown recovery")
+      releaseExternalDrag()
+      await waitFor(() => !dragState(), "external drag recovered hold release")
+
+      canvas.focus({ preventScroll: true })
+      holdExternalDrag()
       await waitFor(() => dragState() === "ready", "external drag unrelated-key setup")
       dispatchKey("keydown", "x", {
         ...(window.convax.platform === "darwin" ? { metaKey: true } : { ctrlKey: true }),
@@ -1588,6 +1598,7 @@ try {
           "scope.node-input-isolation",
           "scope.conversation-isolation",
           "release.keyup",
+          "release.missed-keyup-fresh-keydown",
           "release.unrelated-key",
           "release.window-blur",
           "release.focus-scope-change",
@@ -1610,6 +1621,7 @@ try {
       "scope.node-input-isolation",
       "scope.conversation-isolation",
       "release.keyup",
+      "release.missed-keyup-fresh-keydown",
       "release.unrelated-key",
       "release.window-blur",
       "release.focus-scope-change",

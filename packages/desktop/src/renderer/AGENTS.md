@@ -54,7 +54,11 @@ or durable domain authority.
   focused scope switches the active feature set, application scope is the only
   fallback, and nested conversation/node-input scopes isolate Canvas commands.
   Conflicts use explicit priority then first registration, while scope change,
-  window blur, document hiding, and unmount release every held feature.
+  top-level Window blur, document hiding, and unmount release every held feature.
+  Descendant DOM blur inside the active scope is not Window focus loss. A transient
+  `document.activeElement === body` gap while pointer focus is restored inside the
+  same root is rechecked on the next frame; an explicit registered-scope change or
+  a sustained outside-root focus still releases the held feature.
 
 ## Capability surfaces
 
@@ -138,8 +142,13 @@ or durable domain authority.
   it never stages files or sees the native drag payload. Convax Desktop exposes both
   the persistent drag-out mode and a `Command-Shift` compatibility chord; the chord
   is registered in the Canvas focus scope and forwards only held/released state to
-  the Canvas editor handle. It cannot activate from a conversation, node input,
-  inactive scope, or parallel Canvas-owned window listener.
+  the Canvas editor handle without consuming the native modifier event. It cannot
+  activate from a conversation, node input, inactive scope, or parallel Canvas-owned
+  window listener. If macOS swallows keyup during a native drag, a fresh non-repeat
+  matching keydown releases the stale logical hold before arming the new one; key
+  repeat does not restart it. Top-level Window blur releases the shortcut
+  immediately; descendant DOM blur and a transient pointer-created body focus gap
+  inside Canvas do not. Main and preload do not own keyboard-state cleanup.
 
 ## UI behavior
 

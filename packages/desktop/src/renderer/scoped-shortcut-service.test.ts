@@ -23,18 +23,24 @@ function setup() {
   return { cleanup, document, service, window }
 }
 
-function press(window: HappyDomWindow, target: HappyDomEventTarget, chord: ShortcutChord) {
-  target.dispatchEvent(
-    new window.KeyboardEvent("keydown", {
-      altKey: chord.alt,
-      bubbles: true,
-      cancelable: true,
-      ctrlKey: chord.ctrl,
-      key: chord.key,
-      metaKey: chord.meta,
-      shiftKey: chord.shift,
-    }),
-  )
+function press(
+  window: HappyDomWindow,
+  target: HappyDomEventTarget,
+  chord: ShortcutChord,
+  options: { repeat?: boolean } = {},
+) {
+  const event = new window.KeyboardEvent("keydown", {
+    altKey: chord.alt,
+    bubbles: true,
+    cancelable: true,
+    ctrlKey: chord.ctrl,
+    key: chord.key,
+    metaKey: chord.meta,
+    repeat: options.repeat,
+    shiftKey: chord.shift,
+  })
+  target.dispatchEvent(event)
+  return event
 }
 
 test("routes the same chord to the deepest focused scope and keeps application shortcuts as fallback", async () => {
@@ -182,6 +188,143 @@ test("releases held shortcuts on keyup, focus scope change, blur, visibility los
 
   expect(trigger).toHaveBeenCalledTimes(5)
   expect(release).toHaveBeenCalledTimes(5)
+  cleanup()
+})
+
+test("observes a held native-drag chord without consuming its modifier event", async () => {
+  const { cleanup, document, service, window } = setup()
+  const canvas = document.createElement("div")
+  const target = document.createElement("button")
+  canvas.append(target)
+  document.body.append(canvas)
+  service.registerScope({ element: canvas as unknown as HTMLElement, id: "canvas" })
+  const trigger = mock(() => undefined)
+  const release = mock(() => undefined)
+  const bubbled = mock(() => undefined)
+  document.body.addEventListener("keydown", bubbled)
+  service.registerFeature({
+    chords: [
+      { key: "Meta", meta: true, shift: true },
+      { key: "Shift", meta: true, shift: true },
+    ],
+    consume: false,
+    id: "canvas.drag-out",
+    onRelease: release,
+    onTrigger: trigger,
+    scopeId: "canvas",
+    trigger: "hold",
+  })
+  target.focus()
+  await Promise.resolve()
+
+  const event = press(window, target, { key: "Shift", meta: true, shift: true })
+  window.dispatchEvent(new window.KeyboardEvent("keyup", { key: "Shift", metaKey: true, shiftKey: false }))
+
+  expect(event.defaultPrevented).toBeFalse()
+  expect(bubbled).toHaveBeenCalledTimes(1)
+  expect(trigger).toHaveBeenCalledTimes(1)
+  expect(release).toHaveBeenCalledTimes(1)
+  cleanup()
+})
+
+test("does not release a held shortcut for descendant blur inside the same focus scope", async () => {
+  const { cleanup, document, service, window } = setup()
+  const canvas = document.createElement("div")
+  const first = document.createElement("button")
+  const second = document.createElement("button")
+  canvas.append(first, second)
+  document.body.append(canvas)
+  service.registerScope({ element: canvas as unknown as HTMLElement, id: "canvas" })
+  const release = mock(() => undefined)
+  service.registerFeature({
+    chords: [{ key: "Shift", meta: true, shift: true }],
+    consume: false,
+    id: "canvas.drag-out",
+    onRelease: release,
+    onTrigger: () => undefined,
+    scopeId: "canvas",
+    trigger: "hold",
+  })
+  first.focus()
+  await Promise.resolve()
+  press(window, first, { key: "Shift", meta: true, shift: true })
+
+  second.focus()
+  await Promise.resolve()
+  expect(release).not.toHaveBeenCalled()
+
+  window.dispatchEvent(new window.Event("blur"))
+  expect(release).toHaveBeenCalledTimes(1)
+  cleanup()
+})
+
+test("keeps a held shortcut across a transient body focus gap but releases a sustained exit", async () => {
+  const { cleanup, document, service, window } = setup()
+  const canvas = document.createElement("div")
+  const first = document.createElement("button")
+  const second = document.createElement("button")
+  canvas.append(first, second)
+  document.body.append(canvas)
+  service.registerScope({ element: canvas as unknown as HTMLElement, id: "canvas" })
+  const release = mock(() => undefined)
+  service.registerFeature({
+    chords: [{ key: "Shift", meta: true, shift: true }],
+    consume: false,
+    id: "canvas.drag-out",
+    onRelease: release,
+    onTrigger: () => undefined,
+    scopeId: "canvas",
+    trigger: "hold",
+  })
+  first.focus()
+  await Promise.resolve()
+  press(window, first, { key: "Shift", meta: true, shift: true })
+
+  first.blur()
+  expect(document.activeElement).toBe(document.body)
+  window.queueMicrotask(() => second.focus())
+  await Promise.resolve()
+  await new Promise<void>((resolve) => window.requestAnimationFrame(() => resolve()))
+  expect(release).not.toHaveBeenCalled()
+
+  second.blur()
+  expect(document.activeElement).toBe(document.body)
+  await Promise.resolve()
+  await new Promise<void>((resolve) => window.requestAnimationFrame(() => resolve()))
+  expect(release).toHaveBeenCalledTimes(1)
+  cleanup()
+})
+
+test("restarts a held feature from a fresh keydown when the operating system swallowed keyup", async () => {
+  const { cleanup, document, service, window } = setup()
+  const canvas = document.createElement("div")
+  const target = document.createElement("button")
+  canvas.append(target)
+  document.body.append(canvas)
+  service.registerScope({ element: canvas as unknown as HTMLElement, id: "canvas" })
+  const trigger = mock(() => undefined)
+  const release = mock(() => undefined)
+  service.registerFeature({
+    chords: [
+      { key: "Meta", meta: true, shift: true },
+      { key: "Shift", meta: true, shift: true },
+    ],
+    consume: false,
+    id: "canvas.drag-out",
+    onRelease: release,
+    onTrigger: trigger,
+    scopeId: "canvas",
+    trigger: "hold",
+  })
+  target.focus()
+  await Promise.resolve()
+
+  press(window, target, { key: "Shift", meta: true, shift: true })
+  press(window, target, { key: "Shift", meta: true, shift: true })
+  press(window, target, { key: "Shift", meta: true, shift: true }, { repeat: true })
+
+  expect(trigger).toHaveBeenCalledTimes(2)
+  expect(release).toHaveBeenCalledTimes(1)
   cleanup()
 })
 

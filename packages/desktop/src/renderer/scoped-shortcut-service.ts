@@ -11,6 +11,8 @@ export interface ShortcutChord {
 export interface ShortcutFeatureRegistration {
   readonly allowInEditable?: boolean
   readonly chords: readonly ShortcutChord[]
+  /** Observe the winning shortcut without suppressing its native/browser handling. */
+  readonly consume?: boolean
   readonly id: string
   readonly onRelease?: () => void
   readonly onTrigger: (event: KeyboardEvent) => void
@@ -76,6 +78,7 @@ export class ScopedShortcutService {
   #activeFocusScopeId: string | null = null
   #disposed = false
   #focusWithinRegisteredRoot = false
+  #pendingFocusExitFrame: number | null = null
   #sequence = 0
 
   constructor(input: { readonly document: Document; readonly window: Window }) {
@@ -83,7 +86,10 @@ export class ScopedShortcutService {
     this.#window = input.window
     this.#window.addEventListener("keydown", this.#onKeyDown, true)
     this.#window.addEventListener("keyup", this.#onKeyUp, true)
-    this.#window.addEventListener("blur", this.#onWindowBlur, true)
+    // Descendant blur events traverse Window during capture. Listen only for
+    // Window's own non-bubbling blur so Canvas-internal focus changes cannot
+    // masquerade as application focus loss.
+    this.#window.addEventListener("blur", this.#onWindowBlur)
     this.#window.addEventListener("focus", this.#onWindowFocus, true)
     this.#document.addEventListener("focusin", this.#onFocusChange, true)
     this.#document.addEventListener("focusout", this.#onFocusChange, true)
@@ -124,10 +130,11 @@ export class ScopedShortcutService {
   dispose(): void {
     if (this.#disposed) return
     this.#disposed = true
+    this.#cancelPendingFocusExit()
     this.releaseAll()
     this.#window.removeEventListener("keydown", this.#onKeyDown, true)
     this.#window.removeEventListener("keyup", this.#onKeyUp, true)
-    this.#window.removeEventListener("blur", this.#onWindowBlur, true)
+    this.#window.removeEventListener("blur", this.#onWindowBlur)
     this.#window.removeEventListener("focus", this.#onWindowFocus, true)
     this.#document.removeEventListener("focusin", this.#onFocusChange, true)
     this.#document.removeEventListener("focusout", this.#onFocusChange, true)
@@ -155,7 +162,21 @@ export class ScopedShortcutService {
     return candidates[0] ?? null
   }
 
-  #refreshActiveScope() {
+  #cancelPendingFocusExit() {
+    if (this.#pendingFocusExitFrame === null) return
+    this.#window.cancelAnimationFrame(this.#pendingFocusExitFrame)
+    this.#pendingFocusExitFrame = null
+  }
+
+  #scheduleFocusExitRecheck() {
+    if (this.#pendingFocusExitFrame !== null) return
+    this.#pendingFocusExitFrame = this.#window.requestAnimationFrame(() => {
+      this.#pendingFocusExitFrame = null
+      if (!this.#disposed) this.#refreshActiveScope()
+    })
+  }
+
+  #refreshActiveScope(deferAmbiguousExit = false) {
     const activeElement = this.#document.activeElement instanceof Element ? this.#document.activeElement : null
     const next = this.#document.hidden ? null : (this.#resolveActiveFocusScope(activeElement)?.id ?? null)
     const nextWithinRegisteredRoot = Boolean(
@@ -163,6 +184,21 @@ export class ScopedShortcutService {
         activeElement &&
         [...this.#scopes.values()].some((scope) => scope.element.isConnected && scope.element.contains(activeElement)),
     )
+    if (
+      deferAmbiguousExit &&
+      !this.#document.hidden &&
+      !nextWithinRegisteredRoot &&
+      this.#focusWithinRegisteredRoot
+    ) {
+      // A pointer press on a non-focusable Canvas node can briefly move
+      // document.activeElement to body before Canvas restores its focus root.
+      // Recheck that ambiguous gap on the next frame. Explicit transitions to
+      // another registered scope, Window blur, and visibility loss still
+      // release synchronously.
+      this.#scheduleFocusExitRecheck()
+      return
+    }
+    this.#cancelPendingFocusExit()
     if (next === this.#activeFocusScopeId && nextWithinRegisteredRoot === this.#focusWithinRegisteredRoot) return
     this.releaseAll()
     this.#activeFocusScopeId = next
@@ -220,9 +256,17 @@ export class ScopedShortcutService {
     }
     const feature = this.#winningFeature(event)
     if (!feature) return
-    if (feature.trigger === "hold" && this.#heldFeatures.has(feature.sequence)) return
-    event.preventDefault()
-    event.stopPropagation()
+    if (feature.trigger === "hold" && this.#heldFeatures.has(feature.sequence)) {
+      if (event.repeat) return
+      // Native macOS drag loops can swallow the keyup that ended the previous
+      // physical hold. A fresh, non-repeat keydown proves a new hold started;
+      // release the stale logical hold before routing this one.
+      this.#releaseFeature(feature.sequence)
+    }
+    if (feature.consume !== false) {
+      event.preventDefault()
+      event.stopPropagation()
+    }
     if (feature.trigger === "hold") this.#heldFeatures.add(feature.sequence)
     feature.onTrigger(event)
   }
@@ -231,11 +275,14 @@ export class ScopedShortcutService {
     if (this.#disposed) return
     for (const sequence of this.#heldFeatures) {
       const feature = this.#features.get(sequence)
-      if (!feature || !feature.chords.some((chord) => matchesModifiers(chord, event))) this.#releaseFeature(sequence)
+      if (!feature || !feature.chords.some((chord) => matchesModifiers(chord, event))) {
+        this.#releaseFeature(sequence)
+      }
     }
   }
 
   #onWindowBlur = () => {
+    this.#cancelPendingFocusExit()
     this.releaseAll()
     this.#activeFocusScopeId = null
     this.#focusWithinRegisteredRoot = false
@@ -243,10 +290,11 @@ export class ScopedShortcutService {
 
   #onWindowFocus = () => this.#refreshActiveScope()
 
-  #onFocusChange = () => this.#window.queueMicrotask(() => this.#refreshActiveScope())
+  #onFocusChange = () => this.#window.queueMicrotask(() => this.#refreshActiveScope(true))
 
   #onVisibilityChange = () => {
     if (this.#document.hidden) {
+      this.#cancelPendingFocusExit()
       this.releaseAll()
       this.#activeFocusScopeId = null
       this.#focusWithinRegisteredRoot = false

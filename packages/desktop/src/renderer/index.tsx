@@ -1580,6 +1580,7 @@ function App() {
                   { ctrl: true, key: "Control", shift: true },
                   { ctrl: true, key: "Shift", shift: true },
                 ],
+          consume: false,
           id: "canvas.drag-media-to-other-apps",
           onRelease: () => canvasEditorRef.current?.setExternalDragShortcutHeld(false),
           onTrigger: () => canvasEditorRef.current?.setExternalDragShortcutHeld(true),

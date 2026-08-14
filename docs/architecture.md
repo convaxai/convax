@@ -2261,7 +2261,13 @@ held-key release. It forwards only the held/released transition through Canvas's
 host-neutral editor handle; Canvas never infers activation from a window listener.
 Entering a nested conversation or node-input scope, leaving Canvas focus, releasing
 a required modifier, pressing an unrelated key, window focus loss, document
-visibility loss, scope disposal, or service disposal cancels the transient gesture. The persistent mode
+visibility loss, scope disposal, or service disposal cancels the transient gesture.
+Only top-level Window blur is focus loss; descendant DOM blur inside the active
+Canvas scope must not release the gesture. A pointer press may transiently leave
+`document.activeElement` on `body` while Canvas restores focus; the shortcut service
+rechecks that ambiguous exit on the next animation frame. Explicit transitions to
+another registered scope remain immediate, and a sustained outside-root focus
+releases the gesture. The persistent mode
 preserves normal selection, box selection, pan and zoom, but disables in-Canvas node movement:
 dragging a ready selected media node publishes the complete selection to the operating
 system instead. Canvas keeps a top reminder and explicit exit action while the mode
@@ -2269,7 +2275,13 @@ is active, and prepares a fresh one-use source after each completed native drag.
 Escape, explicit exit, scope changes and read-only transitions leave the mode.
 Selection changes synchronously update the live view snapshot and replace the
 prepared immutable multi-selection. Preparation is asynchronous and abortable;
-`dragstart` only consumes an already prepared source synchronously.
+`dragstart` only consumes an already prepared source synchronously. Renderer does
+not depend solely on macOS redelivering the
+preceding `keyup`: if a hold remains logically active and a fresh non-repeat
+matching `keydown` arrives, the scoped shortcut service releases the stale hold and
+routes the new physical hold. Key repeat never restarts a held feature. Main and
+preload remain outside that keyboard state and expose no native-drag completion
+event.
 
 Renderer and preload never receive a native path. Main re-resolves the live active
 Canvas and exact selection, verifies exact semantic/resource guards, resolves each
@@ -2310,8 +2322,11 @@ scope features are the only fallback and do not make inactive Canvas, conversati
 or node-input features reachable. Within one scope and chord, highest explicit
 priority wins and equal priority keeps first-registration order; disposing the
 winner reveals the next registration. Editable descendants reject focus-scope
-features unless that feature explicitly opts in. Scope changes and window/document
-focus loss synchronously release every held feature. The service is instantiated and
+features unless that feature explicitly opts in. Scope changes and top-level
+Window/document focus loss synchronously release every held feature; descendant DOM
+blur inside the active scope does not. A transient pointer-created body focus gap is
+rechecked on the next animation frame, while an explicit registered-scope transition
+remains synchronous and a sustained outside-root focus releases. The service is instantiated and
 injected by Renderer composition, never discovered through a global/service locator,
 persisted, or moved into DOM-free Workbench. Domain packages may expose a narrow
 host-neutral held/released port but do not own the window listeners or arbitration.

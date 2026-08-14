@@ -47,6 +47,7 @@ export function useShortcutFeature(
     ? JSON.stringify({
         allowInEditable: registration.allowInEditable ?? false,
         chords: registration.chords,
+        consume: registration.consume ?? true,
         id: registration.id,
         priority: registration.priority ?? 0,
         releaseOnAnyOtherKey: registration.releaseOnAnyOtherKey ?? false,
