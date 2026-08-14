@@ -29,13 +29,16 @@ describe("Desktop Canvas shortcut inventory", () => {
       setSpacePanningHeld,
     })
 
-    features.find((feature) => feature.id === "canvas.duplicate")?.onTrigger({} as KeyboardEvent)
+    const duplicate = features.find((feature) => feature.id === "canvas.duplicate")
+    if (duplicate?.kind === "command") duplicate.onTrigger({} as KeyboardEvent)
     const space = features.find((feature) => feature.id === "canvas.space-pan")
-    space?.onTrigger({} as KeyboardEvent)
-    space?.onRelease?.()
+    if (space?.kind === "hold") {
+      space.onHold({} as KeyboardEvent)
+      space.onRelease()
+    }
 
     expect(run).toHaveBeenCalledWith("duplicate")
-    expect(space?.trigger).toBe("hold")
+    expect(space?.kind).toBe("hold")
     expect(setSpacePanningHeld.mock.calls.map((call) => call[0])).toEqual([true, false])
   })
 })

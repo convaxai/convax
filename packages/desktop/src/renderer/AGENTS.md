@@ -50,7 +50,11 @@ or durable domain authority.
   concrete viewport budgets, CSS animation, and persistence of user preferences.
 - Compose the scoped shortcut service explicitly in the Renderer root. Surfaces
   register focus roots and feature bindings through the injected instance; do not
-  create global shortcut singletons or independent global command listeners. The exact
+  create global shortcut singletons or independent global command listeners. The
+  registration contract is `CommandShortcut | HoldShortcut | GestureModifier`.
+  Commands consume one-shot keydowns, holds consume and own release, and gesture
+  modifiers never consume the native event because dragstart or another later
+  pointer gesture observes their transient state. The exact
   focused scope switches the active feature set, application scope is the only
   fallback, and nested conversation/node-input scopes isolate Canvas commands.
   Conflicts use explicit priority then first registration, while scope change,
@@ -61,7 +65,9 @@ or durable domain authority.
   a sustained outside-root focus still releases the held feature.
   Renderer owns one reviewed Canvas feature inventory and routes every command
   through Canvas's typed `canRunShortcut`/`runShortcut` port. Space and native drag
-  use dedicated held-state ports; Canvas installs no parallel Window listener.
+  use dedicated held-state ports as `HoldShortcut` and `GestureModifier`
+  respectively; Canvas installs no parallel Window listener and neither state is
+  persisted.
   Same-root prioritized target matchers make node inputs and
   `data-canvas-shortcuts="ignore"` surfaces real nested scopes. `document.body` is
   application-only Portal fallback, while direct body/document-element focus stays

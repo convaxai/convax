@@ -1,6 +1,6 @@
 import { isCanvasSpacePanningShortcut, type CanvasShortcutCommand } from "@convax/canvas"
 
-import type { ShortcutChord, ShortcutFeatureRegistration } from "./scoped-shortcut-service"
+import type { CommandShortcut, ShortcutChord, ShortcutRegistration } from "./scoped-shortcut-service"
 
 export const canvasShortcutFeatureIds = Object.freeze([
   "canvas.fit-view",
@@ -39,19 +39,18 @@ function commandFeature(
   id: (typeof canvasShortcutFeatureIds)[number],
   command: CanvasShortcutCommand,
   chords: readonly ShortcutChord[],
-): ShortcutFeatureRegistration {
+): CommandShortcut {
   return {
     chords,
     id,
     isEnabled: () => input.canRun(command),
+    kind: "command",
     onTrigger: () => input.run(command),
     scopeId: input.scopeId,
   }
 }
 
-export function createCanvasShortcutFeatures(
-  input: CanvasShortcutFeatureInput,
-): readonly ShortcutFeatureRegistration[] {
+export function createCanvasShortcutFeatures(input: CanvasShortcutFeatureInput): readonly ShortcutRegistration[] {
   const primary = (key: string, shift = false) => primaryChord(input.platform, key, shift)
   return [
     commandFeature(input, "canvas.fit-view", "fit-view", [primary("0")]),
@@ -84,11 +83,11 @@ export function createCanvasShortcutFeatures(
       chords: [{ code: "Space" }],
       id: "canvas.space-pan",
       isEnabled: isCanvasSpacePanningShortcut,
+      kind: "hold",
+      onHold: () => input.setSpacePanningHeld(true),
       onRelease: () => input.setSpacePanningHeld(false),
-      onTrigger: () => input.setSpacePanningHeld(true),
       releaseOnAnyOtherKey: true,
       scopeId: input.scopeId,
-      trigger: "hold",
     },
   ]
 }

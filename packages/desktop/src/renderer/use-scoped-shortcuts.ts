@@ -1,10 +1,67 @@
 import { useCallback, useEffect, useRef, type RefCallback } from "react"
 
-import {
-  type ShortcutFeatureRegistration,
-  type ShortcutScopeKind,
-  ScopedShortcutService,
-} from "./scoped-shortcut-service"
+import { type ShortcutRegistration, type ShortcutScopeKind, ScopedShortcutService } from "./scoped-shortcut-service"
+
+function shortcutSignature(registration: ShortcutRegistration) {
+  return {
+    allowInEditable: registration.allowInEditable ?? false,
+    chords: registration.chords,
+    id: registration.id,
+    kind: registration.kind,
+    priority: registration.priority ?? 0,
+    releaseOnAnyOtherKey: registration.kind === "command" ? false : (registration.releaseOnAnyOtherKey ?? false),
+    scopeId: registration.scopeId,
+  }
+}
+
+function bindShortcutRegistration(
+  registration: ShortcutRegistration,
+  current: () => ShortcutRegistration | null | undefined,
+): ShortcutRegistration {
+  const common = {
+    ...registration,
+    isEnabled: (event: KeyboardEvent) => current()?.isEnabled?.(event) ?? true,
+  }
+  switch (registration.kind) {
+    case "command":
+      return {
+        ...common,
+        kind: "command",
+        onTrigger: (event) => {
+          const latest = current()
+          if (latest?.kind === "command") latest.onTrigger(event)
+        },
+      }
+    case "hold":
+      return {
+        ...common,
+        kind: "hold",
+        onHold: (event) => {
+          const latest = current()
+          if (latest?.kind === "hold") latest.onHold(event)
+        },
+        onRelease: () => {
+          const latest = current()
+          if (latest?.kind === "hold") latest.onRelease()
+          else registration.onRelease()
+        },
+      }
+    case "gesture-modifier":
+      return {
+        ...common,
+        kind: "gesture-modifier",
+        onActivate: (event) => {
+          const latest = current()
+          if (latest?.kind === "gesture-modifier") latest.onActivate(event)
+        },
+        onRelease: () => {
+          const latest = current()
+          if (latest?.kind === "gesture-modifier") latest.onRelease()
+          else registration.onRelease()
+        },
+      }
+  }
+}
 
 export function useShortcutScope(
   service: ScopedShortcutService,
@@ -49,56 +106,26 @@ export function useShortcutScope(
   return register
 }
 
-export function useShortcutFeature(
-  service: ScopedShortcutService,
-  registration: ShortcutFeatureRegistration | null,
-): void {
+export function useShortcutFeature(service: ScopedShortcutService, registration: ShortcutRegistration | null): void {
   const registrationRef = useRef(registration)
   registrationRef.current = registration
-  const signature = registration
-    ? JSON.stringify({
-        allowInEditable: registration.allowInEditable ?? false,
-        chords: registration.chords,
-        consume: registration.consume ?? true,
-        id: registration.id,
-        priority: registration.priority ?? 0,
-        releaseOnAnyOtherKey: registration.releaseOnAnyOtherKey ?? false,
-        scopeId: registration.scopeId,
-        trigger: registration.trigger ?? "press",
-      })
-    : null
+  const signature = registration ? JSON.stringify(shortcutSignature(registration)) : null
 
   useEffect(() => {
     if (!registrationRef.current) return
     const current = registrationRef.current
-    const handle = service.registerFeature({
-      ...current,
-      onRelease: () => registrationRef.current?.onRelease?.(),
-      isEnabled: (event) => registrationRef.current?.isEnabled?.(event) ?? true,
-      onTrigger: (event) => registrationRef.current?.onTrigger(event),
-    })
+    const handle = service.registerFeature(bindShortcutRegistration(current, () => registrationRef.current))
     return () => handle.dispose()
   }, [service, signature])
 }
 
 export function useShortcutFeatures(
   service: ScopedShortcutService,
-  registrations: readonly ShortcutFeatureRegistration[],
+  registrations: readonly ShortcutRegistration[],
 ): void {
   const registrationsRef = useRef(registrations)
   registrationsRef.current = registrations
-  const signature = JSON.stringify(
-    registrations.map((registration) => ({
-      allowInEditable: registration.allowInEditable ?? false,
-      chords: registration.chords,
-      consume: registration.consume ?? true,
-      id: registration.id,
-      priority: registration.priority ?? 0,
-      releaseOnAnyOtherKey: registration.releaseOnAnyOtherKey ?? false,
-      scopeId: registration.scopeId,
-      trigger: registration.trigger ?? "press",
-    })),
-  )
+  const signature = JSON.stringify(registrations.map(shortcutSignature))
 
   useEffect(() => {
     const registrationsByKey = () =>
@@ -110,12 +137,7 @@ export function useShortcutFeatures(
       )
     const handles = registrations.map((registration) => {
       const key = `${registration.scopeId}\u0000${registration.id}`
-      return service.registerFeature({
-        ...registration,
-        isEnabled: (event) => registrationsByKey().get(key)?.isEnabled?.(event) ?? true,
-        onRelease: () => registrationsByKey().get(key)?.onRelease?.(),
-        onTrigger: (event) => registrationsByKey().get(key)?.onTrigger(event),
-      })
+      return service.registerFeature(bindShortcutRegistration(registration, () => registrationsByKey().get(key)))
     })
     return () => {
       for (const handle of handles) handle.dispose()

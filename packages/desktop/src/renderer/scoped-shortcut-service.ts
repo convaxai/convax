@@ -9,21 +9,44 @@ export interface ShortcutChord {
   readonly shift?: boolean
 }
 
-export interface ShortcutFeatureRegistration {
+interface ShortcutRegistrationBase {
   readonly allowInEditable?: boolean
   readonly chords: readonly ShortcutChord[]
-  /** Observe the winning shortcut without suppressing its native/browser handling. */
-  readonly consume?: boolean
   readonly id: string
   /** Recheck transient feature availability immediately before conflict arbitration. */
   readonly isEnabled?: (event: KeyboardEvent) => boolean
-  readonly onRelease?: () => void
-  readonly onTrigger: (event: KeyboardEvent) => void
   readonly priority?: number
-  readonly releaseOnAnyOtherKey?: boolean
   readonly scopeId: string
-  readonly trigger?: "hold" | "press"
 }
+
+/** One-shot command. The winning keydown is always consumed. */
+export interface CommandShortcut extends ShortcutRegistrationBase {
+  readonly kind: "command"
+  readonly onTrigger: (event: KeyboardEvent) => void
+}
+
+/** Consuming held shortcut such as Space panning. */
+export interface HoldShortcut extends ShortcutRegistrationBase {
+  readonly kind: "hold"
+  readonly onHold: (event: KeyboardEvent) => void
+  readonly onRelease: () => void
+  readonly releaseOnAnyOtherKey?: boolean
+}
+
+/**
+ * Non-consuming held modifier observed by a later pointer gesture.
+ *
+ * Gesture modifiers must leave native/browser key handling untouched so an
+ * operating-system drag loop can still start from the subsequent dragstart.
+ */
+export interface GestureModifier extends ShortcutRegistrationBase {
+  readonly kind: "gesture-modifier"
+  readonly onActivate: (event: KeyboardEvent) => void
+  readonly onRelease: () => void
+  readonly releaseOnAnyOtherKey?: boolean
+}
+
+export type ShortcutRegistration = CommandShortcut | HoldShortcut | GestureModifier
 
 export interface ShortcutScopeRegistration {
   readonly element: HTMLElement
@@ -42,9 +65,7 @@ interface RegisteredScope extends ShortcutScopeRegistration {
   readonly sequence: number
 }
 
-interface RegisteredFeature extends ShortcutFeatureRegistration {
-  readonly sequence: number
-}
+type RegisteredFeature = ShortcutRegistration & { readonly sequence: number }
 
 const editableSelector = "input, textarea, select, [contenteditable]:not([contenteditable='false'])"
 
@@ -82,6 +103,10 @@ function featureIsEnabled(feature: RegisteredFeature, event: KeyboardEvent) {
   } catch {
     return false
   }
+}
+
+function isHeldFeature(feature: RegisteredFeature): feature is RegisteredFeature & (HoldShortcut | GestureModifier) {
+  return feature.kind !== "command"
 }
 
 export function isEditableShortcutTarget(target: EventTarget | null) {
@@ -135,7 +160,7 @@ export class ScopedShortcutService {
     }
   }
 
-  registerFeature(registration: ShortcutFeatureRegistration): ShortcutRegistrationHandle {
+  registerFeature(registration: ShortcutRegistration): ShortcutRegistrationHandle {
     this.#assertLive()
     if (registration.chords.length === 0) throw new Error("A shortcut feature requires at least one chord")
     if (registration.chords.some((chord) => chord.key === undefined && chord.code === undefined)) {
@@ -268,8 +293,10 @@ export class ScopedShortcutService {
 
   #releaseFeature(sequence: number) {
     if (!this.#heldFeatures.delete(sequence)) return
+    const feature = this.#features.get(sequence)
+    if (!feature || !isHeldFeature(feature)) return
     try {
-      this.#features.get(sequence)?.onRelease?.()
+      feature.onRelease()
     } catch {
       // A feature release cannot retain the service's physical held state.
     }
@@ -282,7 +309,9 @@ export class ScopedShortcutService {
     for (const sequence of this.#heldFeatures) {
       const held = this.#features.get(sequence)
       if (
-        held?.releaseOnAnyOtherKey &&
+        held &&
+        isHeldFeature(held) &&
+        held.releaseOnAnyOtherKey &&
         !held.chords.some(
           (chord) =>
             (chord.key !== undefined && normalizedKey(chord.key) === normalizedKey(event.key)) ||
@@ -294,22 +323,24 @@ export class ScopedShortcutService {
     }
     const feature = this.#winningFeature(event)
     if (!feature) return
-    if (feature.trigger === "hold" && this.#heldFeatures.has(feature.sequence)) {
+    if (isHeldFeature(feature) && this.#heldFeatures.has(feature.sequence)) {
       if (event.repeat) return
       // Native macOS drag loops can swallow the keyup that ended the previous
       // physical hold. A fresh, non-repeat keydown proves a new hold started;
       // release the stale logical hold before routing this one.
       this.#releaseFeature(feature.sequence)
     }
-    if (feature.consume !== false) {
+    if (feature.kind !== "gesture-modifier") {
       event.preventDefault()
       event.stopImmediatePropagation()
     }
-    if (feature.trigger === "hold") this.#heldFeatures.add(feature.sequence)
+    if (isHeldFeature(feature)) this.#heldFeatures.add(feature.sequence)
     try {
-      feature.onTrigger(event)
+      if (feature.kind === "command") feature.onTrigger(event)
+      else if (feature.kind === "hold") feature.onHold(event)
+      else feature.onActivate(event)
     } catch (error) {
-      if (feature.trigger === "hold") this.#releaseFeature(feature.sequence)
+      if (isHeldFeature(feature)) this.#releaseFeature(feature.sequence)
       throw error
     }
   }
@@ -323,7 +354,12 @@ export class ScopedShortcutService {
           (chord.key !== undefined && normalizedKey(chord.key) === normalizedKey(event.key)) ||
           (chord.code !== undefined && chord.code === event.code),
       )
-      if (!feature || releasedTriggerKey || !feature.chords.some((chord) => matchesModifiers(chord, event))) {
+      if (
+        !feature ||
+        !isHeldFeature(feature) ||
+        releasedTriggerKey ||
+        !feature.chords.some((chord) => matchesModifiers(chord, event))
+      ) {
         this.#releaseFeature(sequence)
       }
     }

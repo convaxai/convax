@@ -684,7 +684,7 @@ boundary checker fails closed until those admissions are complete.
 | Plugin surface node, Plugin requirement and initial state             | Canvas plugin-surface creation intent                    | Main derives every Plugin-bound fact from one exact ActiveSet lease; Renderer sends only ids                     |
 | Plugin node instance state                                            | Owning Canvas `file` node                                | Bounded namespaced JSON inside the Canvas document; never iframe storage                                         |
 | Top-level sidebar size/visibility/resize transaction                  | `WorkbenchLayoutController`                              | Desktop supplies pixels, events, animation and persistence                                                       |
-| Active keyboard shortcut scope and held-key lifecycle                 | Desktop Renderer scoped shortcut service                 | Transient focus projection only; no Workbench, Canvas document, or browser-storage mirror                        |
+| Active keyboard shortcut scope and held-key lifecycle                 | Desktop Renderer scoped shortcut service                 | Transient discriminated shortcut-kind projection only; no Workbench, Canvas document, or browser-storage mirror  |
 | Agent sessions                                                        | `@convax/agent-runtime` scoped by the host               | Never stored in Project Canvas state                                                                             |
 | OpenCode Skill discovery                                              | `@convax/agent-runtime`                                  | Runtime sees generic directories, never Desktop ownership metadata                                               |
 | Marketplace protocol and Catalog grouping                             | `@convax/marketplace`                                    | Headless validation and source-qualified projections only                                                        |
@@ -2259,7 +2259,13 @@ shortcut service projects Canvas as the exact active focus scope. The service ow
 the one window-capture listener, the complete Desktop Canvas shortcut inventory,
 deterministic feature conflict arbitration, and held-key release. Ordinary Canvas
 commands cross one typed host-neutral `canRunShortcut`/`runShortcut` editor port;
-Space panning and native drag cross narrow held/released ports. Canvas installs no
+Space panning is a consuming `HoldShortcut`, while native drag is a non-consuming
+`GestureModifier`, and both cross narrow held/released ports. `CommandShortcut`,
+`HoldShortcut`, and `GestureModifier` form one closed discriminated registration
+union: a command runs once and consumes its winning keydown, a hold owns a consuming
+active/release lifecycle, and a gesture modifier only projects transient state for a
+later pointer gesture without calling `preventDefault` or stopping native event
+delivery. Canvas installs no
 parallel command or Space Window listener and never infers activation from one.
 Entering a nested conversation or node-input scope, leaving Canvas focus, releasing
 a required modifier, pressing an unrelated key, window focus loss, document
@@ -2283,7 +2289,11 @@ preceding `keyup`: if a hold remains logically active and a fresh non-repeat
 matching `keydown` arrives, the scoped shortcut service releases the stale hold and
 routes the new physical hold. Key repeat never restarts a held feature. Main and
 preload remain outside that keyboard state and expose no native-drag completion
-event.
+event. The modifier state is transient Renderer/Canvas interaction state and is
+never persisted in Canvas, Workbench, browser storage, or native drag tickets. The
+same `HoldShortcut`/`GestureModifier` lifecycle is required for future Space-style
+temporary tools, Alt-drag duplication modifiers, and other operations begun by a
+later pointer gesture.
 
 Renderer and preload never receive a native path. Main re-resolves the live active
 Canvas and exact selection, verifies exact semantic/resource guards, resolves each
@@ -2319,8 +2329,12 @@ window coordination; keep the product's visual implementation in the host.
 
 Desktop Renderer also owns the scoped shortcut service because focus routing is a
 window/DOM composition concern. A scope registers one DOM root and any number of
-feature registrations. A root may also register prioritized target matchers for
-logical descendants such as node inputs or Canvas interaction surfaces. Exactly the deepest focused scope is active; application
+feature registrations from the closed
+`CommandShortcut | HoldShortcut | GestureModifier` union. Commands are one-shot and
+consuming; holds are consuming and own active/release state; gesture modifiers are
+non-consuming transient inputs observed by a later pointer gesture. A root may also
+register prioritized target matchers for logical descendants such as node inputs or
+Canvas interaction surfaces. Exactly the deepest focused scope is active; application
 scope features are the only fallback and do not make inactive Canvas, conversation,
 or node-input features reachable. Within one scope and chord, highest explicit
 priority wins and equal priority keeps first-registration order; disposing the
@@ -2336,7 +2350,8 @@ portal never inherits stale Canvas scope. The service is instantiated and
 injected by Renderer composition, never discovered through a global/service locator,
 persisted, or moved into DOM-free Workbench. Domain packages may expose a narrow
 host-neutral command or held/released port but do not own the window listeners or
-arbitration. Native copy/paste remains on the browser clipboard-event path.
+arbitration. Held and gesture-modifier state is never durable domain state. Native
+copy/paste remains on the browser clipboard-event path.
 
 ## 10. Electron boundary
 

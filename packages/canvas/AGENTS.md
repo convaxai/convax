@@ -77,7 +77,9 @@ Canvas owns document and editor semantics independently of Project and Agent.
   and business operations, but never owns product chord mapping, focus routing,
   conflict arbitration or a global keyboard listener. A host calls the narrow
   `canRunShortcut`/`runShortcut` editor port and projects Space/native-drag holds
-  through dedicated held-state ports. Native copy/paste remains on Canvas's browser
+  through dedicated held-state ports. Those values are transient gesture state and
+  never enter the Canvas document, typed intents, history, persistence, or IPC.
+  Native copy/paste remains on Canvas's browser
   clipboard handlers so the system `DataTransfer` path is preserved.
 - Domain mutation commits before any camera behavior. Canvas may own an optional
   post-mutation safe reveal for the current mounted view when newly affected nodes

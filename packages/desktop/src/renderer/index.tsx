@@ -603,6 +603,7 @@ function App() {
     allowInEditable: true,
     chords: [primaryShortcutChord(",")],
     id: "application.open-settings",
+    kind: "command",
     onTrigger: () => {
       workspaceEntryCoordinator.cancelPendingEntry()
       closeMediaOperationDialog()
@@ -617,6 +618,7 @@ function App() {
           allowInEditable: true,
           chords: [{ key: "Escape" }],
           id: "application.close-settings",
+          kind: "command",
           onTrigger: () => setDesktopSurface(closeDesktopSettings),
           priority: 100,
           scopeId: applicationShortcutScopeId,
@@ -1551,6 +1553,7 @@ function App() {
       ? {
           chords: [primaryShortcutChord("z")],
           id: "workspace.canvas.undo",
+          kind: "command",
           onTrigger: () => runCanvasHistory("undo"),
           scopeId: workspaceShortcutScopeId,
         }
@@ -1562,6 +1565,7 @@ function App() {
       ? {
           chords: [primaryShortcutChord("z", true), { ctrl: true, key: "y" }],
           id: "workspace.canvas.redo",
+          kind: "command",
           onTrigger: () => runCanvasHistory("redo"),
           scopeId: workspaceShortcutScopeId,
         }
@@ -1573,6 +1577,7 @@ function App() {
       ? {
           chords: [primaryShortcutChord("z")],
           id: "canvas.undo",
+          kind: "command",
           onTrigger: () => runCanvasHistory("undo"),
           scopeId: canvasShortcutScopeId,
         }
@@ -1584,6 +1589,7 @@ function App() {
       ? {
           chords: [primaryShortcutChord("z", true), { ctrl: true, key: "y" }],
           id: "canvas.redo",
+          kind: "command",
           onTrigger: () => runCanvasHistory("redo"),
           scopeId: canvasShortcutScopeId,
         }
@@ -1618,13 +1624,12 @@ function App() {
                   { ctrl: true, key: "Control", shift: true },
                   { ctrl: true, key: "Shift", shift: true },
                 ],
-          consume: false,
           id: "canvas.drag-media-to-other-apps",
+          kind: "gesture-modifier",
+          onActivate: () => canvasEditorRef.current?.setExternalDragShortcutHeld(true),
           onRelease: () => canvasEditorRef.current?.setExternalDragShortcutHeld(false),
-          onTrigger: () => canvasEditorRef.current?.setExternalDragShortcutHeld(true),
           releaseOnAnyOtherKey: true,
           scopeId: canvasShortcutScopeId,
-          trigger: "hold",
         }
       : null,
   )
@@ -2229,6 +2234,7 @@ function App() {
     allowInEditable: true,
     chords: [primaryShortcutChord("k")],
     id: "application.command-palette",
+    kind: "command",
     onTrigger: () => setCommandPaletteOpen(true),
     scopeId: applicationShortcutScopeId,
   })

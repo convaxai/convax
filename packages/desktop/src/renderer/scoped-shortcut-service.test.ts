@@ -73,14 +73,28 @@ test("routes the same chord to the deepest focused scope and keeps application s
     allowInEditable: true,
     chords: chord,
     id: "app.commands",
+    kind: "command",
     onTrigger: application,
     scopeId: "application",
   })
-  service.registerFeature({ chords: chord, id: "workspace.commands", onTrigger: workspaceAction, scopeId: "workspace" })
-  service.registerFeature({ chords: chord, id: "canvas.commands", onTrigger: canvasAction, scopeId: "canvas" })
+  service.registerFeature({
+    chords: chord,
+    id: "workspace.commands",
+    kind: "command",
+    onTrigger: workspaceAction,
+    scopeId: "workspace",
+  })
+  service.registerFeature({
+    chords: chord,
+    id: "canvas.commands",
+    kind: "command",
+    onTrigger: canvasAction,
+    scopeId: "canvas",
+  })
   service.registerFeature({
     chords: chord,
     id: "conversation.commands",
+    kind: "command",
     onTrigger: conversationAction,
     scopeId: "conversation",
   })
@@ -116,11 +130,24 @@ test("selects one deterministic winner for conflicting features and falls back a
   const second = mock(() => undefined)
   const highPriority = mock(() => undefined)
   const chord = [{ key: "f", meta: true }] as const
-  const firstHandle = service.registerFeature({ chords: chord, id: "first", onTrigger: first, scopeId: "canvas" })
-  service.registerFeature({ chords: chord, id: "second", onTrigger: second, scopeId: "canvas" })
+  const firstHandle = service.registerFeature({
+    chords: chord,
+    id: "first",
+    kind: "command",
+    onTrigger: first,
+    scopeId: "canvas",
+  })
+  service.registerFeature({
+    chords: chord,
+    id: "second",
+    kind: "command",
+    onTrigger: second,
+    scopeId: "canvas",
+  })
   const highHandle = service.registerFeature({
     chords: chord,
     id: "high",
+    kind: "command",
     onTrigger: highPriority,
     priority: 10,
     scopeId: "canvas",
@@ -137,6 +164,66 @@ test("selects one deterministic winner for conflicting features and falls back a
   expect(highPriority).toHaveBeenCalledTimes(1)
   expect(first).toHaveBeenCalledTimes(1)
   expect(second).toHaveBeenCalledTimes(1)
+  cleanup()
+})
+
+test("CommandShortcut contract consumes one keydown and invokes one command", async () => {
+  const { cleanup, document, service, window } = setup()
+  const scope = document.createElement("div")
+  const target = document.createElement("button")
+  scope.append(target)
+  document.body.append(scope)
+  service.registerScope({ element: scope as unknown as HTMLElement, id: "canvas" })
+  const trigger = mock(() => undefined)
+  const bubbled = mock(() => undefined)
+  document.body.addEventListener("keydown", bubbled)
+  service.registerFeature({
+    chords: [{ key: "d", meta: true }],
+    id: "canvas.duplicate",
+    kind: "command",
+    onTrigger: trigger,
+    scopeId: "canvas",
+  })
+  target.focus()
+  await Promise.resolve()
+
+  const event = press(window, target, { key: "d", meta: true })
+
+  expect(event.defaultPrevented).toBeTrue()
+  expect(bubbled).not.toHaveBeenCalled()
+  expect(trigger).toHaveBeenCalledTimes(1)
+  cleanup()
+})
+
+test("HoldShortcut contract consumes keydown and owns held-state release", async () => {
+  const { cleanup, document, service, window } = setup()
+  const scope = document.createElement("div")
+  const target = document.createElement("button")
+  scope.append(target)
+  document.body.append(scope)
+  service.registerScope({ element: scope as unknown as HTMLElement, id: "canvas" })
+  const hold = mock(() => undefined)
+  const release = mock(() => undefined)
+  const bubbled = mock(() => undefined)
+  document.body.addEventListener("keydown", bubbled)
+  service.registerFeature({
+    chords: [{ code: "Space" }],
+    id: "canvas.space-pan",
+    kind: "hold",
+    onHold: hold,
+    onRelease: release,
+    scopeId: "canvas",
+  })
+  target.focus()
+  await Promise.resolve()
+
+  const event = press(window, target, { code: "Space" })
+  window.dispatchEvent(new window.KeyboardEvent("keyup", { code: "Space", key: " " }))
+
+  expect(event.defaultPrevented).toBeTrue()
+  expect(bubbled).not.toHaveBeenCalled()
+  expect(hold).toHaveBeenCalledTimes(1)
+  expect(release).toHaveBeenCalledTimes(1)
   cleanup()
 })
 
@@ -159,10 +246,10 @@ test("releases held shortcuts on keyup, focus scope change, blur, visibility los
       { key: "Shift", meta: true, shift: true },
     ],
     id: "canvas.drag-out",
+    kind: "gesture-modifier",
+    onActivate: trigger,
     onRelease: release,
-    onTrigger: trigger,
     scopeId: "canvas",
-    trigger: "hold",
   })
   canvasButton.focus()
   await Promise.resolve()
@@ -192,7 +279,7 @@ test("releases held shortcuts on keyup, focus scope change, blur, visibility los
   cleanup()
 })
 
-test("observes a held native-drag chord without consuming its modifier event", async () => {
+test("GestureModifier contract observes and releases without consuming the native event", async () => {
   const { cleanup, document, service, window } = setup()
   const canvas = document.createElement("div")
   const target = document.createElement("button")
@@ -208,12 +295,11 @@ test("observes a held native-drag chord without consuming its modifier event", a
       { key: "Meta", meta: true, shift: true },
       { key: "Shift", meta: true, shift: true },
     ],
-    consume: false,
     id: "canvas.drag-out",
+    kind: "gesture-modifier",
+    onActivate: trigger,
     onRelease: release,
-    onTrigger: trigger,
     scopeId: "canvas",
-    trigger: "hold",
   })
   target.focus()
   await Promise.resolve()
@@ -239,12 +325,11 @@ test("does not release a held shortcut for descendant blur inside the same focus
   const release = mock(() => undefined)
   service.registerFeature({
     chords: [{ key: "Shift", meta: true, shift: true }],
-    consume: false,
     id: "canvas.drag-out",
+    kind: "gesture-modifier",
+    onActivate: () => undefined,
     onRelease: release,
-    onTrigger: () => undefined,
     scopeId: "canvas",
-    trigger: "hold",
   })
   first.focus()
   await Promise.resolve()
@@ -270,12 +355,11 @@ test("keeps a held shortcut across a transient body focus gap but releases a sus
   const release = mock(() => undefined)
   service.registerFeature({
     chords: [{ key: "Shift", meta: true, shift: true }],
-    consume: false,
     id: "canvas.drag-out",
+    kind: "gesture-modifier",
+    onActivate: () => undefined,
     onRelease: release,
-    onTrigger: () => undefined,
     scopeId: "canvas",
-    trigger: "hold",
   })
   first.focus()
   await Promise.resolve()
@@ -310,12 +394,11 @@ test("restarts a held feature from a fresh keydown when the operating system swa
       { key: "Meta", meta: true, shift: true },
       { key: "Shift", meta: true, shift: true },
     ],
-    consume: false,
     id: "canvas.drag-out",
+    kind: "gesture-modifier",
+    onActivate: trigger,
     onRelease: release,
-    onTrigger: trigger,
     scopeId: "canvas",
-    trigger: "hold",
   })
   target.focus()
   await Promise.resolve()
@@ -341,6 +424,7 @@ test("does not leak a focus scope shortcut into editable descendants without an 
   service.registerFeature({
     chords: [{ key: "z", meta: true }],
     id: "canvas.undo",
+    kind: "command",
     onTrigger: blocked,
     scopeId: "canvas",
   })
@@ -348,6 +432,7 @@ test("does not leak a focus scope shortcut into editable descendants without an 
     allowInEditable: true,
     chords: [{ key: "k", meta: true }],
     id: "canvas.palette",
+    kind: "command",
     onTrigger: allowed,
     scopeId: "canvas",
   })
@@ -391,7 +476,14 @@ test("routes matching descendants to the highest-priority logical scope on the s
     ["interaction", interactionAction],
     ["node-input", nodeInputAction],
   ] as const) {
-    service.registerFeature({ allowInEditable: true, chords: [{ key: "k", meta: true }], id, onTrigger, scopeId: id })
+    service.registerFeature({
+      allowInEditable: true,
+      chords: [{ key: "k", meta: true }],
+      id,
+      kind: "command",
+      onTrigger,
+      scopeId: id,
+    })
   }
 
   editor.focus()
@@ -419,17 +511,17 @@ test("keeps application fallback in body portals without treating body itself as
     allowInEditable: true,
     chords: [{ key: "k", meta: true }],
     id: "commands",
+    kind: "command",
     onTrigger: application,
     scopeId: "application",
   })
   service.registerFeature({
     chords: [{ key: "Shift", meta: true, shift: true }],
-    consume: false,
     id: "drag",
+    kind: "gesture-modifier",
+    onActivate: () => undefined,
     onRelease: release,
-    onTrigger: () => undefined,
     scopeId: "canvas",
-    trigger: "hold",
   })
 
   portalButton.focus()
@@ -460,10 +552,10 @@ test("releases a code-based hold on its own keyup and clears a hold whose trigge
   service.registerFeature({
     chords: [{ code: "Space" }],
     id: "space",
+    kind: "hold",
+    onHold: () => undefined,
     onRelease: release,
-    onTrigger: () => undefined,
     scopeId: "canvas",
-    trigger: "hold",
   })
   target.focus()
   await Promise.resolve()
@@ -474,12 +566,12 @@ test("releases a code-based hold on its own keyup and clears a hold whose trigge
   service.registerFeature({
     chords: [{ key: "x" }],
     id: "throwing-hold",
-    onRelease: release,
-    onTrigger: () => {
+    kind: "hold",
+    onHold: () => {
       throw new Error("boom")
     },
+    onRelease: release,
     scopeId: "canvas",
-    trigger: "hold",
   })
   let thrown: unknown
   window.addEventListener("error", (event) => {
@@ -506,6 +598,7 @@ test("skips a disabled winner and routes the next registered conflict", async ()
     chords: [{ key: "d", meta: true }],
     id: "disabled",
     isEnabled: () => false,
+    kind: "command",
     onTrigger: disabled,
     priority: 10,
     scopeId: "canvas",
@@ -513,6 +606,7 @@ test("skips a disabled winner and routes the next registered conflict", async ()
   service.registerFeature({
     chords: [{ key: "d", meta: true }],
     id: "fallback",
+    kind: "command",
     onTrigger: fallback,
     scopeId: "canvas",
   })
