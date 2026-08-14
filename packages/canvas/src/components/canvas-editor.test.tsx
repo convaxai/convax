@@ -1735,25 +1735,9 @@ describe("CanvasEditor external drag mode", () => {
         visible: () => true,
       },
     })
-    const preventDefault = mock(() => undefined)
-    const stopPropagation = mock(() => undefined)
-
     expect(prepare).not.toHaveBeenCalled()
-    expect(keyDownOnCanvas).toBeFunction()
-    keyDownOnCanvas?.({
-      altKey: false,
-      ctrlKey: false,
-      key: "Shift",
-      metaKey: true,
-      preventDefault,
-      shiftKey: true,
-      stopPropagation,
-      target: null,
-    })
-
+    expect(keyDownOnCanvas).toBeUndefined()
     expect(prepare).not.toHaveBeenCalled()
-    expect(preventDefault).not.toHaveBeenCalled()
-    expect(stopPropagation).not.toHaveBeenCalled()
   })
 
   test("holds without preparing when the current selection is not eligible", () => {
@@ -1766,20 +1750,7 @@ describe("CanvasEditor external drag mode", () => {
         visible: () => false,
       },
     })
-    const preventDefault = mock(() => undefined)
-
-    keyDownOnCanvas?.({
-      altKey: false,
-      ctrlKey: false,
-      key: "Shift",
-      metaKey: true,
-      preventDefault,
-      shiftKey: true,
-      stopPropagation: () => undefined,
-      target: null,
-    })
-
+    expect(keyDownOnCanvas).toBeUndefined()
     expect(prepare).not.toHaveBeenCalled()
-    expect(preventDefault).not.toHaveBeenCalled()
   })
 })

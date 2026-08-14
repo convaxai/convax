@@ -2,8 +2,9 @@ export type ShortcutScopeKind = "application" | "focus"
 
 export interface ShortcutChord {
   readonly alt?: boolean
+  readonly code?: string
   readonly ctrl?: boolean
-  readonly key: string
+  readonly key?: string
   readonly meta?: boolean
   readonly shift?: boolean
 }
@@ -14,6 +15,8 @@ export interface ShortcutFeatureRegistration {
   /** Observe the winning shortcut without suppressing its native/browser handling. */
   readonly consume?: boolean
   readonly id: string
+  /** Recheck transient feature availability immediately before conflict arbitration. */
+  readonly isEnabled?: (event: KeyboardEvent) => boolean
   readonly onRelease?: () => void
   readonly onTrigger: (event: KeyboardEvent) => void
   readonly priority?: number
@@ -26,6 +29,9 @@ export interface ShortcutScopeRegistration {
   readonly element: HTMLElement
   readonly id: string
   readonly kind?: ShortcutScopeKind
+  /** Restrict a nested logical scope without requiring a wrapper around every matching descendant. */
+  readonly matchesTarget?: (target: Element) => boolean
+  readonly priority?: number
 }
 
 export interface ShortcutRegistrationHandle {
@@ -40,7 +46,7 @@ interface RegisteredFeature extends ShortcutFeatureRegistration {
   readonly sequence: number
 }
 
-const editableSelector = "input, textarea, select, [contenteditable='true']"
+const editableSelector = "input, textarea, select, [contenteditable]:not([contenteditable='false'])"
 
 function normalizedKey(key: string) {
   return key.length === 1 ? key.toLocaleLowerCase() : key
@@ -56,10 +62,29 @@ function matchesModifiers(chord: ShortcutChord, event: KeyboardEvent) {
 }
 
 function matchesChord(chord: ShortcutChord, event: KeyboardEvent) {
-  return normalizedKey(event.key) === normalizedKey(chord.key) && matchesModifiers(chord, event)
+  const physicalKeyMatches = chord.code !== undefined && event.code === chord.code
+  const logicalKeyMatches = chord.key !== undefined && normalizedKey(event.key) === normalizedKey(chord.key)
+  return (physicalKeyMatches || logicalKeyMatches) && matchesModifiers(chord, event)
 }
 
-function isEditableTarget(target: EventTarget | null) {
+function scopeMatchesTarget(scope: RegisteredScope, target: Element) {
+  if (!scope.matchesTarget) return true
+  try {
+    return scope.matchesTarget(target)
+  } catch {
+    return false
+  }
+}
+
+function featureIsEnabled(feature: RegisteredFeature, event: KeyboardEvent) {
+  try {
+    return feature.isEnabled?.(event) !== false
+  } catch {
+    return false
+  }
+}
+
+export function isEditableShortcutTarget(target: EventTarget | null) {
   return target instanceof Element && Boolean(target.closest(editableSelector))
 }
 
@@ -91,6 +116,7 @@ export class ScopedShortcutService {
     // masquerade as application focus loss.
     this.#window.addEventListener("blur", this.#onWindowBlur)
     this.#window.addEventListener("focus", this.#onWindowFocus, true)
+    this.#window.addEventListener("focusin", this.#onFocusChange, true)
     this.#document.addEventListener("focusin", this.#onFocusChange, true)
     this.#document.addEventListener("focusout", this.#onFocusChange, true)
     this.#document.addEventListener("visibilitychange", this.#onVisibilityChange)
@@ -112,6 +138,9 @@ export class ScopedShortcutService {
   registerFeature(registration: ShortcutFeatureRegistration): ShortcutRegistrationHandle {
     this.#assertLive()
     if (registration.chords.length === 0) throw new Error("A shortcut feature requires at least one chord")
+    if (registration.chords.some((chord) => chord.key === undefined && chord.code === undefined)) {
+      throw new Error("A shortcut chord requires a key or code")
+    }
     const sequence = ++this.#sequence
     this.#features.set(sequence, { ...registration, priority: registration.priority ?? 0, sequence })
     return {
@@ -136,6 +165,7 @@ export class ScopedShortcutService {
     this.#window.removeEventListener("keyup", this.#onKeyUp, true)
     this.#window.removeEventListener("blur", this.#onWindowBlur)
     this.#window.removeEventListener("focus", this.#onWindowFocus, true)
+    this.#window.removeEventListener("focusin", this.#onFocusChange, true)
     this.#document.removeEventListener("focusin", this.#onFocusChange, true)
     this.#document.removeEventListener("focusout", this.#onFocusChange, true)
     this.#document.removeEventListener("visibilitychange", this.#onVisibilityChange)
@@ -152,11 +182,16 @@ export class ScopedShortcutService {
   #resolveActiveFocusScope(target: Element | null): RegisteredScope | null {
     if (!target) return null
     const candidates = [...this.#scopes.values()].filter(
-      (scope) => scope.kind === "focus" && scope.element.isConnected && scope.element.contains(target),
+      (scope) =>
+        scope.kind === "focus" &&
+        scope.element.isConnected &&
+        scope.element.contains(target) &&
+        scopeMatchesTarget(scope, target),
     )
     candidates.sort((left, right) => {
-      if (left.element.contains(right.element)) return 1
-      if (right.element.contains(left.element)) return -1
+      if (left.element !== right.element && left.element.contains(right.element)) return 1
+      if (left.element !== right.element && right.element.contains(left.element)) return -1
+      if ((left.priority ?? 0) !== (right.priority ?? 0)) return (right.priority ?? 0) - (left.priority ?? 0)
       return left.sequence - right.sequence
     })
     return candidates[0] ?? null
@@ -178,18 +213,16 @@ export class ScopedShortcutService {
 
   #refreshActiveScope(deferAmbiguousExit = false) {
     const activeElement = this.#document.activeElement instanceof Element ? this.#document.activeElement : null
+    const ambiguousDocumentFocus =
+      activeElement === this.#document.body || activeElement === this.#document.documentElement
     const next = this.#document.hidden ? null : (this.#resolveActiveFocusScope(activeElement)?.id ?? null)
     const nextWithinRegisteredRoot = Boolean(
       !this.#document.hidden &&
+        !ambiguousDocumentFocus &&
         activeElement &&
         [...this.#scopes.values()].some((scope) => scope.element.isConnected && scope.element.contains(activeElement)),
     )
-    if (
-      deferAmbiguousExit &&
-      !this.#document.hidden &&
-      !nextWithinRegisteredRoot &&
-      this.#focusWithinRegisteredRoot
-    ) {
+    if (deferAmbiguousExit && !this.#document.hidden && !nextWithinRegisteredRoot && this.#focusWithinRegisteredRoot) {
       // A pointer press on a non-focusable Canvas node can briefly move
       // document.activeElement to body before Canvas restores its focus root.
       // Recheck that ambiguous gap on the next frame. Explicit transitions to
@@ -218,12 +251,13 @@ export class ScopedShortcutService {
   }
 
   #winningFeature(event: KeyboardEvent): RegisteredFeature | null {
-    const editable = isEditableTarget(event.target)
+    const editable = isEditableShortcutTarget(event.target)
     for (const scopeId of this.#candidateScopeIds()) {
       const candidates = [...this.#features.values()].filter(
         (feature) =>
           feature.scopeId === scopeId &&
           (!editable || feature.allowInEditable === true) &&
+          featureIsEnabled(feature, event) &&
           feature.chords.some((chord) => matchesChord(chord, event)),
       )
       candidates.sort((left, right) => (right.priority ?? 0) - (left.priority ?? 0) || left.sequence - right.sequence)
@@ -249,7 +283,11 @@ export class ScopedShortcutService {
       const held = this.#features.get(sequence)
       if (
         held?.releaseOnAnyOtherKey &&
-        !held.chords.some((chord) => normalizedKey(chord.key) === normalizedKey(event.key))
+        !held.chords.some(
+          (chord) =>
+            (chord.key !== undefined && normalizedKey(chord.key) === normalizedKey(event.key)) ||
+            (chord.code !== undefined && chord.code === event.code),
+        )
       ) {
         this.#releaseFeature(sequence)
       }
@@ -265,17 +303,27 @@ export class ScopedShortcutService {
     }
     if (feature.consume !== false) {
       event.preventDefault()
-      event.stopPropagation()
+      event.stopImmediatePropagation()
     }
     if (feature.trigger === "hold") this.#heldFeatures.add(feature.sequence)
-    feature.onTrigger(event)
+    try {
+      feature.onTrigger(event)
+    } catch (error) {
+      if (feature.trigger === "hold") this.#releaseFeature(feature.sequence)
+      throw error
+    }
   }
 
   #onKeyUp = (event: KeyboardEvent) => {
     if (this.#disposed) return
     for (const sequence of this.#heldFeatures) {
       const feature = this.#features.get(sequence)
-      if (!feature || !feature.chords.some((chord) => matchesModifiers(chord, event))) {
+      const releasedTriggerKey = feature?.chords.some(
+        (chord) =>
+          (chord.key !== undefined && normalizedKey(chord.key) === normalizedKey(event.key)) ||
+          (chord.code !== undefined && chord.code === event.code),
+      )
+      if (!feature || releasedTriggerKey || !feature.chords.some((chord) => matchesModifiers(chord, event))) {
         this.#releaseFeature(sequence)
       }
     }
@@ -288,7 +336,15 @@ export class ScopedShortcutService {
     this.#focusWithinRegisteredRoot = false
   }
 
-  #onWindowFocus = () => this.#refreshActiveScope()
+  #onWindowFocus = () => {
+    // Window observes descendant focus during capture before Chromium has
+    // necessarily published the new document.activeElement. Recheck after
+    // the focus dispatch so a focus move into a contenteditable/portal scope
+    // cannot retain a held Canvas feature.
+    this.#window.queueMicrotask(() => {
+      if (!this.#disposed) this.#refreshActiveScope()
+    })
+  }
 
   #onFocusChange = () => this.#window.queueMicrotask(() => this.#refreshActiveScope(true))
 

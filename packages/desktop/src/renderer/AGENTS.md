@@ -59,6 +59,13 @@ or durable domain authority.
   `document.activeElement === body` gap while pointer focus is restored inside the
   same root is rechecked on the next frame; an explicit registered-scope change or
   a sustained outside-root focus still releases the held feature.
+  Renderer owns one reviewed Canvas feature inventory and routes every command
+  through Canvas's typed `canRunShortcut`/`runShortcut` port. Space and native drag
+  use dedicated held-state ports; Canvas installs no parallel Window listener.
+  Same-root prioritized target matchers make node inputs and
+  `data-canvas-shortcuts="ignore"` surfaces real nested scopes. `document.body` is
+  application-only Portal fallback, while direct body/document-element focus stays
+  ambiguous and Portal focus never inherits stale Canvas scope.
 
 ## Capability surfaces
 

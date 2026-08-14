@@ -1315,6 +1315,7 @@ try {
           altKey: modifiers.altKey === true,
           bubbles: true,
           cancelable: true,
+          code: modifiers.code,
           ctrlKey: modifiers.ctrlKey === true,
           key,
           metaKey: modifiers.metaKey === true,
@@ -1326,9 +1327,10 @@ try {
       const primaryModifiers = window.convax.platform === "darwin" ? { metaKey: true } : { ctrlKey: true }
       const pressPrimary = async (key, extra = {}) => {
         const modifiers = { ...primaryModifiers, ...extra }
-        dispatchKey("keydown", key, modifiers)
+        const consumed = dispatchKey("keydown", key, modifiers)
         dispatchKey("keyup", key, modifiers)
         await settle()
+        return consumed
       }
       const pressControlY = async () => {
         dispatchKey("keydown", "y", { ctrlKey: true })
@@ -1415,6 +1417,33 @@ try {
       dispatchKey("keyup", "v")
       await waitFor(() => canvas.getAttribute("data-canvas-tool") === "select", "Canvas select shortcut")
 
+      if (!(await pressPrimary("0"))) throw new Error("Canvas fit shortcut was not routed")
+      if (!(await pressPrimary("="))) throw new Error("Canvas zoom-in shortcut was not routed")
+      if (!(await pressPrimary("-"))) throw new Error("Canvas zoom-out shortcut was not routed")
+      if (!(await pressPrimary("a"))) throw new Error("Canvas select-all shortcut was not routed")
+      if (!dispatchKey("keydown", "Escape")) throw new Error("Canvas clear-selection shortcut was not routed")
+      dispatchKey("keyup", "Escape")
+      await settle()
+
+      canvas.focus({ preventScroll: true })
+      if (!dispatchKey("keydown", "Tab")) throw new Error("Canvas add-node shortcut was not routed")
+      dispatchKey("keyup", "Tab")
+      await waitFor(
+        () => [...canvas.querySelectorAll("button")].find((button) => button.textContent?.trim() === "Add Text"),
+        "Canvas add-node shortcut",
+      )
+      if (!dispatchKey("keydown", "Escape")) throw new Error("Canvas add-node dismissal was not routed")
+      dispatchKey("keyup", "Escape")
+      await settle()
+
+      canvas.focus({ preventScroll: true })
+      if (!dispatchKey("keydown", " ", { code: "Space" })) {
+        throw new Error("Canvas Space panning shortcut was not routed")
+      }
+      await waitFor(() => canvas.classList.contains("is-space-panning"), "Canvas Space panning hold")
+      dispatchKey("keyup", " ", { code: "Space" })
+      await waitFor(() => !canvas.classList.contains("is-space-panning"), "Canvas Space panning release")
+
       await pressPrimary("f")
       await waitFor(() => document.querySelector('[aria-label="Search nodes"]'), "Canvas search shortcut")
       await pressEscape()
@@ -1477,10 +1506,57 @@ try {
       await waitFor(() => imageNode.classList.contains("selected"), "image selection")
 
       canvas.focus({ preventScroll: true })
+      if (!(await pressPrimary("d"))) throw new Error("Canvas duplicate shortcut was not routed")
+      const duplicatedDocument = await waitFor(async () => {
+        const current = await loadDocument()
+        return current.nodes.length === workspaceRedoneDocument.nodes.length + 2 ? current : null
+      }, "Canvas duplicate shortcut")
+      const duplicateNode = duplicatedDocument.nodes.find(
+        (node) => node.id !== textNode.id && node.id !== imageNodeId && !baselineNodeIds.has(node.id),
+      )
+      if (!duplicateNode) throw new Error("Canvas duplicate shortcut did not create a node")
+      const duplicateElement = await waitFor(
+        () => canvas.querySelector('[data-id="' + CSS.escape(duplicateNode.id) + '"]'),
+        "duplicated Canvas node",
+      )
+      duplicateElement.click()
+      if (!dispatchKey("keydown", "Delete")) throw new Error("Canvas delete shortcut was not routed")
+      dispatchKey("keyup", "Delete")
+      await waitFor(async () => !(await loadDocument()).nodes.some((node) => node.id === duplicateNode.id), "Canvas delete")
+
+      canvas.focus({ preventScroll: true })
+      if (!dispatchKey("keydown", "f", { altKey: true, shiftKey: true })) {
+        throw new Error("Canvas layout shortcut was not routed")
+      }
+      dispatchKey("keyup", "f", { altKey: true, shiftKey: true })
+      await settle()
+      if (!(await pressPrimary("g"))) throw new Error("Canvas group shortcut was not routed")
+      if (!(await pressPrimary("g", { shiftKey: true }))) throw new Error("Canvas ungroup shortcut was not routed")
+      imageNode.click()
+      canvas.focus({ preventScroll: true })
+      if (!(await pressPrimary("Enter"))) throw new Error("Canvas generate shortcut was not routed")
+      await settle()
+      const generationClose = document.querySelector('button[aria-label="Close generation composer"]')
+      if (generationClose instanceof HTMLElement) {
+        generationClose.click()
+        await settle()
+      }
+
+      canvas.focus({ preventScroll: true })
       holdExternalDrag()
       await waitFor(() => dragState() === "ready", "external drag key hold")
       releaseExternalDrag()
       await waitFor(() => !dragState(), "external drag keyup release")
+
+      canvas.focus({ preventScroll: true })
+      holdExternalDrag()
+      const dragSurface = await waitFor(
+        () => document.querySelector('[data-canvas-selection-drag-state="ready"]'),
+        "external dragstart surface",
+      )
+      dragSurface.dispatchEvent(new DragEvent("dragstart", { bubbles: true, cancelable: true }))
+      await waitFor(() => !dragState(), "external dragstart consumption")
+      releaseExternalDrag()
 
       canvas.focus({ preventScroll: true })
       holdExternalDrag()
@@ -1533,6 +1609,11 @@ try {
       holdExternalDrag()
       await waitFor(() => dragState() === "ready", "external drag focus-change setup")
       composer.focus()
+      // CDP can update activeElement while the hidden smoke BrowserWindow is
+      // not OS-focused without emitting Chromium's ordinary focus event path.
+      // Replay that event explicitly so this verifies the production focus
+      // transition instead of depending on smoke-window activation timing.
+      composer.dispatchEvent(new FocusEvent("focusin", { bubbles: true, relatedTarget: canvas }))
       await waitFor(() => !dragState(), "external drag focus-scope release")
       releaseExternalDrag()
 
@@ -1592,6 +1673,19 @@ try {
           "canvas.undo",
           "canvas.redo",
           "canvas.search",
+          "canvas.fit-view",
+          "canvas.zoom-in",
+          "canvas.zoom-out",
+          "canvas.select-all",
+          "canvas.clear-selection",
+          "canvas.group",
+          "canvas.ungroup",
+          "canvas.duplicate",
+          "canvas.generate",
+          "canvas.layout",
+          "canvas.delete",
+          "canvas.add-node",
+          "canvas.space-pan",
           "canvas.drag-media-to-other-apps",
           "canvas.local.hand",
           "canvas.local.select",
@@ -1602,6 +1696,7 @@ try {
           "release.unrelated-key",
           "release.window-blur",
           "release.focus-scope-change",
+          "native.dragstart-consumed",
         ],
       }
     })()`,
@@ -1615,6 +1710,19 @@ try {
       "canvas.undo",
       "canvas.redo",
       "canvas.search",
+      "canvas.fit-view",
+      "canvas.zoom-in",
+      "canvas.zoom-out",
+      "canvas.select-all",
+      "canvas.clear-selection",
+      "canvas.group",
+      "canvas.ungroup",
+      "canvas.duplicate",
+      "canvas.generate",
+      "canvas.layout",
+      "canvas.delete",
+      "canvas.add-node",
+      "canvas.space-pan",
       "canvas.drag-media-to-other-apps",
       "canvas.local.hand",
       "canvas.local.select",
@@ -1625,6 +1733,7 @@ try {
       "release.unrelated-key",
       "release.window-blur",
       "release.focus-scope-change",
+      "native.dragstart-consumed",
     ]
     if (JSON.stringify(shortcutSmoke.features) !== JSON.stringify(expectedShortcutFeatures)) {
       throw new Error(`Unexpected shortcut smoke coverage: ${JSON.stringify(shortcutSmoke)}`)

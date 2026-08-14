@@ -73,6 +73,12 @@ Canvas owns document and editor semantics independently of Project and Agent.
 - Hosts may provide only edge-inset geometry for unavailable viewport space. Canvas
   owns the resulting safe rectangle, camera avoidance, and Canvas overlay clamping;
   host product/utility identity never enters this package.
+- Canvas owns typed shortcut-command semantics that call its existing editor, view
+  and business operations, but never owns product chord mapping, focus routing,
+  conflict arbitration or a global keyboard listener. A host calls the narrow
+  `canRunShortcut`/`runShortcut` editor port and projects Space/native-drag holds
+  through dedicated held-state ports. Native copy/paste remains on Canvas's browser
+  clipboard handlers so the system `DataTransfer` path is preserved.
 - Domain mutation commits before any camera behavior. Canvas may own an optional
   post-mutation safe reveal for the current mounted view when newly affected nodes
   are outside its host-provided safe viewport; stale scope, remount, background

@@ -252,11 +252,13 @@ import type {
   CanvasSize,
 } from "../types"
 import {
-  createCanvasShortcutHandler,
+  canRunCanvasShortcutCommand,
   isCanvasEditableShortcutTarget,
   resolveCanvasTidyShortcutScope,
+  runCanvasShortcutCommand,
+  type CanvasShortcutActions,
+  type CanvasShortcutCommand,
 } from "../use-canvas-shortcuts"
-import { useSpacePanning } from "../use-space-panning"
 import {
   assertCanvasViewGuard,
   CANVAS_VIEW_MAX_ZOOM,
@@ -637,6 +639,8 @@ type CanvasEditorTransientAction = {
 }
 
 export interface CanvasEditorHandle {
+  /** Reports whether Canvas can currently accept one host-routed shortcut command. */
+  canRunShortcut: (command: CanvasShortcutCommand) => boolean
   /** Persists pending commands and returns Main's authoritative document projection. */
   flush: () => Promise<CanvasDocument>
   /** Inserts one registered node type through the ordinary editor flow and returns its id when accepted. */
@@ -650,11 +654,15 @@ export interface CanvasEditorHandle {
   reload: () => Promise<void>
   /** Reloads Main's authoritative projection and resolves after the renderer controller publishes it. */
   reloadAuthoritative: () => Promise<void>
+  /** Executes one host-routed shortcut command through Canvas's existing editor operations. */
+  runShortcut: (command: CanvasShortcutCommand) => boolean
   resumeAfterLeaveCanceled: () => void
   /** Selects existing nodes after a host-owned mutation has been reloaded. */
   selectNodes: (nodeIds: readonly string[]) => void
   /** Applies a host-routed transient native-drag shortcut state. Persistent mode is unaffected by release. */
   setExternalDragShortcutHeld: (held: boolean) => boolean
+  /** Applies the host-routed Space panning hold without installing a Canvas-owned global listener. */
+  setSpacePanningShortcutHeld: (held: boolean) => boolean
   /** @deprecated Prefer CanvasEditorHandle.openGenerate and the Canvas-owned composer. */
   submitGeneration: (submission: CanvasGenerationComposerSubmission) => void
 }
@@ -1299,7 +1307,10 @@ function CanvasEditorContent(
     guard: CanvasPostMutationRevealGuard
     nodeIds: readonly string[]
   } | null>(null)
-  const spacePanning = useSpacePanning()
+  const [spacePanning, setSpacePanning] = useState(false)
+  const spacePanningRef = useRef(false)
+  const shortcutCanRunRef = useRef<(command: CanvasShortcutCommand) => boolean>(() => false)
+  const shortcutRunRef = useRef<(command: CanvasShortcutCommand) => boolean>(() => false)
   const osPrefersReducedMotion = useCanvasReducedMotion()
   const prefersReducedMotion = resolveCanvasReducedMotion(props.reducedMotion, osPrefersReducedMotion)
   const nodeEntryScopeKey = `${props.viewScopeId ?? ""}:${history.document.id}`
@@ -3592,6 +3603,9 @@ function CanvasEditorContent(
   useImperativeHandle(
     props.editorRef,
     () => ({
+      canRunShortcut(command) {
+        return shortcutCanRunRef.current(command)
+      },
       async flush() {
         await waitForStableLoad()
         return startSave(historyRef.current.document)
@@ -3626,6 +3640,9 @@ function CanvasEditorContent(
       async reloadAuthoritative() {
         await reloadAuthoritativeDocument()
       },
+      runShortcut(command) {
+        return shortcutRunRef.current(command)
+      },
       resumeAfterLeaveCanceled() {
         leavingRef.current = false
         setLeaving(false)
@@ -3636,6 +3653,12 @@ function CanvasEditorContent(
       setExternalDragShortcutHeld(held) {
         if (held) return selectionDragModeActiveRef.current ? false : armSelectionDrag()
         return selectionDragModeActiveRef.current ? false : cancelSelectionDrag()
+      },
+      setSpacePanningShortcutHeld(held) {
+        if (spacePanningRef.current === held) return false
+        spacePanningRef.current = held
+        setSpacePanning(held)
+        return true
       },
       submitGeneration(submission) {
         submitGenerationRef.current(submission)
@@ -4509,87 +4532,68 @@ function CanvasEditorContent(
     },
     [updateConnectionTargetNode],
   )
-  const shortcutHandler = createCanvasShortcutHandler(
-    {
-      addNode: () => setNodeMenuOpen(true),
-      clearSelection: clearOverlays,
-      copy,
-      delete: remove,
-      duplicate,
-      fitView: fitCanvas,
-      generate: () => {
-        requestGenerate()
-      },
-      group,
-      hand: () => activateInteractionTool("hand"),
-      layout: () =>
-        resolveCanvasTidyShortcutScope(canArrangeSelection, selectedNodeIds.length) === "selection"
-          ? tidySelection()
-          : layoutCanvas(),
-      openSearch: () => setSearchOpen(true),
-      paste,
-      redo: () => dispatch({ type: "redo" }),
-      select: () => activateInteractionTool("select"),
-      selectAll: () => selectNodes(canvasNodeIds),
-      undo: () => dispatch({ type: "undo" }),
-      ungroup: () => {
-        if (groupMenuCapabilities.canUnfold) unfold()
-        else ungroup()
-      },
-      zoomIn: () => {
-        markUserNavigation()
-        void reactFlow.zoomIn({
-          duration: resolveCanvasMotionDuration(CANVAS_MOTION_DURATION.stepZoom, prefersReducedMotion),
-          ease: canvasViewportEase,
-          interpolate: "smooth",
-        })
-      },
-      zoomOut: () => {
-        markUserNavigation()
-        void reactFlow.zoomOut({
-          duration: resolveCanvasMotionDuration(CANVAS_MOTION_DURATION.stepZoom, prefersReducedMotion),
-          ease: canvasViewportEase,
-          interpolate: "smooth",
-        })
-      },
-    },
-    readOnly,
-  )
-  const handleCanvasKeyDown = (event: ReactKeyboardEvent<HTMLDivElement>) => {
-    const interactiveTarget =
-      typeof Element !== "undefined" && event.target instanceof Element
-        ? event.target.closest(CANVAS_POINTER_FOCUS_INTERACTIVE_SELECTOR)
-        : null
-    if (!interactiveTarget && event.key === "Escape" && folderFocus) {
-      event.preventDefault()
-      event.stopPropagation()
-      const parent = folderFocus.path.at(-2)
-      if (parent) {
-        void navigateFolderFocus(folderFocus.ownerNodeId, parent.id, {
-          path: folderFocus.path.slice(0, -1),
-        })
-      } else {
-        void leaveFolderFocus()
-      }
-      return
-    }
-    if (!interactiveTarget && event.key === "Escape" && groupFocus.focusedGroupId) {
-      event.preventDefault()
-      event.stopPropagation()
-      void navigateGroupFocus(groupFocus.parentGroupId)
-      return
-    }
-    if (!interactiveTarget && event.key === "Enter" && hasSingleGroupSelection) {
-      const groupId = selectionContext.kind === "single-node" ? selectionContext.nodeId : null
-      if (groupId) {
-        event.preventDefault()
-        event.stopPropagation()
-        focusGroup(groupId)
+  const shortcutActions: CanvasShortcutActions = {
+    addNode: () => setNodeMenuOpen(true),
+    clearSelection: () => {
+      if (folderFocus) {
+        const parent = folderFocus.path.at(-2)
+        if (parent) {
+          void navigateFolderFocus(folderFocus.ownerNodeId, parent.id, {
+            path: folderFocus.path.slice(0, -1),
+          })
+        } else {
+          void leaveFolderFocus()
+        }
         return
       }
-    }
-    shortcutHandler(event)
+      if (groupFocus.focusedGroupId) {
+        void navigateGroupFocus(groupFocus.parentGroupId)
+        return
+      }
+      clearOverlays()
+    },
+    delete: remove,
+    duplicate,
+    enterGroup:
+      hasSingleGroupSelection && selectionContext.kind === "single-node"
+        ? () => focusGroup(selectionContext.nodeId)
+        : undefined,
+    fitView: fitCanvas,
+    generate: () => {
+      requestGenerate()
+    },
+    group,
+    hand: () => activateInteractionTool("hand"),
+    layout: () =>
+      resolveCanvasTidyShortcutScope(canArrangeSelection, selectedNodeIds.length) === "selection"
+        ? tidySelection()
+        : layoutCanvas(),
+    openSearch: () => setSearchOpen(true),
+    select: () => activateInteractionTool("select"),
+    selectAll: () => selectNodes(canvasNodeIds),
+    ungroup: () => {
+      if (groupMenuCapabilities.canUnfold) unfold()
+      else ungroup()
+    },
+    zoomIn: () => {
+      markUserNavigation()
+      void reactFlow.zoomIn({
+        duration: resolveCanvasMotionDuration(CANVAS_MOTION_DURATION.stepZoom, prefersReducedMotion),
+        ease: canvasViewportEase,
+        interpolate: "smooth",
+      })
+    },
+    zoomOut: () => {
+      markUserNavigation()
+      void reactFlow.zoomOut({
+        duration: resolveCanvasMotionDuration(CANVAS_MOTION_DURATION.stepZoom, prefersReducedMotion),
+        ease: canvasViewportEase,
+        interpolate: "smooth",
+      })
+    },
   }
+  shortcutCanRunRef.current = (command) => canRunCanvasShortcutCommand(command, shortcutActions, readOnly)
+  shortcutRunRef.current = (command) => runCanvasShortcutCommand(command, shortcutActions, readOnly)
   const controller = useMemo(
     () => ({
       document: history.document,
@@ -5218,7 +5222,6 @@ function CanvasEditorContent(
                       interpolate: "smooth",
                     })
                   }}
-                  onKeyDown={handleCanvasKeyDown}
                   onPaste={onCanvasPaste}
                   onPointerCancelCapture={() => {
                     clearPointerMultiSelection()

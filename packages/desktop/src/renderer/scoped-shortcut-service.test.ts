@@ -34,7 +34,8 @@ function press(
     bubbles: true,
     cancelable: true,
     ctrlKey: chord.ctrl,
-    key: chord.key,
+    code: chord.code,
+    key: chord.key ?? "",
     metaKey: chord.meta,
     repeat: options.repeat,
     shiftKey: chord.shift,
@@ -358,5 +359,169 @@ test("does not leak a focus scope shortcut into editable descendants without an 
 
   expect(blocked).not.toHaveBeenCalled()
   expect(allowed).toHaveBeenCalledTimes(1)
+  cleanup()
+})
+
+test("routes matching descendants to the highest-priority logical scope on the same root", async () => {
+  const { cleanup, document, service, window } = setup()
+  const canvas = document.createElement("div")
+  const editor = document.createElement("div")
+  editor.contentEditable = "plaintext-only"
+  editor.dataset.canvasShortcuts = "ignore"
+  canvas.append(editor)
+  document.body.append(canvas)
+  service.registerScope({ element: canvas as unknown as HTMLElement, id: "canvas" })
+  service.registerScope({
+    element: canvas as unknown as HTMLElement,
+    id: "interaction",
+    matchesTarget: (target) => Boolean(target.closest("[data-canvas-shortcuts='ignore']")),
+    priority: 100,
+  })
+  service.registerScope({
+    element: canvas as unknown as HTMLElement,
+    id: "node-input",
+    matchesTarget: (target) => Boolean(target.closest("[contenteditable]")),
+    priority: 200,
+  })
+  const canvasAction = mock(() => undefined)
+  const interactionAction = mock(() => undefined)
+  const nodeInputAction = mock(() => undefined)
+  for (const [id, onTrigger] of [
+    ["canvas", canvasAction],
+    ["interaction", interactionAction],
+    ["node-input", nodeInputAction],
+  ] as const) {
+    service.registerFeature({ allowInEditable: true, chords: [{ key: "k", meta: true }], id, onTrigger, scopeId: id })
+  }
+
+  editor.focus()
+  await Promise.resolve()
+  press(window, editor, { key: "k", meta: true })
+
+  expect(nodeInputAction).toHaveBeenCalledTimes(1)
+  expect(interactionAction).not.toHaveBeenCalled()
+  expect(canvasAction).not.toHaveBeenCalled()
+  cleanup()
+})
+
+test("keeps application fallback in body portals without treating body itself as stable focus", async () => {
+  const { cleanup, document, service, window } = setup()
+  const canvas = document.createElement("div")
+  const canvasButton = document.createElement("button")
+  const portalButton = document.createElement("button")
+  canvas.append(canvasButton)
+  document.body.append(canvas, portalButton)
+  service.registerScope({ element: document.body as unknown as HTMLElement, id: "application", kind: "application" })
+  service.registerScope({ element: canvas as unknown as HTMLElement, id: "canvas" })
+  const application = mock(() => undefined)
+  const release = mock(() => undefined)
+  service.registerFeature({
+    allowInEditable: true,
+    chords: [{ key: "k", meta: true }],
+    id: "commands",
+    onTrigger: application,
+    scopeId: "application",
+  })
+  service.registerFeature({
+    chords: [{ key: "Shift", meta: true, shift: true }],
+    consume: false,
+    id: "drag",
+    onRelease: release,
+    onTrigger: () => undefined,
+    scopeId: "canvas",
+    trigger: "hold",
+  })
+
+  portalButton.focus()
+  await Promise.resolve()
+  press(window, portalButton, { key: "k", meta: true })
+  expect(application).toHaveBeenCalledTimes(1)
+
+  canvasButton.focus()
+  await Promise.resolve()
+  press(window, canvasButton, { key: "Shift", meta: true, shift: true })
+  canvasButton.blur()
+  await Promise.resolve()
+  expect(document.activeElement).toBe(document.body)
+  expect(release).not.toHaveBeenCalled()
+  await new Promise<void>((resolve) => window.requestAnimationFrame(() => resolve()))
+  expect(release).toHaveBeenCalledTimes(1)
+  cleanup()
+})
+
+test("releases a code-based hold on its own keyup and clears a hold whose trigger throws", async () => {
+  const { cleanup, document, service, window } = setup()
+  const canvas = document.createElement("div")
+  const target = document.createElement("button")
+  canvas.append(target)
+  document.body.append(canvas)
+  service.registerScope({ element: canvas as unknown as HTMLElement, id: "canvas" })
+  const release = mock(() => undefined)
+  service.registerFeature({
+    chords: [{ code: "Space" }],
+    id: "space",
+    onRelease: release,
+    onTrigger: () => undefined,
+    scopeId: "canvas",
+    trigger: "hold",
+  })
+  target.focus()
+  await Promise.resolve()
+  press(window, target, { code: "Space" })
+  window.dispatchEvent(new window.KeyboardEvent("keyup", { code: "Space", key: " " }))
+  expect(release).toHaveBeenCalledTimes(1)
+
+  service.registerFeature({
+    chords: [{ key: "x" }],
+    id: "throwing-hold",
+    onRelease: release,
+    onTrigger: () => {
+      throw new Error("boom")
+    },
+    scopeId: "canvas",
+    trigger: "hold",
+  })
+  let thrown: unknown
+  window.addEventListener("error", (event) => {
+    event.preventDefault()
+    thrown = (event as unknown as ErrorEvent).error
+  })
+  press(window, target, { key: "x" })
+  expect(thrown).toBeInstanceOf(Error)
+  expect((thrown as Error).message).toBe("boom")
+  expect(release).toHaveBeenCalledTimes(2)
+  cleanup()
+})
+
+test("skips a disabled winner and routes the next registered conflict", async () => {
+  const { cleanup, document, service, window } = setup()
+  const scope = document.createElement("div")
+  const target = document.createElement("button")
+  scope.append(target)
+  document.body.append(scope)
+  service.registerScope({ element: scope as unknown as HTMLElement, id: "canvas" })
+  const disabled = mock(() => undefined)
+  const fallback = mock(() => undefined)
+  service.registerFeature({
+    chords: [{ key: "d", meta: true }],
+    id: "disabled",
+    isEnabled: () => false,
+    onTrigger: disabled,
+    priority: 10,
+    scopeId: "canvas",
+  })
+  service.registerFeature({
+    chords: [{ key: "d", meta: true }],
+    id: "fallback",
+    onTrigger: fallback,
+    scopeId: "canvas",
+  })
+  target.focus()
+  await Promise.resolve()
+
+  press(window, target, { key: "d", meta: true })
+
+  expect(disabled).not.toHaveBeenCalled()
+  expect(fallback).toHaveBeenCalledTimes(1)
   cleanup()
 })

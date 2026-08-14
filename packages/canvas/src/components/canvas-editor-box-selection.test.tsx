@@ -794,17 +794,13 @@ test("projects host undo and redo of a plugin creation group without owning rend
       edgeIds: ["plugin-created-edge"],
       nodes: [{ id: source.id }, { id: created.id }],
     })
-    const canvas = container.querySelector<HTMLElement>(".convax-canvas")
-
     await act(async () => {
-      canvas?.dispatchEvent(new KeyboardEvent("keydown", { bubbles: true, key: "z", metaKey: true }))
-      await Promise.resolve()
+      await session.undo()
     })
     expect(readReactFlowProjection?.()).toMatchObject({ edgeIds: [], nodes: [{ id: source.id }] })
 
     await act(async () => {
-      canvas?.dispatchEvent(new KeyboardEvent("keydown", { bubbles: true, key: "z", metaKey: true, shiftKey: true }))
-      await Promise.resolve()
+      await session.redo()
     })
     expect(readReactFlowProjection?.()).toMatchObject({
       edgeIds: ["plugin-created-edge"],

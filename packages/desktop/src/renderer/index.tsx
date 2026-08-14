@@ -12,6 +12,7 @@ import {
   type CanvasSelectionAction,
   type CanvasSelectionActionContext,
   type CanvasSelectionDragSource,
+  type CanvasShortcutCommand,
 } from "@convax/canvas"
 import { ProjectController, ProjectSidebar } from "@convax/project"
 import { ProjectFilesController, type ProjectEntry, type ProjectFilePreviewPurpose } from "@convax/project-files"
@@ -98,6 +99,7 @@ import {
   canvasCardGenerationReferenceConstraint,
 } from "./canvas-card-conversation-panel"
 import { createCanvasMediaSelectionDragSource } from "./canvas-media-drag-source"
+import { createCanvasShortcutFeatures } from "./canvas-shortcut-features"
 import { openDesktopCanvasRendererSession, type DesktopCanvasRendererSession } from "./canvas-collaboration-client"
 import { mountCanvasSessionWithBackgroundReconcile } from "./canvas-session-mount"
 import { createCanvasRendererRequestHandler } from "./canvas-renderer-request-handler"
@@ -128,8 +130,8 @@ import {
   type MediaOperationInput,
 } from "./media-operation-selection-action"
 import { MediaOperationDialog } from "./media-operation-dialog"
-import { ScopedShortcutService, type ShortcutChord } from "./scoped-shortcut-service"
-import { useShortcutFeature, useShortcutScope } from "./use-scoped-shortcuts"
+import { isEditableShortcutTarget, ScopedShortcutService, type ShortcutChord } from "./scoped-shortcut-service"
+import { useShortcutFeature, useShortcutFeatures, useShortcutScope } from "./use-scoped-shortcuts"
 import { preloadMarketplaceProjection } from "./marketplace-projection-cache"
 import {
   canRunPluginMaterialization,
@@ -200,7 +202,13 @@ const sidebarCollapseReopenDelayMs = 1_000
 const applicationShortcutScopeId = "desktop.application"
 const workspaceShortcutScopeId = "desktop.workspace"
 const canvasShortcutScopeId = "desktop.canvas"
+const canvasInteractionShortcutScopeId = "desktop.canvas.interaction"
+const canvasNodeInputShortcutScopeId = "desktop.canvas.node-input"
 const conversationShortcutScopeId = "desktop.conversation"
+
+function isCanvasIgnoredShortcutTarget(target: Element) {
+  return Boolean(target.closest("[data-canvas-shortcuts='ignore']"))
+}
 
 function primaryShortcutChord(key: string, shift = false): ShortcutChord {
   return window.convax.platform === "darwin" ? { key, meta: true, shift } : { ctrl: true, key, shift }
@@ -231,7 +239,33 @@ function App() {
   })
   const workspaceShortcutScopeRef = useShortcutScope(shortcutService, { id: workspaceShortcutScopeId })
   const canvasShortcutScopeRef = useShortcutScope(shortcutService, { id: canvasShortcutScopeId })
+  const canvasInteractionShortcutScopeRef = useShortcutScope(shortcutService, {
+    id: canvasInteractionShortcutScopeId,
+    matchesTarget: isCanvasIgnoredShortcutTarget,
+    priority: 100,
+  })
+  const canvasNodeInputShortcutScopeRef = useShortcutScope(shortcutService, {
+    id: canvasNodeInputShortcutScopeId,
+    matchesTarget: isEditableShortcutTarget,
+    priority: 200,
+  })
+  const mountCanvasShortcutScopes = useCallback(
+    (element: HTMLElement | null) => {
+      canvasShortcutScopeRef(element)
+      canvasInteractionShortcutScopeRef(element)
+      canvasNodeInputShortcutScopeRef(element)
+    },
+    [canvasInteractionShortcutScopeRef, canvasNodeInputShortcutScopeRef, canvasShortcutScopeRef],
+  )
   const conversationShortcutScopeRef = useShortcutScope(shortcutService, { id: conversationShortcutScopeId })
+  useLayoutEffect(() => {
+    const handle = shortcutService.registerScope({
+      element: document.body,
+      id: applicationShortcutScopeId,
+      kind: "application",
+    })
+    return () => handle.dispose()
+  }, [shortcutService])
   useEffect(() => () => shortcutService.dispose(), [shortcutService])
   const developmentIdentity = useMemo(() => rendererDevelopmentIdentity(window.location.href), [])
   const [notification, setNotification] = useState<CanvasNotification | null>(null)
@@ -1555,16 +1589,20 @@ function App() {
         }
       : null,
   )
-  useShortcutFeature(
+  const runCanvasShortcut = (command: CanvasShortcutCommand) => {
+    canvasEditorRef.current?.runShortcut(command)
+  }
+  useShortcutFeatures(
     shortcutService,
     canvasShortcutsEnabled
-      ? {
-          chords: [primaryShortcutChord("f")],
-          id: "canvas.search",
-          onTrigger: () => canvasEditorRef.current?.openSearch(),
+      ? createCanvasShortcutFeatures({
+          canRun: (command) => canvasEditorRef.current?.canRunShortcut(command) === true,
+          platform: window.convax.platform,
+          run: runCanvasShortcut,
           scopeId: canvasShortcutScopeId,
-        }
-      : null,
+          setSpacePanningHeld: (held) => canvasEditorRef.current?.setSpacePanningShortcutHeld(held),
+        })
+      : [],
   )
   useShortcutFeature(
     shortcutService,
@@ -2355,7 +2393,7 @@ function App() {
                     {projectSidebar}
                   </ProjectSidebarShell>
                 ) : null}
-                <section className="workspace-canvas-region relative min-w-0 flex-1" ref={canvasShortcutScopeRef}>
+                <section className="workspace-canvas-region relative min-w-0 flex-1" ref={mountCanvasShortcutScopes}>
                   {workbenchSnapshot.surface.kind === "empty" && workbenchSnapshot.surface.reason === "no-project" ? (
                     <ProjectRegistryLoadingState locale={locale} reducedMotion={appearancePreferences.reducedMotion} />
                   ) : workbenchSnapshot.surface.kind === "file" ? (

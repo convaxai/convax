@@ -100,7 +100,12 @@ contract and its routed references.
   and a sustained outside-root focus releases the held feature. A fresh non-repeat matching keydown releases and replaces a stale held
   feature when a native operating-system loop swallowed keyup; repeat events never
   restart it. Do not add parallel global listeners for application/workspace/Canvas
-  command routing or move DOM focus into Workbench.
+  command routing or move DOM focus into Workbench. Register the complete product
+  Canvas chord inventory in Renderer and invoke only Canvas's typed shortcut-command
+  or held-state ports. Prioritized target-matched scopes isolate node inputs and
+  Canvas interaction surfaces. Register `document.body` only as an additional
+  application Portal root; direct body/document-element focus remains ambiguous and
+  never preserves Canvas scope. Native copy/paste stays on browser clipboard events.
 - Main's Canvas application service is authoritative. Mounted UI submits closed
   commands through its originating session lease, installs the returned projection
   and accepted frame marker, and queries only for unknown/remote invalidation; it never saves a complete snapshot,
