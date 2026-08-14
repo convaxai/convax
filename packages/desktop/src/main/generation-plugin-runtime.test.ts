@@ -399,6 +399,14 @@ function sameFakeIdentity(
   )
 }
 
+function deferred<Value>() {
+  let resolve!: (value: Value) => void
+  const promise = new Promise<Value>((resolvePromise) => {
+    resolve = resolvePromise
+  })
+  return { promise, resolve }
+}
+
 class FakeMcpClient implements GenerationPluginMcpClient {
   readonly calls: Array<{
     input: Record<string, unknown>
@@ -410,6 +418,7 @@ class FakeMcpClient implements GenerationPluginMcpClient {
   closed = 0
   closeAndWait?: (force?: boolean) => Promise<void>
   readonly forcedCloses: boolean[] = []
+  readonly listToolResults: Array<Promise<readonly McpToolDefinition[]> | readonly McpToolDefinition[]> = []
   tools: McpToolDefinition[] = [{ inputSchema: { type: "object" }, name: "generate.image" }]
   result: McpToolCallResult = { content: [{ text: "done", type: "text" }] }
   readonly toolErrors = new Map<string, Error>()
@@ -469,7 +478,7 @@ class FakeMcpClient implements GenerationPluginMcpClient {
 
   async listTools(signal?: AbortSignal) {
     this.listSignals.push(signal)
-    return this.tools
+    return (await this.listToolResults.shift()) ?? this.tools
   }
 }
 
@@ -671,6 +680,71 @@ describe("GenerationPluginRuntime", () => {
       "llm.gateway.start",
       "service.authorization.complete",
     ])
+    expect(clients[0]!.closed).toBe(0)
+  })
+
+  test("keeps service authorization alive while dynamic generation models are unavailable before login", async () => {
+    const combined = mutablePlugin(llmPlugin())
+    combined.contributes.service = { actions: ["authorize"] }
+    combined.contributes.generation = {
+      models: [{ name: "Image", tool: "generate.image" }],
+      tools: [
+        {
+          acceptedInputs: [],
+          description: "Generate an image",
+          id: "generate.image",
+          output: "image",
+          title: "Image",
+        },
+      ],
+    }
+    const { clients, runtime } = setup(
+      [combined],
+      ["llm.gateway.start", "service.authorize", "service.authorization.complete"],
+    )
+    const authorization = await runtime.callService(combined.id, "authorize")
+    const expected = (await runtime.listTools()).filter(
+      (tool) => tool.pluginId === combined.id && tool.kind === "model",
+    )
+
+    expect(await runtime.inspectModelCatalog(expected)).toEqual([])
+    expect(clients[0]!.closed).toBe(0)
+
+    await authorization.completeAuthorization!({
+      authorization_id: "request_0123456789abcdef",
+      schema: "convax.plugin-service-external-authorization-completion/1",
+    })
+    expect(clients[0]!.calls.map(({ name }) => name)).toEqual(["service.authorize", "service.authorization.complete"])
+    expect(clients[0]!.closed).toBe(0)
+  })
+
+  test("does not let an older tools/list response overwrite a newer dynamic Service catalog", async () => {
+    const combined = mutablePlugin(declarativeGenerationPlugin())
+    const { clients, runtime } = setup([combined], [runtimeModelDefinition()])
+    const expected = (await runtime.listTools()).filter(
+      (tool) => tool.pluginId === combined.id && tool.kind === "model",
+    )
+    expect(await runtime.inspectModelCatalog(expected)).toHaveLength(2)
+    const older = deferred<readonly McpToolDefinition[]>()
+    const newer = deferred<readonly McpToolDefinition[]>()
+    clients[0]!.listToolResults.push(older.promise, newer.promise)
+
+    const olderInspection = runtime.inspectModelCatalog(expected)
+    const newerInspection = runtime.inspectModelCatalog(expected)
+    newer.resolve([runtimeModelDefinition([{ id: "vendor/newer:image", name: "Newer Image" }])])
+    await expect(newerInspection).resolves.toMatchObject([{ summary: { modelName: "Newer Image" } }])
+    older.resolve([
+      {
+        inputSchema: {
+          additionalProperties: false,
+          properties: {},
+          type: "object",
+        },
+        name: "service.status",
+      },
+    ])
+    await expect(olderInspection).rejects.toThrow("changed while its model catalog was listed")
+    expect(clients).toHaveLength(1)
     expect(clients[0]!.closed).toBe(0)
   })
 
@@ -2141,9 +2215,15 @@ describe("GenerationPluginRuntime", () => {
     expect(runtime.disposePlugin("image-tools")).toBe(false)
 
     await runtime.callTool("image-tools/generate.image", {})
-    runtime.dispose()
+    clients[1].closeAndWait = async (force) => clients[1].close(force)
+    expect(await runtime.disposePluginAndWait("image-tools")).toBe(true)
     expect(clients[1].closed).toBe(1)
     expect(clients[1].forcedCloses).toEqual([true])
+
+    await runtime.callTool("image-tools/generate.image", {})
+    runtime.dispose()
+    expect(clients[2].closed).toBe(1)
+    expect(clients[2].forcedCloses).toEqual([true])
     runtime.dispose()
     expect((await rejection(runtime.listTools())).message).toContain("disposed")
   })

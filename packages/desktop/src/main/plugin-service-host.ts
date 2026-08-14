@@ -131,7 +131,7 @@ export class PluginServiceHost {
       | PluginServiceBrowserAuthorizationHost,
     private readonly externalAuthorization?: PluginServiceExternalAuthorizationBroker,
     private readonly checkoutNavigation?: PluginServiceCheckoutNavigation,
-    private readonly onServiceMutation?: () => Promise<void> | void,
+    private readonly onServiceMutation?: (pluginId: string) => Promise<void> | void,
     private readonly onExternalAuthorizationComplete?: () => Promise<void> | void,
   ) {}
 
@@ -158,15 +158,17 @@ export class PluginServiceHost {
   }
 
   async authorize(pluginId: string, signal?: AbortSignal) {
-    return this.#withServiceMutationNotification(() => this.#callAuthorization(pluginId, "authorize", signal))
+    return this.#withServiceMutationNotification(pluginId, () => this.#callAuthorization(pluginId, "authorize", signal))
   }
 
   async reauthorize(pluginId: string, signal?: AbortSignal) {
-    return this.#withServiceMutationNotification(() => this.#callAuthorization(pluginId, "reauthorize", signal))
+    return this.#withServiceMutationNotification(pluginId, () =>
+      this.#callAuthorization(pluginId, "reauthorize", signal),
+    )
   }
 
   async cancelAuthorization(pluginId: string, signal?: AbortSignal) {
-    return this.#withServiceMutationNotification(() =>
+    return this.#withServiceMutationNotification(pluginId, () =>
       this.#withExclusiveControl(pluginId, signal, async (controlSignal) => {
         await this.#discardPlugin(pluginId)
         return this.#call(pluginId, "authorization.cancel", controlSignal)
@@ -175,7 +177,7 @@ export class PluginServiceHost {
   }
 
   async signOut(pluginId: string, signal?: AbortSignal) {
-    return this.#withServiceMutationNotification(() =>
+    return this.#withServiceMutationNotification(pluginId, () =>
       this.#withExclusiveControl(pluginId, signal, async (controlSignal) => {
         await this.#discardPlugin(pluginId)
         return this.#call(pluginId, "sign_out", controlSignal)
@@ -183,19 +185,19 @@ export class PluginServiceHost {
     )
   }
 
-  async #withServiceMutationNotification<T>(operation: () => Promise<T>) {
+  async #withServiceMutationNotification<T>(pluginId: string, operation: () => Promise<T>) {
     try {
       return await operation()
     } finally {
       // A sidecar or remote service may have committed a mutation before a
       // transport, parsing, cleanup, or final status failure became visible.
-      this.#notifyServiceMutation()
+      this.#notifyServiceMutation(pluginId)
     }
   }
 
-  #notifyServiceMutation() {
+  #notifyServiceMutation(pluginId: string) {
     try {
-      void Promise.resolve(this.onServiceMutation?.()).catch((error) => {
+      void Promise.resolve(this.onServiceMutation?.(pluginId)).catch((error) => {
         console.warn("Could not refresh host state after a Plugin service mutation", error)
       })
     } catch (error) {
@@ -204,7 +206,7 @@ export class PluginServiceHost {
   }
 
   async checkout(pluginId: string, planKey: string, signal?: AbortSignal) {
-    return this.#withServiceMutationNotification(() =>
+    return this.#withServiceMutationNotification(pluginId, () =>
       this.#withExclusiveControl(pluginId, signal, async (controlSignal) => {
         if (!this.checkoutNavigation) throw new Error("Plugin service Checkout navigation is unavailable")
         const before = await this.#installed(pluginId)

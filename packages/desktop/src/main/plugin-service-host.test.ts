@@ -67,7 +67,7 @@ describe("PluginServiceHost", () => {
       listServices: async () => [checkoutSummary],
     }
     const opened: string[] = []
-    const onServiceMutation = mock(async () => undefined)
+    const onServiceMutation = mock(async (_pluginId: string) => undefined)
     const host = new PluginServiceHost(
       runtime,
       undefined,
@@ -84,6 +84,7 @@ describe("PluginServiceHost", () => {
     expect(calls).toEqual([{ call: "checkout", input: { planKey: "pro" } }, { call: "status" }])
     expect(opened).toEqual(["https://checkout.example.test/session/123?provider=secure"])
     expect(onServiceMutation).toHaveBeenCalledTimes(1)
+    expect(onServiceMutation).toHaveBeenCalledWith("account-tools")
   })
 
   test("returns only a validated structured status and ignores raw MCP text", async () => {
@@ -133,7 +134,7 @@ describe("PluginServiceHost", () => {
 
   test("maps host methods to fixed actions and never accepts an action payload", async () => {
     const calls: Array<{ call: "status" | "usage" | WebPluginServiceAction; pluginId: string }> = []
-    const onServiceMutation = mock(async () => undefined)
+    const onServiceMutation = mock(async (_pluginId: string) => undefined)
     const runtime: PluginServiceToolRuntime = {
       async callService(pluginId, call) {
         calls.push({ call, pluginId })
@@ -150,6 +151,7 @@ describe("PluginServiceHost", () => {
       { call: "sign_out", pluginId: "account-tools" },
     ])
     expect(onServiceMutation).toHaveBeenCalledTimes(1)
+    expect(onServiceMutation).toHaveBeenCalledWith("account-tools")
   })
 
   test("does not report a completed service mutation as failed when Agent refresh fails", async () => {
