@@ -1478,6 +1478,9 @@ describe("built-in node toolbar visibility", () => {
     const preparing = render(selection(["node-a"]), "preparing")
     expect(preparing).toContain('data-canvas-selection-drag-state="preparing"')
     expect(preparing).toContain('draggable="false"')
+    expect(preparing).toMatch(
+      /class="[^"]*\bnodrag\b[^"]*\bcursor-wait\b[^"]*" data-canvas-selection-drag-state="preparing"/,
+    )
     expect(preparing).toContain('role="status"')
     expect(preparing).toContain("Preparing media")
 

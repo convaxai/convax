@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, type RefCallback } from "react"
+import { flushSync } from "react-dom"
 
 import { type ShortcutRegistration, type ShortcutScopeKind, ScopedShortcutService } from "./scoped-shortcut-service"
 
@@ -38,7 +39,7 @@ function bindShortcutRegistration(
         kind: "hold",
         onHold: (event) => {
           const latest = current()
-          if (latest?.kind === "hold") latest.onHold(event)
+          if (latest?.kind === "hold") flushSync(() => latest.onHold(event))
         },
         onRelease: () => {
           const latest = current()
@@ -52,7 +53,7 @@ function bindShortcutRegistration(
         kind: "gesture-modifier",
         onActivate: (event) => {
           const latest = current()
-          if (latest?.kind === "gesture-modifier") latest.onActivate(event)
+          if (latest?.kind === "gesture-modifier") flushSync(() => latest.onActivate(event))
         },
         onRelease: () => {
           const latest = current()

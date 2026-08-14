@@ -1,6 +1,6 @@
 import { expect, mock, test } from "bun:test"
 import { Window } from "happy-dom"
-import { act } from "react"
+import { act, useState } from "react"
 import { createRoot, type Root } from "react-dom/client"
 
 import { ScopedShortcutService, type GestureModifier } from "./scoped-shortcut-service"
@@ -46,6 +46,117 @@ function Harness({ registration, service }: { registration: GestureModifier | nu
   useShortcutFeature(service, registration)
   return <button type="button">Canvas</button>
 }
+
+function ReactiveGestureHarness({ service }: { service: ScopedShortcutService }) {
+  const [held, setHeld] = useState(false)
+  useShortcutFeature(service, {
+    chords: [{ key: "Meta", meta: true, shift: true }],
+    id: "canvas.drag-media-to-other-apps",
+    kind: "gesture-modifier",
+    onActivate: () => setHeld(true),
+    onRelease: () => setHeld(false),
+    scopeId: "canvas",
+  })
+  return (
+    <button data-gesture-held={held ? "true" : "false"} type="button">
+      Canvas
+    </button>
+  )
+}
+
+function ReactiveHoldHarness({ service }: { service: ScopedShortcutService }) {
+  const [held, setHeld] = useState(false)
+  useShortcutFeature(service, {
+    chords: [{ code: "Space" }],
+    id: "canvas.space-pan",
+    kind: "hold",
+    onHold: () => setHeld(true),
+    onRelease: () => setHeld(false),
+    scopeId: "canvas",
+  })
+  return (
+    <button data-hold-active={held ? "true" : "false"} type="button">
+      Canvas
+    </button>
+  )
+}
+
+test("commits gesture modifier presentation before the activating keydown returns", async () => {
+  const testWindow = installTestWindow()
+  const service = new ScopedShortcutService({
+    document: document as unknown as Document,
+    window: window as unknown as globalThis.Window,
+  })
+  const scope = service.registerScope({ element: document.body, id: "canvas", kind: "application" })
+  const container = document.createElement("div")
+  document.body.append(container)
+  const root: Root = createRoot(container)
+
+  try {
+    await act(async () => root.render(<ReactiveGestureHarness service={service} />))
+    const button = container.querySelector("button")!
+    button.focus()
+    let heldWhenKeydownReturned: string | undefined
+    act(() => {
+      button.dispatchEvent(
+        new testWindow.window.KeyboardEvent("keydown", {
+          bubbles: true,
+          cancelable: true,
+          key: "Meta",
+          metaKey: true,
+          shiftKey: true,
+        }) as unknown as Event,
+      )
+      heldWhenKeydownReturned = button.dataset.gestureHeld
+    })
+
+    expect(heldWhenKeydownReturned).toBe("true")
+  } finally {
+    await act(async () => root.unmount())
+    scope.dispose()
+    service.dispose()
+    container.remove()
+    await testWindow.restore()
+  }
+})
+
+test("commits held shortcut presentation before the activating keydown returns", async () => {
+  const testWindow = installTestWindow()
+  const service = new ScopedShortcutService({
+    document: document as unknown as Document,
+    window: window as unknown as globalThis.Window,
+  })
+  const scope = service.registerScope({ element: document.body, id: "canvas", kind: "application" })
+  const container = document.createElement("div")
+  document.body.append(container)
+  const root: Root = createRoot(container)
+
+  try {
+    await act(async () => root.render(<ReactiveHoldHarness service={service} />))
+    const button = container.querySelector("button")!
+    button.focus()
+    let heldWhenKeydownReturned: string | undefined
+    act(() => {
+      button.dispatchEvent(
+        new testWindow.window.KeyboardEvent("keydown", {
+          bubbles: true,
+          cancelable: true,
+          code: "Space",
+          key: " ",
+        }) as unknown as Event,
+      )
+      heldWhenKeydownReturned = button.dataset.holdActive
+    })
+
+    expect(heldWhenKeydownReturned).toBe("true")
+  } finally {
+    await act(async () => root.unmount())
+    scope.dispose()
+    service.dispose()
+    container.remove()
+    await testWindow.restore()
+  }
+})
 
 test("releases an active gesture modifier when its hook registration is removed", async () => {
   const testWindow = installTestWindow()

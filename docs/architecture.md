@@ -2291,7 +2291,10 @@ Space panning is a consuming `HoldShortcut`, while native drag is a non-consumin
 union: a command runs once and consumes its winning keydown, a hold owns a consuming
 active/release lifecycle, and a gesture modifier only projects transient state for a
 later pointer gesture without calling `preventDefault` or stopping native event
-delivery. Canvas installs no
+delivery. Renderer synchronously commits hold and gesture activation before the
+activating `keydown` returns, so pointer input from the same physical gesture cannot
+observe a stale Canvas presentation. Release remains teardown-safe and is not a
+forced nested React commit. Canvas installs no
 parallel command or Space Window listener and never infers activation from one.
 Entering a nested conversation or node-input scope, leaving Canvas focus, releasing
 a required modifier, pressing an unrelated key, window focus loss, document
@@ -2309,7 +2312,10 @@ is active, and prepares a fresh one-use source after each completed native drag.
 Escape, explicit exit, scope changes and read-only transitions leave the mode.
 Selection changes synchronously update the live view snapshot and replace the
 prepared immutable multi-selection. Preparation is asynchronous and abortable;
-`dragstart` only consumes an already prepared source synchronously. Renderer does
+the synchronously armed Canvas presentation disables in-Canvas movement and exposes
+its waiting state while preparation is pending, and `dragstart` only consumes an
+already prepared source synchronously. A pointerdown during preparation must not
+fall through to React Flow node movement. Renderer does
 not depend solely on macOS redelivering the
 preceding `keyup`: if a hold remains logically active and a fresh non-repeat
 matching `keydown` arrives, the scoped shortcut service releases the stale hold and

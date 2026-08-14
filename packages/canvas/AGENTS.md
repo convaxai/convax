@@ -243,8 +243,11 @@ Canvas owns document and editor semantics independently of Project and Agent.
   rearms the current immutable selection. Modifier-only compatibility gestures must
   be explicit host opt-ins. The host focus router owns key listeners, scope/conflict
   arbitration, and held-key release, and forwards only held/released state through
-  the Canvas editor handle. Canvas must not infer activation from window/document
-  events. React Flow modifier behavior is derived from the initiating
+  the Canvas editor handle. The host must synchronously project activation before
+  its activating keydown returns. While source preparation is pending, Canvas
+  immediately disables in-Canvas movement for the armed selection and exposes the
+  preparing state; native `dragstart` remains gated on a ready source. Canvas must
+  not infer activation from window/document events. React Flow modifier behavior is derived from the initiating
   pointer event, and Space panning is scoped to a focused Canvas with an exact
   unmodified key. Host/native paths and ticket publication remain outside Canvas.
 

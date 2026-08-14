@@ -54,7 +54,10 @@ or durable domain authority.
   registration contract is `CommandShortcut | HoldShortcut | GestureModifier`.
   Commands consume one-shot keydowns, holds consume and own release, and gesture
   modifiers never consume the native event because dragstart or another later
-  pointer gesture observes their transient state. The exact
+  pointer gesture observes their transient state. React integration must
+  synchronously commit hold/gesture activation before the activating `keydown`
+  returns; same-gesture pointer input must never observe the previous presentation
+  state. Release still has to remain valid during scope disposal and React teardown. The exact
   focused scope switches the active feature set, application scope is the only
   fallback, and nested conversation/node-input scopes isolate Canvas commands.
   Conflicts use explicit priority then first registration, while scope change,
@@ -158,7 +161,10 @@ or durable domain authority.
   the Canvas editor handle without consuming the native modifier event. It cannot
   activate from a conversation, node input, inactive scope, or parallel Canvas-owned
   window listener. If macOS swallows keyup during a native drag, a fresh non-repeat
-  matching keydown releases the stale logical hold before arming the new one; key
+  matching keydown releases the stale logical hold before arming the new one. The
+  armed presentation must be committed before that keydown returns; asynchronous
+  ticket preparation may continue afterward, but the next pointerdown must already
+  see Canvas movement disabled. Key
   repeat does not restart it. Top-level Window blur releases the shortcut
   immediately; descendant DOM blur and a transient pointer-created body focus gap
   inside Canvas do not. Main and preload do not own keyboard-state cleanup.

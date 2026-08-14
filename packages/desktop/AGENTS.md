@@ -94,7 +94,10 @@ contract and its routed references.
   `CommandShortcut | HoldShortcut | GestureModifier`: commands consume one winning
   keydown, holds consume and own active/release state, and gesture modifiers never
   consume native key handling because a later pointer gesture observes their
-  transient state. Focus scopes register DOM roots and feature/chord bindings;
+  transient state. The React binding must synchronously commit hold and gesture
+  activation before the activating `keydown` returns, so a pointer event from the
+  same physical gesture cannot observe the previous presentation state; release
+  remains safe across scope and component teardown. Focus scopes register DOM roots and feature/chord bindings;
   the deepest focus scope wins, application features alone may fall back, and one
   deterministic priority/registration-order winner handles a conflict within a
   scope. Scope changes, top-level Window blur, visibility loss, and disposal release
