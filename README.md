@@ -2,12 +2,15 @@
 
 **English** · [简体中文](README-CN.md)
 
-**A visual workspace for human and AI work.** Convax brings real project files, editable canvases, a context-aware Agent, and installable creative tools into one desktop workspace.
+Convax is an open-source visual workspace for human and AI work.
+
+It uses an **everything-is-a-Plugin architecture**, bringing real project files, editable Canvases, a context-aware Agent, and installable creative tools into one desktop workspace.
 
 [Website](https://convax.microvoid.io/) · [GitHub](https://github.com/convaxai/convax) · [Issues](https://github.com/convaxai/convax/issues)
 
-> [!WARNING]
-> **Convax is currently in _Developer Preview_ and evolving rapidly. Breaking changes will happen.** Project data, Plugin contracts, workflows, and other interfaces may change without compatibility guarantees. Keep backups of important work and expect frequent updates.
+## Developer Preview
+
+Convax is currently in Developer Preview and evolving rapidly. Breaking changes will happen.
 
 ![Convax workspace with Project files, an infinite Canvas, and Agent context](docs/images/convax-workspace.jpg)
 

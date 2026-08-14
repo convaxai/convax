@@ -2,12 +2,15 @@
 
 [English](README.md) · **简体中文**
 
-**面向人类与 AI 协作的可视化工作空间。** Convax 把真实项目文件、可持续编辑的画布、理解上下文的 Agent 和可安装的创作工具放进同一个桌面工作空间。
+Convax 是一个面向人类与 AI 协作的开源可视化工作空间。
+
+它采用**一切皆 Plugin**的扩展架构，把真实项目文件、可持续编辑的 Canvas、理解上下文的 Agent 和可安装的创作工具放进同一个桌面工作空间。
 
 [官网](https://convax.microvoid.io/) · [GitHub](https://github.com/convaxai/convax) · [问题反馈](https://github.com/convaxai/convax/issues)
 
-> [!WARNING]
-> **Convax 目前处于 _开发者预览_ 阶段，正在快速迭代。未来将出现破坏兼容性的变更。** Project 数据、Plugin 合同、工作流和其他接口都可能在没有兼容性保证的情况下变化。请备份重要工作，并预期版本会频繁更新。
+## 开发者预览
+
+Convax 目前处于开发者预览阶段，正在快速迭代。未来将出现破坏兼容性的变更。
 
 ![由 Project 文件、无限 Canvas 和 Agent 上下文组成的 Convax 工作区](docs/images/convax-workspace.jpg)
 
