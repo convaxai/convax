@@ -118,6 +118,7 @@ describe("Desktop platform artifacts", () => {
       icon: "resources/icon.png",
     })
     expect(config.win?.icon).toBe("resources/icon.png")
+    expect(config.win).not.toHaveProperty("publisherName")
     expect(config.win?.verifyUpdateCodeSignature).toBe(true)
     expect(config.linux).toMatchObject({ category: "Graphics", icon: "resources/icon.png" })
   })

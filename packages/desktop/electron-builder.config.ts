@@ -125,7 +125,7 @@ export function createElectronBuilderConfig(environment: NodeJS.ProcessEnv = pro
     },
     win: {
       icon: "resources/icon.png",
-      publisherName: windowsPublisherName,
+      ...(windowsPublisherName ? { publisherName: windowsPublisherName } : {}),
       target: ["nsis"],
       verifyUpdateCodeSignature: true,
     },

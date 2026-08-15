@@ -116,3 +116,34 @@ test("publishes only an exact source-qualified Marketplace v2 Plugin artifact", 
     }),
   ).rejects.toThrow("artifact identity")
 })
+
+test("uses the cold-start Skill publication path without touching the ordinary runtime path", async () => {
+  const bytes = zip({
+    "SKILL.md": ["---", "name: canvas-storyboard", "description: Storyboard", "---"].join("\n"),
+  })
+  const installFromFiles = mock(async () => ({ name: "ordinary" }))
+  const installFromFilesAtStartup = mock(async () => ({ name: "canvas-storyboard" }))
+  const installer = new MarketplaceArtifactInstaller({
+    skillManager: { installFromFiles, installFromFilesAtStartup } as never,
+    snapshotInstaller: { install: mock(async () => undefined) } as never,
+  })
+  const item = {
+    compatibility: { convax: ">=0.1.0" },
+    delivery: {
+      kind: "artifact",
+      sha256: createHash("sha256").update(bytes).digest("hex"),
+      size: bytes.byteLength,
+      url: "https://github.com/convaxai/convax-plugins/releases/download/skill-canvas-storyboard-v1.0.0/canvas-storyboard.zip",
+    },
+    id: "canvas-storyboard",
+    kind: "skill",
+    presentation: { name: "Canvas Storyboard" },
+    version: "1.0.0",
+    yanked: false,
+  } as RegistryPackage
+
+  await installer.installVerifiedMarketplaceCandidate({ artifactBytes: bytes, item }, { startup: true })
+
+  expect(installFromFilesAtStartup).toHaveBeenCalledWith(expect.any(Object), "canvas-storyboard")
+  expect(installFromFiles).not.toHaveBeenCalled()
+})

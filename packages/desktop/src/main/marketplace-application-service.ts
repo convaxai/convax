@@ -51,12 +51,13 @@ export interface MarketplaceCapabilityInstallerPort {
       previousVersion?: string
       recoverExistingSkillOnly?: boolean
       replaceExistingSkill?: boolean
+      startup?: boolean
     },
   ): Promise<{ authorizationContractDigest?: string }>
   installBuiltin(
     item: SourceQualifiedItem,
     bytes: Uint8Array,
-    options?: { recoverExistingSkillOnly?: boolean; replaceExistingSkill?: boolean },
+    options?: { recoverExistingSkillOnly?: boolean; replaceExistingSkill?: boolean; startup?: boolean },
   ): Promise<void>
   installLocal(
     item: LocalMarketplacePackage,
@@ -947,7 +948,7 @@ export class MarketplaceApplicationService implements MarketplaceApplicationPort
   async #installCandidate(
     candidate: SourceQualifiedItem,
     mutation: "install" | "update",
-    options: { authorizePluginExecution?: boolean } = {},
+    options: { authorizePluginExecution?: boolean; startup?: boolean } = {},
   ) {
     if (!isStandaloneMarketplaceCandidate(candidate)) {
       throw new Error("Plugin-owned Skills are installed and updated only with their owner Plugin")
@@ -1042,6 +1043,7 @@ export class MarketplaceApplicationService implements MarketplaceApplicationPort
         } else if (prepared.kind === "artifact") {
           const publication = await this.#options.installer.installArtifact(candidate, prepared.prepared, {
             authorizeExecution: authorizePluginExecution,
+            ...(options.startup ? { startup: true } : {}),
             ...(previous ? { previousVersion: previous.version } : {}),
             ...(candidate.kind === "skill" && (mutation === "update" || resuming)
               ? { replaceExistingSkill: true }
@@ -1051,6 +1053,7 @@ export class MarketplaceApplicationService implements MarketplaceApplicationPort
           publishedAuthorizationContractDigest = publication.authorizationContractDigest
         } else if (prepared.kind === "builtin") {
           await this.#options.installer.installBuiltin(candidate, prepared.bytes, {
+            ...(options.startup ? { startup: true } : {}),
             replaceExistingSkill: candidate.kind === "skill" && (mutation === "update" || resuming),
             recoverExistingSkillOnly: candidate.kind === "skill" && resuming && previous === null,
           })
@@ -1845,7 +1848,7 @@ export class MarketplaceApplicationService implements MarketplaceApplicationPort
       try {
         const state = await this.#options.state.read()
         if (state.installations.some((entry) => identityKey(entry) === identityKey(item))) continue
-        await this.#installCandidate(item, "install")
+        await this.#installCandidate(item, "install", { startup: true })
       } catch (error) {
         failures.push(error)
       }
@@ -1874,7 +1877,7 @@ export class MarketplaceApplicationService implements MarketplaceApplicationPort
         if (removed) continue
         const installed = state.installations.find((entry) => identityKey(entry) === identityKey(item))
         if (!installed) {
-          await this.#installCandidate(item, "install")
+          await this.#installCandidate(item, "install", { startup: true })
         } else if (installed.sourceKey !== item.sourceKey || installed.version !== item.version) {
           continue
         }

@@ -22,7 +22,7 @@ export interface MarketplaceArtifactInstallerOptions {
   beforePluginPublish?(input: { pluginId: string; sourceIdentity: string }): Promise<void> | void
   deferExecutionAuthorization?: boolean
   platform?: NodeJS.Platform
-  skillManager: Pick<DesktopSkillManager, "installFromFiles">
+  skillManager: Pick<DesktopSkillManager, "installFromFiles" | "installFromFilesAtStartup">
   snapshotInstaller: Pick<PluginSnapshotInstaller, "install">
 }
 
@@ -69,6 +69,7 @@ export class MarketplaceArtifactInstaller {
     options: {
       deferExecutionAuthorization?: boolean
       expectedInstalledVersion?: string
+      startup?: boolean
       recoverExistingSkillOnly?: boolean
       replaceExistingSkill?: boolean
     } = {},
@@ -85,6 +86,12 @@ export class MarketplaceArtifactInstaller {
     const files = unpackSafeZip(candidate.artifactBytes)
     if (item.kind === "skill") {
       if (item.ownerPluginId) throw new Error(`Skill is provided by Plugin ${item.ownerPluginId}`)
+      if (options.startup) {
+        if (options.replaceExistingSkill || options.recoverExistingSkillOnly) {
+          throw new Error("Cold-start Skill provisioning cannot replace an existing installation")
+        }
+        return this.#skillManager.installFromFilesAtStartup(files, item.id)
+      }
       return this.#skillManager.installFromFiles(
         files,
         undefined,
