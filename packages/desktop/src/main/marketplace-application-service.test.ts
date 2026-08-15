@@ -370,16 +370,19 @@ test("startup provisioning installs every missing Builtin member and the exact O
     version: "1.0.0",
   }
   const installed: string[] = []
+  const startupModes: boolean[] = []
   const setupModes: string[] = []
   const { service } = harness({
     candidates: [builtin, secondBuiltin, ffmpeg],
     installer: {
-      installArtifact: async (item) => {
+      installArtifact: async (item, _prepared, options) => {
         installed.push(`${item.kind}/${item.id}`)
+        startupModes.push(options.startup === true)
         return {}
       },
-      installBuiltin: async (item) => {
+      installBuiltin: async (item, _bytes, options) => {
         installed.push(`${item.kind}/${item.id}`)
+        startupModes.push(options?.startup === true)
       },
       setup: async (_record, _prepared, options) => {
         setupModes.push(options.mode)
@@ -406,6 +409,7 @@ test("startup provisioning installs every missing Builtin member and the exact O
   await service.provisionDefaults()
 
   expect(installed).toEqual(["skill/canvas-storyboard", "skill/offline-helper", "plugin/ffmpeg-tools"])
+  expect(startupModes).toEqual([true, true, true])
   expect(setupModes).toEqual(["automatic-product-lock"])
   expect((await state.read()).installations.map(({ id }) => id).sort()).toEqual([
     "canvas-storyboard",
