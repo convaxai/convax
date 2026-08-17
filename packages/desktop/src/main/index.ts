@@ -65,7 +65,6 @@ import {
   screen,
   session,
   shell,
-  safeStorage,
   webFrameMain,
   type BrowserWindowConstructorOptions,
   type IpcMainEvent,
@@ -814,8 +813,7 @@ function startApplication() {
       collaborationAuthority.protocolDigest,
     )
     const collaborationReplicaVault = new ElectronReplicaSigningVault(
-      join(userDataDirectory, "collaboration", "replica-vault"),
-      safeStorage,
+      join(userDataDirectory, "collaboration", "replica-keys"),
     )
     const collaborationSignatureVerifier = createWebCryptoEd25519Verifier()
     // This local durable store performs no control-plane or PeerJS startup; the
@@ -896,10 +894,9 @@ function startApplication() {
             projectEpoch: manifest.projectIndexScope.projectEpoch,
           })
           if (binding === "pending") {
-            const localOwner = await localProjectOwnerAuthority.resolveExact({
+            const localOwner = await localProjectOwnerAuthority.resolveCurrent({
               projectId: manifest.projectIndexScope.projectId,
               projectEpoch: manifest.projectIndexScope.projectEpoch,
-              initializationAuthorityDigest: manifest.initializationAuthorityDigest,
             })
             if (localOwner === "missing") throw new Error("Local Project replica enrollment is pending")
             if (localOwner === "rejected") throw new Error("Local Project owner authority is rejected")
@@ -943,10 +940,9 @@ function startApplication() {
         manifest.projectIndexScope.projectEpoch !== identity.projectEpoch
       )
         return "rejected" as const
-      return localProjectOwnerAuthority.resolveExact({
+      return localProjectOwnerAuthority.resolveCurrent({
         projectId: identity.projectId,
         projectEpoch: identity.projectEpoch,
-        initializationAuthorityDigest: manifest.initializationAuthorityDigest,
       })
     }
     const localOwnerCollaborationAuthority = createLocalProjectOwnerCurrentLocalReplicaAuthoritySource({
@@ -964,7 +960,24 @@ function startApplication() {
     const incomingCollaborationAuthority = createCurrentIncomingReplicaAuthoritySource({
       localOwner: createLocalProjectOwnerIncomingReplicaAuthoritySource({
         protocolDigest: collaborationAuthority.protocolDigest,
-        resolveOwner: resolveLocalProjectOwner,
+        async resolveOwner({ scope, ownerBindingDigest }) {
+          const projectRoot = await projectManager.resolveProjectRoot({ projectId: scope.projectId })
+          const manifest = await readProjectNativeStoreManifest(join(projectRoot, ".convax", "collaboration"), {
+            protocolDigest: collaborationAuthority.protocolDigest,
+            schemaDigest: PROJECT_INDEX_PROTOCOL_SCHEMA_ARTIFACT_DIGEST,
+            uriProtocolDigest: collaborationAuthority.protocolSchemaBundle.core.uriProtocolDigest,
+          })
+          if (
+            manifest.projectIndexScope.projectId !== scope.projectId ||
+            manifest.projectIndexScope.projectEpoch !== scope.projectEpoch
+          )
+            return "rejected" as const
+          return localProjectOwnerAuthority.resolveBindingExact({
+            projectId: scope.projectId,
+            projectEpoch: scope.projectEpoch,
+            ownerBindingDigest,
+          })
+        },
       }),
       team: createLocalTeamIncomingReplicaAuthoritySource(collaborationTeamStore),
     })
@@ -1129,8 +1142,7 @@ function startApplication() {
           trustBundleDigest: collaborationTrustBundleDigest,
         })
         const collaborationTeamIdentityVault = new ElectronTeamIdentityVault(
-          join(userDataDirectory, "collaboration", "team-identity-vault"),
-          safeStorage,
+          join(userDataDirectory, "collaboration", "team-identity-keys"),
         )
         const collaborationMemberIdentities = new NodeProjectTeamMemberIdentityStore(
           join(userDataDirectory, "collaboration", "member-identities"),

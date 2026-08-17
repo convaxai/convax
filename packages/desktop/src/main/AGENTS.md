@@ -311,6 +311,15 @@ For any matching change, read the full routed reference before planning or editi
   comes from the exact durable local-owner binding under the validated current
   protocol descriptor, never from shell state. That owner must authorize ProjectIndex
   edits, Canvas edits, and Canvas genesis without network or Team state.
+- Main stores local and Team signing private keys as bounded user-managed files in
+  task/profile-scoped Electron `userData`, with private directory/file permissions
+  and durable create-before-publish ordering. It never calls a system credential
+  vault and never scans, decrypts, migrates, modifies, or deletes retired vault
+  ciphertext. A missing current key for an unshared Project rotates to one
+  retry-stable fresh replica/actor binding in the same Project epoch, retains the
+  prior exact public binding for historical verification, and atomically publishes
+  the new current binding. Rotation never resets the Project or rewrites, renumbers,
+  or re-signs an accepted frame or genesis object.
 - Compose one local-first authority source: durable Team state selects Team signing;
   only an exact `missing` Team state permits local-owner signing. Rejected or
   ambiguous Team state fails closed, and UI adapters never synthesize authorization.

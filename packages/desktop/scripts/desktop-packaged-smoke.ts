@@ -610,33 +610,14 @@ try {
           + ${JSON.stringify(seededProject.id)} + ", got " + JSON.stringify(projects.projects),
         )
       }
-      const linuxSecureStorageMayBeUnavailable = ${JSON.stringify(process.platform === "linux")}
-      let collaborationState = "available"
-      try {
-        await waitFor(async () => {
-          const catalog = await window.convax.projects.canvases.getCanvasCatalog({ projectId: project.id })
-          return catalog.creationAvailability === "available" && catalog.canvases.length === 1 ? catalog : undefined
-        }, "the packaged Project's current local authority and initial Canvas")
-        await waitFor(
-          () => document.querySelector(".convax-canvas"),
-          "the packaged Canvas",
-        )
-      } catch (error) {
-        const message = error instanceof Error ? error.message : String(error)
-        if (!linuxSecureStorageMayBeUnavailable || !message.includes("OS-backed replica signing vault is unavailable")) {
-          throw error
-        }
-        collaborationState = "secure-vault-unavailable"
-      }
-      if (collaborationState === "secure-vault-unavailable") {
-        await waitFor(
-          () => document.querySelector('[data-project-local-authority-recovery="true"]'),
-          "the packaged local Project authority recovery surface",
-        )
-        if (document.querySelector(".convax-canvas")) {
-          throw new Error("The packaged Desktop exposed a Canvas without admitted local authority")
-        }
-      }
+      await waitFor(async () => {
+        const catalog = await window.convax.projects.canvases.getCanvasCatalog({ projectId: project.id })
+        return catalog.creationAvailability === "available" && catalog.canvases.length === 1 ? catalog : undefined
+      }, "the packaged Project's current local authority and initial Canvas")
+      await waitFor(
+        () => document.querySelector(".convax-canvas"),
+        "the packaged Canvas",
+      )
       if (document.querySelector('[data-project-home="true"]')) {
         throw new Error("The packaged Desktop showed first-run onboarding despite having a seeded Project")
       }
@@ -692,28 +673,25 @@ try {
         (capability) => capability.kind === "plugin" && capability.id === defaultRemotePluginId,
       )
       let marketplaceSurfaceVisible = false
-      if (collaborationState !== "secure-vault-unavailable") {
-        const applicationMenuTrigger = document.querySelector('[data-application-menu-trigger="true"]')
-        if (!(applicationMenuTrigger instanceof HTMLElement)) {
-          throw new Error("The packaged sidebar did not expose the application menu")
-        }
-        applicationMenuTrigger.click()
-        const capabilitiesMenuItem = await waitFor(
-          () => document.querySelector('[data-application-menu-item="capabilities"]'),
-          "the application menu Marketplace entry",
-        )
-        if (!(capabilitiesMenuItem instanceof HTMLElement)) {
-          throw new Error("The packaged application menu did not expose Marketplace")
-        }
-        capabilitiesMenuItem.click()
-        await waitFor(
-          () => document.querySelector('[data-marketplace-surface="true"]'),
-          "the packaged Marketplace Settings surface",
-        )
-        marketplaceSurfaceVisible = true
+      const applicationMenuTrigger = document.querySelector('[data-application-menu-trigger="true"]')
+      if (!(applicationMenuTrigger instanceof HTMLElement)) {
+        throw new Error("The packaged sidebar did not expose the application menu")
       }
+      applicationMenuTrigger.click()
+      const capabilitiesMenuItem = await waitFor(
+        () => document.querySelector('[data-application-menu-item="capabilities"]'),
+        "the application menu Marketplace entry",
+      )
+      if (!(capabilitiesMenuItem instanceof HTMLElement)) {
+        throw new Error("The packaged application menu did not expose Marketplace")
+      }
+      capabilitiesMenuItem.click()
+      await waitFor(
+        () => document.querySelector('[data-marketplace-surface="true"]'),
+        "the packaged Marketplace Settings surface",
+      )
+      marketplaceSurfaceVisible = true
       return {
-        collaborationState,
         defaultRemote: packagedDefault ? { id: packagedDefault.id, version: packagedDefault.version } : undefined,
         marketplace: {
           catalogCard,
@@ -733,17 +711,12 @@ try {
       }
     })()`,
   )) as {
-    collaborationState?: string
     defaultRemote?: { id?: string; version?: string }
     marketplace?: unknown
     projectId?: string
     protocol?: string
   }
-  const expectedCollaborationState =
-    seeded.collaborationState === "available" ||
-    (process.platform === "linux" && seeded.collaborationState === "secure-vault-unavailable")
   if (
-    !expectedCollaborationState ||
     defaultInstallExpected !== Boolean(seeded.defaultRemote) ||
     (seeded.defaultRemote !== undefined &&
       (seeded.defaultRemote.id !== defaultRemotePluginId || !seeded.defaultRemote.version)) ||
@@ -757,7 +730,7 @@ try {
     defaultInstallExpected && seeded.defaultRemote?.version
       ? { id: defaultRemotePluginId, version: seeded.defaultRemote.version }
       : undefined,
-    { marketplaceSurfaceRequired: seeded.collaborationState !== "secure-vault-unavailable" },
+    { marketplaceSurfaceRequired: true },
   )
   const agent = (await renderer.evaluate(
     `(async () => {

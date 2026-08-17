@@ -11,27 +11,31 @@ import type {
   IncomingReplicaAuthoritySource,
   VerifiedIncomingReplicaAuthorityEvidence,
 } from "./collaboration-authority-ports"
-import type { LocalProjectOwnerMutationAuthority } from "./collaboration-production-runtime"
+import type { ResolvedLocalProjectOwnerBinding } from "./local-project-owner-authority"
 
 /** Verifies retained local-owner frames from their exact Project binding. */
 export function createLocalProjectOwnerIncomingReplicaAuthoritySource(input: {
   readonly protocolDigest: import("@convax/collaboration").Digest
-  resolveOwner(scope: DocumentScope): Promise<
-    (LocalProjectOwnerMutationAuthority & {
-      readonly binding: LocalProjectOwnerMutationAuthority["binding"] & {
-        readonly publicKey: import("@convax/collaboration").PublicKey
-      }
-    }) | "missing" | "rejected"
-  >
+  resolveOwner(input: {
+    readonly scope: DocumentScope
+    readonly ownerBindingDigest: import("@convax/collaboration").Digest
+  }): Promise<ResolvedLocalProjectOwnerBinding | "missing" | "rejected">
 }): IncomingReplicaAuthoritySource {
   const protocolDigest = parseDigest(input.protocolDigest)
   return Object.freeze({
-    async verify({ frame }: Parameters<IncomingReplicaAuthoritySource["verify"]>[0]): Promise<VerifiedIncomingReplicaAuthorityEvidence | "pending" | "rejected"> {
+    async verify({
+      frame,
+    }: Parameters<IncomingReplicaAuthoritySource["verify"]>[0]): Promise<
+      VerifiedIncomingReplicaAuthorityEvidence | "pending" | "rejected"
+    > {
       const scope = parseDocumentScope(frame.header.core.scope)
       if (frame.header.core.signerAuthorityKind !== "local-project-owner") return "rejected"
       const signerAuthority = frame.context.signerAuthority
       if (signerAuthority.kind !== "local-project-owner") return "rejected"
-      const owner = await input.resolveOwner(scope)
+      const owner = await input.resolveOwner({
+        scope,
+        ownerBindingDigest: signerAuthority.ownerBindingDigest,
+      })
       if (owner === "missing") return "pending"
       if (owner === "rejected") return "rejected"
       const binding = owner.binding
@@ -42,17 +46,20 @@ export function createLocalProjectOwnerIncomingReplicaAuthoritySource(input: {
         parseReplicaId(binding.replicaId) !== signerAuthority.replicaId ||
         parseActorId(binding.actorId) !== signerAuthority.actorId ||
         parseDigest(binding.bindingDigest) !== signerAuthority.ownerBindingDigest
-      ) return "rejected"
-      const authorizationDigest = localOwnerEditAuthorizationCoreDigest(Object.freeze({
-        format: "convax.local-owner-edit-authorization-core",
-        scope,
-        replicaId: signerAuthority.replicaId,
-        actorId: signerAuthority.actorId,
-        ownerBindingDigest: signerAuthority.ownerBindingDigest,
-        protocolDigest,
-        ownerSchemaDigest: frame.header.core.ownerSchemaDigest,
-        expiryPolicy: "none",
-      }))
+      )
+        return "rejected"
+      const authorizationDigest = localOwnerEditAuthorizationCoreDigest(
+        Object.freeze({
+          format: "convax.local-owner-edit-authorization-core",
+          scope,
+          replicaId: signerAuthority.replicaId,
+          actorId: signerAuthority.actorId,
+          ownerBindingDigest: signerAuthority.ownerBindingDigest,
+          protocolDigest,
+          ownerSchemaDigest: frame.header.core.ownerSchemaDigest,
+          expiryPolicy: "none",
+        }),
+      )
       if (authorizationDigest !== signerAuthority.ownerEditAuthorizationCoreDigest) return "rejected"
       return Object.freeze({
         scope,

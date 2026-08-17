@@ -97,8 +97,13 @@ Canvas-genesis author proof without a Team record, control-plane session, or net
 The one causal-frame codec commits an explicit `local-project-owner` or
 `team-replica` signer-authority kind and its digest; those are authority modes of the
 same current protocol, never protocol selectors. A missing or rejected local owner
-remains `local-authority-unavailable`, and Team creation is never presented as
-recovery.
+binding is a metadata-integrity failure and Team creation is never presented as
+recovery. A missing local signing key is different: for an unshared Project,
+Desktop creates one retry-stable fresh replica/actor binding in the same Project and
+Project epoch, durably retains the prior exact public binding, and atomically makes
+the new binding current. The Project remains editable throughout retry/restart.
+Rotation never creates a new protocol or Project identity and never rewrites,
+renumbers, or re-signs an accepted frame or genesis object.
 
 A durable Team binding is additive sharing authority and disables new local-owner
 signing for that Project. Retained local-owner frames and genesis bytes remain
@@ -250,7 +255,7 @@ flowchart TB
   DesktopUpdateFeed -->|version, release notes, SHA-512 and signed package| Main
 
   subgraph State["State and persistence"]
-    UserData["Electron userData<br/>bindings, Marketplace, grants, immutable Plugin closures<br/>isolated per identified development task"]
+    UserData["Electron userData<br/>bindings, user-managed private key files, Marketplace, grants, immutable Plugin closures<br/>isolated per identified development task"]
     ProjectRoot["Project root / .convax<br/>identity, final-frame objects/journals/heads, checkpoints/floors, managed assets"]
     LocalStorage["Browser localStorage<br/>preferences, recovery and disposable Marketplace / Service / model display caches"]
     UpdaterCache["Electron updater cache<br/>verified partial/downloaded package · disposable"]
@@ -359,7 +364,7 @@ one exact Yjs wire codec, descriptor validation, one local `replicaDoc`, isolate
 `candidateDoc` validation, checkpoint/floor primitives, journal ports, and session
 undo coordination. It may depend on external `yjs` but on no Convax package. Project
 and Canvas own their exact logical schemas and one pure reducer each; Desktop owns
-PeerJS, OS-vault/writer-lock adapters, lifecycle, and composition;
+PeerJS, user-managed private-key/writer-lock adapters, lifecycle, and composition;
 `@convax/project/node` implements native durability ports. There is no second
 decoder, kernel, or reducer, no multi-document promotion model, and no centralized
 edit-sequencing owner.
@@ -784,6 +789,14 @@ interaction contract and adapter rules.
 ```text
 Electron userData/
   projects.json                         per-user bindings and recency
+  collaboration/replica-keys/*.key     user-managed local/team-replica Ed25519 PKCS#8 records
+  collaboration/team-identity-keys/*.key
+                                        user-managed Team member/session Ed25519 PKCS#8 records
+  collaboration/local-project-owner/
+    bindings/                           current local-owner public binding per Project
+    retired-bindings/                   exact prior public bindings for historical verification
+    rotation-claims/                    retry-stable missing-key rotation choices
+    rotation-bindings/                  immutable replacement public bindings
   marketplace-sources/index-v1.json     user-added Network Marketplace declarations
   marketplace-source-security/<source-key>.json
                                         authoritative accepted Catalog and rollback high-water
@@ -815,6 +828,17 @@ Electron userData/
   plugin-service-authorization-checkpoints/<plugin-id>.json
                                         private crash-recovery Cookie handoff; never a browser profile
   canvas-external-drags/                short-lived host-owned native drag copies
+
+The two private-key directories contain bounded canonical plaintext records. On
+POSIX, Desktop creates their directories as `0700` and records as `0600`, rejects
+symlinks and broader record permissions, uses exclusive create, fsyncs each record
+and directory before publishing its binding, and never places a private key or key
+path in Project bytes. This protects against accidental cross-user access, not a
+malicious process already running as the same OS user; the user owns and manages
+these local files. Desktop never calls Keychain, DPAPI, Secret Service, Electron
+`safeStorage`, or another system credential vault. Retired `replica-vault` and
+`team-identity-vault` ciphertext directories are inert: current code never scans,
+decrypts, migrates, modifies, or deletes them.
 
 Identified development task userData    the same schema under a task-private absolute
                                         profile; never the ordinary development or packaged profile

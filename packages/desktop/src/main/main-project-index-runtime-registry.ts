@@ -125,9 +125,10 @@ export function createExistingProjectIndexRegistrationPort(
 }
 
 /**
- * First registration for a durable unteamed Project. The Project binding and OS
- * vault key are committed before these bytes are constructed; retries sign the
- * same checkpoint core and native-store publication rejects equivocation.
+ * First registration for a durable unteamed Project. The Project binding and
+ * user-managed private key file are committed before these bytes are constructed;
+ * retries sign the same checkpoint core and native-store publication rejects
+ * equivocation.
  */
 export function createLocalProjectOwnerIndexRegistrationPort(
   authority: CurrentProtocolAuthority,

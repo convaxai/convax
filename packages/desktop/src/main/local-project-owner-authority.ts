@@ -29,6 +29,7 @@ import {
 } from "@convax/collaboration"
 
 import type { ElectronReplicaSigningVault } from "./electron-replica-signing-vault"
+import { syncDirectoryEntry, syncFileBytes } from "./filesystem-durability"
 
 const CLAIM_FORMAT = "convax.desktop-local-project-owner-claim" as const
 const BINDING_FORMAT = "convax.desktop-local-project-owner-binding" as const
@@ -63,6 +64,12 @@ export interface ResolvedLocalProjectOwnerAuthority {
   readonly validationArtifacts: ValidationArtifactSet
 }
 
+export interface ResolvedLocalProjectOwnerBinding {
+  readonly binding: DurableLocalProjectOwnerBinding
+  readonly bindingExactBytes: Readonly<Uint8Array>
+  readonly validationArtifacts: ValidationArtifactSet
+}
+
 export interface PreparedLocalProjectOwnerReset {
   readonly owner: ResolvedLocalProjectOwnerAuthority
   readonly previousBindingDigest: Digest | null
@@ -75,17 +82,23 @@ export interface DurableLocalProjectOwnerAuthorityResolver {
     readonly projectId: ProjectId
     readonly projectRoot: string
   }): Promise<ResolvedLocalProjectOwnerAuthority>
-  resolveExact(input: {
+  resolveCurrent(input: {
     readonly projectId: ProjectId
     readonly projectEpoch: Id128
-    readonly initializationAuthorityDigest: Digest
   }): Promise<ResolvedLocalProjectOwnerAuthority | "missing" | "rejected">
+  resolveBindingExact(input: {
+    readonly projectId: ProjectId
+    readonly projectEpoch: Id128
+    readonly ownerBindingDigest: Digest
+  }): Promise<ResolvedLocalProjectOwnerBinding | "missing" | "rejected">
 }
 
 export interface LocalProjectOwnerAuthorityFaults {
   afterClaimFsync?(): Promise<void>
   afterVaultKey?(): Promise<void>
   afterBindingFsync?(): Promise<void>
+  afterRetiredBindingFsync?(): Promise<void>
+  afterCurrentBindingFsync?(): Promise<void>
 }
 
 /**
@@ -93,29 +106,26 @@ export interface LocalProjectOwnerAuthorityFaults {
  * retry-stable; the immutable binding is published before any Project bytes use
  * it. Project paths are deliberately absent because a Project may move/rebind.
  */
-export class NodeDurableLocalProjectOwnerAuthority
-  implements DurableLocalProjectOwnerAuthorityResolver
-{
+export class NodeDurableLocalProjectOwnerAuthority implements DurableLocalProjectOwnerAuthorityResolver {
   private readonly validationArtifacts: ValidationArtifactSet
   private readonly validationArtifactSetDigest: Digest
 
-  constructor(private readonly options: {
-    readonly rootDirectory: string
-    readonly authority: CurrentProtocolAuthority
-    readonly schemaDigest: Digest
-    readonly projects: { resolveProjectRoot(input: { readonly projectId: string }): Promise<string> }
-    readonly vault: Pick<ElectronReplicaSigningVault, "createReplicaKey" | "openSigner">
-    readonly verifier: Ed25519VerifierPort
-    readonly createId?: () => Id128
-    readonly createReplicaId?: () => ReplicaId
-    readonly faults?: LocalProjectOwnerAuthorityFaults
-  }) {
+  constructor(
+    private readonly options: {
+      readonly rootDirectory: string
+      readonly authority: CurrentProtocolAuthority
+      readonly schemaDigest: Digest
+      readonly projects: { resolveProjectRoot(input: { readonly projectId: string }): Promise<string> }
+      readonly vault: Pick<ElectronReplicaSigningVault, "createReplicaKey" | "openSigner">
+      readonly verifier: Ed25519VerifierPort
+      readonly createId?: () => Id128
+      readonly createReplicaId?: () => ReplicaId
+      readonly faults?: LocalProjectOwnerAuthorityFaults
+    },
+  ) {
     if (!path.isAbsolute(options.rootDirectory)) throw new TypeError("Local Project owner root must be absolute")
     this.validationArtifacts = protocolValidationArtifacts(options.authority)
-    this.validationArtifactSetDigest = structuredDigest(
-      "convax.validation-artifact-set",
-      this.validationArtifacts,
-    )
+    this.validationArtifactSetDigest = structuredDigest("convax.validation-artifact-set", this.validationArtifacts)
   }
 
   async ensureForDurableProject(input: {
@@ -130,14 +140,16 @@ export class NodeDurableLocalProjectOwnerAuthority
     const selector = selectorDigest(projectId, this.options.authority.protocolDigest)
     const bindingTarget = path.join(this.options.rootDirectory, "bindings", `${selector}.jcs`)
     const existing = await readOptionalPlainFile(bindingTarget)
-    if (existing) return this.openBinding(existing, projectId, bindingTarget)
+    if (existing) return this.openOrRotateCurrentBinding(existing, projectId, bindingTarget)
 
     const claimTarget = path.join(this.options.rootDirectory, "claims", `${selector}.jcs`)
     let claimBytes = await readOptionalPlainFile(claimTarget)
     if (!claimBytes) {
       const claim = this.newClaim(projectId)
       claimBytes = encodeRestrictedJcs(claim)
-      try { await writeImmutable(claimTarget, claimBytes) } catch (error) {
+      try {
+        await writeImmutable(claimTarget, claimBytes)
+      } catch (error) {
         if (!isAlreadyExists(error)) throw error
         claimBytes = requireBytes(await readOptionalPlainFile(claimTarget), "Local Project owner claim disappeared")
       }
@@ -162,7 +174,9 @@ export class NodeDurableLocalProjectOwnerAuthority
       bindingDigest: bindingDigest(bindingWithoutDigest),
     })
     const bindingBytes = encodeRestrictedJcs(binding)
-    try { await writeImmutable(bindingTarget, bindingBytes) } catch (error) {
+    try {
+      await writeImmutable(bindingTarget, bindingBytes)
+    } catch (error) {
       if (!isAlreadyExists(error)) throw error
     }
     await this.options.faults?.afterBindingFsync?.()
@@ -248,24 +262,63 @@ export class NodeDurableLocalProjectOwnerAuthority
     }
   }
 
-  async resolveExact(input: {
+  async resolveCurrent(input: {
     readonly projectId: ProjectId
     readonly projectEpoch: Id128
-    readonly initializationAuthorityDigest: Digest
   }): Promise<ResolvedLocalProjectOwnerAuthority | "missing" | "rejected"> {
     let projectId: ProjectId
-    try { projectId = parseProjectId(input.projectId) } catch { return "rejected" }
+    try {
+      projectId = parseProjectId(input.projectId)
+    } catch {
+      return "rejected"
+    }
+    await ensureLayout(this.options.rootDirectory)
     const selector = selectorDigest(projectId, this.options.authority.protocolDigest)
     const target = path.join(this.options.rootDirectory, "bindings", `${selector}.jcs`)
     try {
       const bytes = await readOptionalPlainFile(target)
       if (!bytes) return "missing"
-      const opened = await this.openBinding(bytes, projectId, target)
-      if (
-        opened.binding.projectEpoch !== parseId128(input.projectEpoch) ||
-        opened.binding.bindingDigest !== parseDigest(input.initializationAuthorityDigest)
-      ) return "rejected"
+      const opened = await this.openOrRotateCurrentBinding(bytes, projectId, target)
+      if (opened.binding.projectEpoch !== parseId128(input.projectEpoch)) return "rejected"
       return opened
+    } catch {
+      return "rejected"
+    }
+  }
+
+  async resolveBindingExact(input: {
+    readonly projectId: ProjectId
+    readonly projectEpoch: Id128
+    readonly ownerBindingDigest: Digest
+  }): Promise<ResolvedLocalProjectOwnerBinding | "missing" | "rejected"> {
+    let projectId: ProjectId
+    let projectEpoch: Id128
+    let ownerBindingDigest: Digest
+    try {
+      projectId = parseProjectId(input.projectId)
+      projectEpoch = parseId128(input.projectEpoch)
+      ownerBindingDigest = parseDigest(input.ownerBindingDigest)
+    } catch {
+      return "rejected"
+    }
+    await ensureLayout(this.options.rootDirectory)
+    const selector = selectorDigest(projectId, this.options.authority.protocolDigest)
+    const currentTarget = path.join(this.options.rootDirectory, "bindings", `${selector}.jcs`)
+    try {
+      const currentBytes = await readOptionalPlainFile(currentTarget)
+      if (currentBytes) {
+        const current = this.parseResolvedBinding(currentBytes, projectId)
+        if (current.binding.bindingDigest === ownerBindingDigest) {
+          return current.binding.projectEpoch === projectEpoch ? current : "rejected"
+        }
+      }
+      const retiredTarget = path.join(this.options.rootDirectory, "retired-bindings", `${ownerBindingDigest}.jcs`)
+      const retiredBytes = await readOptionalPlainFile(retiredTarget)
+      if (!retiredBytes) return "missing"
+      const retired = this.parseResolvedBinding(retiredBytes, projectId)
+      return retired.binding.projectEpoch === projectEpoch && retired.binding.bindingDigest === ownerBindingDigest
+        ? retired
+        : "rejected"
     } catch {
       return "rejected"
     }
@@ -284,10 +337,10 @@ export class NodeDurableLocalProjectOwnerAuthority
     message: Uint8Array,
     signature: string,
   ): Promise<boolean> {
-    const current = await this.resolveExact({
+    const current = await this.resolveBindingExact({
       projectId: binding.projectId,
       projectEpoch: binding.projectEpoch,
-      initializationAuthorityDigest: binding.bindingDigest,
+      ownerBindingDigest: binding.bindingDigest,
     })
     if (current === "missing" || current === "rejected") return false
     return this.options.verifier.verify(
@@ -309,8 +362,8 @@ export class NodeDurableLocalProjectOwnerAuthority
       replicaId: binding.replicaId,
       expectedPublicKey: binding.publicKey,
     })
-    if (signer === "missing" || signer === "unavailable" || signer === "rejected") {
-      throw new Error(`Local Project owner vault is ${signer}`)
+    if (signer === "missing" || signer === "rejected") {
+      throw new Error(`Local Project owner key is ${signer}`)
     }
     return Object.freeze({
       binding,
@@ -318,6 +371,108 @@ export class NodeDurableLocalProjectOwnerAuthority
       signer,
       validationArtifacts: this.validationArtifacts,
     })
+  }
+
+  private parseResolvedBinding(bytes: Uint8Array, projectId: ProjectId): ResolvedLocalProjectOwnerBinding {
+    return Object.freeze({
+      binding: parseBindingExact(bytes, this.expectedAuthority(projectId)),
+      bindingExactBytes: new Uint8Array(bytes),
+      validationArtifacts: this.validationArtifacts,
+    })
+  }
+
+  private async openOrRotateCurrentBinding(
+    bytes: Uint8Array,
+    projectId: ProjectId,
+    target: string,
+  ): Promise<ResolvedLocalProjectOwnerAuthority> {
+    const binding = parseBindingExact(bytes, this.expectedAuthority(projectId))
+    const signer = await this.options.vault.openSigner({
+      projectId: binding.projectId,
+      projectEpoch: binding.projectEpoch,
+      replicaId: binding.replicaId,
+      expectedPublicKey: binding.publicKey,
+    })
+    if (signer === "missing") return this.rotateMissingSigner(bytes, binding, target)
+    if (signer === "rejected") {
+      throw new Error(`Local Project owner key is ${signer}`)
+    }
+    return Object.freeze({
+      binding,
+      bindingExactBytes: new Uint8Array(bytes),
+      signer,
+      validationArtifacts: this.validationArtifacts,
+    })
+  }
+
+  private async rotateMissingSigner(
+    previousBytes: Uint8Array,
+    previous: DurableLocalProjectOwnerBinding,
+    currentTarget: string,
+  ): Promise<ResolvedLocalProjectOwnerAuthority> {
+    const rotationSelector = previous.bindingDigest
+    const claimTarget = path.join(this.options.rootDirectory, "rotation-claims", `${rotationSelector}.jcs`)
+    const bindingTarget = path.join(this.options.rootDirectory, "rotation-bindings", `${rotationSelector}.jcs`)
+    let claimBytes = await readOptionalPlainFile(claimTarget)
+    if (!claimBytes) {
+      claimBytes = encodeRestrictedJcs(this.newRotationClaim(previous))
+      try {
+        await writeImmutable(claimTarget, claimBytes)
+      } catch (error) {
+        if (!isAlreadyExists(error)) throw error
+        claimBytes = requireBytes(
+          await readOptionalPlainFile(claimTarget),
+          "Local Project owner rotation claim disappeared",
+        )
+      }
+      await this.options.faults?.afterClaimFsync?.()
+    }
+    const claim = parseClaimExact(claimBytes, this.expectedAuthority(previous.projectId))
+    if (
+      claim.projectEpoch !== previous.projectEpoch ||
+      claim.projectIndexShardEpoch !== previous.projectIndexShardEpoch ||
+      claim.memberId !== previous.memberId ||
+      claim.replicaId === previous.replicaId
+    )
+      throw new Error("Local Project owner rotation claim crossed the prior binding")
+    const key = await this.options.vault.createReplicaKey({
+      projectId: claim.projectId,
+      projectEpoch: claim.projectEpoch,
+      replicaId: claim.replicaId,
+    })
+    await this.options.faults?.afterVaultKey?.()
+    const bindingWithoutDigest = Object.freeze({
+      ...claim,
+      format: BINDING_FORMAT,
+      actorId: parseActorId(key.publicKey),
+      publicKey: parsePublicKey(key.publicKey),
+    })
+    const binding = Object.freeze({
+      ...bindingWithoutDigest,
+      bindingDigest: bindingDigest(bindingWithoutDigest),
+    })
+    const bindingBytes = encodeRestrictedJcs(binding)
+    await writeCreateOrExact(bindingTarget, bindingBytes)
+    await this.options.faults?.afterBindingFsync?.()
+
+    const currentBytes = requireBytes(
+      await readOptionalPlainFile(currentTarget),
+      "Local Project owner disappeared during rotation",
+    )
+    const current = parseBindingExact(currentBytes, this.expectedAuthority(previous.projectId))
+    if (current.bindingDigest === binding.bindingDigest)
+      return this.openBinding(currentBytes, previous.projectId, currentTarget)
+    if (current.bindingDigest !== previous.bindingDigest || !sameBytes(currentBytes, previousBytes)) {
+      return this.openOrRotateCurrentBinding(currentBytes, previous.projectId, currentTarget)
+    }
+    await writeCreateOrExact(
+      path.join(this.options.rootDirectory, "retired-bindings", `${previous.bindingDigest}.jcs`),
+      previousBytes,
+    )
+    await this.options.faults?.afterRetiredBindingFsync?.()
+    await replaceDurably(currentTarget, bindingBytes)
+    await this.options.faults?.afterCurrentBindingFsync?.()
+    return this.openBinding(bindingBytes, previous.projectId, currentTarget)
   }
 
   private async assertDurableProjectRoot(projectId: ProjectId, projectRoot: string): Promise<void> {
@@ -336,7 +491,9 @@ export class NodeDurableLocalProjectOwnerAuthority
     let claimBytes = await readOptionalPlainFile(claimTarget)
     if (!claimBytes) {
       claimBytes = encodeRestrictedJcs(this.newClaim(projectId))
-      try { await writeImmutable(claimTarget, claimBytes) } catch (error) {
+      try {
+        await writeImmutable(claimTarget, claimBytes)
+      } catch (error) {
         if (!isAlreadyExists(error)) throw error
         claimBytes = requireBytes(await readOptionalPlainFile(claimTarget), "Local Project owner claim disappeared")
       }
@@ -360,7 +517,9 @@ export class NodeDurableLocalProjectOwnerAuthority
       bindingDigest: bindingDigest(bindingWithoutDigest),
     })
     const bindingBytes = encodeRestrictedJcs(binding)
-    try { await writeImmutable(bindingTarget, bindingBytes) } catch (error) {
+    try {
+      await writeImmutable(bindingTarget, bindingBytes)
+    } catch (error) {
       if (!isAlreadyExists(error)) throw error
     }
     await this.options.faults?.afterBindingFsync?.()
@@ -387,9 +546,8 @@ export class NodeDurableLocalProjectOwnerAuthority
     }
     return Object.freeze({
       owner,
-      previousBindingDigest: prepared.previousBindingDigest === null
-        ? null
-        : parseDigest(prepared.previousBindingDigest),
+      previousBindingDigest:
+        prepared.previousBindingDigest === null ? null : parseDigest(prepared.previousBindingDigest),
       resetId,
       resetSelector,
     })
@@ -397,7 +555,8 @@ export class NodeDurableLocalProjectOwnerAuthority
 
   private newClaim(projectId: ProjectId): LocalProjectOwnerClaim {
     const createId = this.options.createId ?? (() => parseId128(randomBytes(16).toString("base64url")))
-    const createReplicaId = this.options.createReplicaId ?? (() => parseReplicaId(`replica_${randomBytes(4).toString("hex")}`))
+    const createReplicaId =
+      this.options.createReplicaId ?? (() => parseReplicaId(`replica_${randomBytes(4).toString("hex")}`))
     return Object.freeze({
       format: CLAIM_FORMAT,
       projectId,
@@ -412,6 +571,26 @@ export class NodeDurableLocalProjectOwnerAuthority
       schemaDigest: parseDigest(this.options.schemaDigest),
       uriProtocolDigest: this.options.authority.protocolSchemaBundle.core.uriProtocolDigest,
       validationArtifactSetDigest: this.validationArtifactSetDigest,
+    })
+  }
+
+  private newRotationClaim(previous: DurableLocalProjectOwnerBinding): LocalProjectOwnerClaim {
+    const createReplicaId =
+      this.options.createReplicaId ?? (() => parseReplicaId(`replica_${randomBytes(4).toString("hex")}`))
+    return Object.freeze({
+      format: CLAIM_FORMAT,
+      projectId: previous.projectId,
+      projectEpoch: previous.projectEpoch,
+      projectIndexShardEpoch: previous.projectIndexShardEpoch,
+      memberId: previous.memberId,
+      replicaId: createReplicaId(),
+      localConfirmationKeyId: previous.localConfirmationKeyId,
+      genesisOperationId: previous.genesisOperationId,
+      genesisCheckpointId: previous.genesisCheckpointId,
+      protocolDigest: previous.protocolDigest,
+      schemaDigest: previous.schemaDigest,
+      uriProtocolDigest: previous.uriProtocolDigest,
+      validationArtifactSetDigest: previous.validationArtifactSetDigest,
     })
   }
 
@@ -461,7 +640,8 @@ function parseClaimExact(bytes: Uint8Array, expected: ExpectedAuthority): LocalP
 
 function parseBindingExact(bytes: Uint8Array, expected: ExpectedAuthority): DurableLocalProjectOwnerBinding {
   const value = decodeRestrictedJcs(bytes)
-  if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error("Local Project owner binding is invalid")
+  if (!value || typeof value !== "object" || Array.isArray(value))
+    throw new Error("Local Project owner binding is invalid")
   const record = value as Record<string, unknown>
   assertExactKeys(record, [...claimKeys(), "actorId", "publicKey", "bindingDigest"])
   const claim = parseClaim(record, BINDING_FORMAT, expected)
@@ -478,7 +658,8 @@ function parseBindingExact(bytes: Uint8Array, expected: ExpectedAuthority): Dura
     ...bindingWithoutDigest,
     bindingDigest: parseDigest(record.bindingDigest),
   })
-  if (binding.bindingDigest !== bindingDigest(bindingWithoutDigest)) throw new Error("Local Project owner binding digest mismatches")
+  if (binding.bindingDigest !== bindingDigest(bindingWithoutDigest))
+    throw new Error("Local Project owner binding digest mismatches")
   if (!sameBytes(bytes, encodeRestrictedJcs(binding))) throw new Error("Local Project owner binding is noncanonical")
   return binding
 }
@@ -488,7 +669,8 @@ function parseClaim(
   format: typeof CLAIM_FORMAT | typeof BINDING_FORMAT,
   expected: ExpectedAuthority,
 ): LocalProjectOwnerClaim {
-  if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error("Local Project owner claim is invalid")
+  if (!value || typeof value !== "object" || Array.isArray(value))
+    throw new Error("Local Project owner claim is invalid")
   const record = value as Record<string, unknown>
   if (format === CLAIM_FORMAT) assertExactKeys(record, claimKeys())
   if (record.format !== format) throw new Error("Local Project owner format is invalid")
@@ -508,20 +690,25 @@ function parseClaim(
     validationArtifactSetDigest: parseDigest(record.validationArtifactSetDigest),
   })
   if (
-    claim.projectId !== expected.projectId || claim.protocolDigest !== expected.protocolDigest ||
-    claim.schemaDigest !== expected.schemaDigest || claim.uriProtocolDigest !== expected.uriProtocolDigest ||
+    claim.projectId !== expected.projectId ||
+    claim.protocolDigest !== expected.protocolDigest ||
+    claim.schemaDigest !== expected.schemaDigest ||
+    claim.uriProtocolDigest !== expected.uriProtocolDigest ||
     claim.validationArtifactSetDigest !== expected.validationArtifactSetDigest
-  ) throw new Error("Local Project owner claim crossed authority")
+  )
+    throw new Error("Local Project owner claim crossed authority")
   return claim
 }
 
 function protocolValidationArtifacts(authority: CurrentProtocolAuthority): ValidationArtifactSet {
   const owners = ["canvas", "kernel", "control-plane", "project-index"] as const
-  const artifacts = authority.protocolSchemaBundle.core.artifacts.map((artifact, index) => ({
-    owner: owners[index],
-    format: artifact.format,
-    artifactDigest: artifact.artifactDigest,
-  })).sort((left, right) => String(left.owner).localeCompare(String(right.owner)))
+  const artifacts = authority.protocolSchemaBundle.core.artifacts
+    .map((artifact, index) => ({
+      owner: owners[index],
+      format: artifact.format,
+      artifactDigest: artifact.artifactDigest,
+    }))
+    .sort((left, right) => String(left.owner).localeCompare(String(right.owner)))
   return parseValidationArtifactSet({
     format: "convax.validation-artifact-set",
     artifacts,
@@ -551,10 +738,19 @@ function resetSelectorDigest(projectId: ProjectId, protocolDigest: Digest, reset
 
 function claimKeys(): string[] {
   return [
-    "format", "projectId", "projectEpoch", "projectIndexShardEpoch", "memberId", "replicaId",
+    "format",
+    "projectId",
+    "projectEpoch",
+    "projectIndexShardEpoch",
+    "memberId",
+    "replicaId",
     "localConfirmationKeyId",
-    "genesisOperationId", "genesisCheckpointId", "protocolDigest", "schemaDigest",
-    "uriProtocolDigest", "validationArtifactSetDigest",
+    "genesisOperationId",
+    "genesisCheckpointId",
+    "protocolDigest",
+    "schemaDigest",
+    "uriProtocolDigest",
+    "validationArtifactSetDigest",
   ]
 }
 
@@ -565,7 +761,12 @@ function assertExactKeys(value: Record<string, unknown>, expected: readonly stri
 }
 
 function requireKeyId(value: unknown): string {
-  if (typeof value !== "string" || value.normalize("NFC") !== value || Buffer.byteLength(value, "utf8") < 1 || Buffer.byteLength(value, "utf8") > 128) {
+  if (
+    typeof value !== "string" ||
+    value.normalize("NFC") !== value ||
+    Buffer.byteLength(value, "utf8") < 1 ||
+    Buffer.byteLength(value, "utf8") > 128
+  ) {
     throw new Error("Local Project owner confirmation key id is invalid")
   }
   return value
@@ -579,7 +780,15 @@ function requireResetId(value: unknown): string {
 }
 
 async function ensureLayout(root: string): Promise<void> {
-  const directories = ["claims", "bindings", "reset-claims", "reset-bindings", "retired-bindings"]
+  const directories = [
+    "claims",
+    "bindings",
+    "reset-claims",
+    "reset-bindings",
+    "retired-bindings",
+    "rotation-claims",
+    "rotation-bindings",
+  ]
   for (const directory of directories) {
     await fs.mkdir(path.join(root, directory), { recursive: true, mode: 0o700 })
   }
@@ -590,10 +799,18 @@ async function ensureLayout(root: string): Promise<void> {
 }
 
 async function writeImmutable(target: string, bytes: Uint8Array): Promise<void> {
-  const handle = await fs.open(target, constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | constants.O_NOFOLLOW, 0o600)
-  try { await handle.writeFile(bytes); await handle.sync() } finally { await handle.close() }
-  const directory = await fs.open(path.dirname(target), constants.O_RDONLY | constants.O_DIRECTORY | constants.O_NOFOLLOW)
-  try { await directory.sync() } finally { await directory.close() }
+  const handle = await fs.open(
+    target,
+    constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | constants.O_NOFOLLOW,
+    0o600,
+  )
+  try {
+    await handle.writeFile(bytes)
+    await syncFileBytes(handle)
+  } finally {
+    await handle.close()
+  }
+  await syncDirectoryEntry(path.dirname(target))
 }
 
 async function writeCreateOrExact(target: string, bytes: Uint8Array): Promise<void> {
@@ -612,8 +829,7 @@ async function replaceDurably(target: string, bytes: Uint8Array): Promise<void> 
   const temporary = `${target}.${randomBytes(8).toString("hex")}.staging`
   await writeImmutable(temporary, bytes)
   await fs.rename(temporary, target)
-  const directory = await fs.open(path.dirname(target), constants.O_RDONLY | constants.O_DIRECTORY | constants.O_NOFOLLOW)
-  try { await directory.sync() } finally { await directory.close() }
+  await syncDirectoryEntry(path.dirname(target))
 }
 
 async function readOptionalPlainFile(target: string): Promise<Uint8Array | null> {

@@ -38,9 +38,8 @@ describe("Desktop Project startup wiring", () => {
   test("packaged smoke exercises current local authority without Team bootstrap", () => {
     expect(packagedSmokeSource).toContain("the packaged Project's current local authority and initial Canvas")
     expect(packagedSmokeSource).toContain('document.querySelector(".convax-canvas")')
-    expect(packagedSmokeSource).toContain("the packaged local Project authority recovery surface")
-    expect(packagedSmokeSource).toContain("OS-backed replica signing vault is unavailable")
-    expect(packagedSmokeSource).toContain("The packaged Desktop exposed a Canvas without admitted local authority")
+    expect(packagedSmokeSource).not.toContain("safeStorage")
+    expect(packagedSmokeSource).not.toContain("secure-vault-unavailable")
     expect(packagedSmokeSource).toContain("showed first-run onboarding despite having a seeded Project")
     expect(packagedSmokeSource).toContain("delete environment.CONVAX_COLLABORATION_CONTROL_RUNTIME")
     expect(packagedSmokeSource).not.toContain("the packaged Home or Canvas")

@@ -137,6 +137,13 @@ schema and reducer, and Desktop packages and loads that one descriptor.
   `local-project-owner` or `team-replica` signer-authority mode. An unshared durable
   local owner may create/edit ProjectIndex and Canvas data offline; a durable Team
   binding disables new local-owner signing but never selects another protocol.
+- Local and Team signing private keys are explicit user-managed files below Electron
+  `userData`; Desktop never calls a system credential vault. If an unshared
+  Project's current local key is missing, Desktop durably creates a fresh
+  replica/actor binding in the same Project epoch, archives the prior public binding
+  for historical verification, atomically makes the new binding current, and keeps
+  editing. It never reads retired vault ciphertext, rewrites or re-signs history, or
+  treats key rotation as a protocol or Project reset.
 - Frame magic, wire format, and `protocolDigest` must equal the built descriptor.
   Anything else is `unsupported-project-data`; never try a second decoder, guess a
   layout, or reinterpret unknown bytes.
