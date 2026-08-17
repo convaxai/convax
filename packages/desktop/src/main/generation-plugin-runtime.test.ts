@@ -410,6 +410,7 @@ class FakeMcpClient implements GenerationPluginMcpClient {
   closed = 0
   closeAndWait?: (force?: boolean) => Promise<void>
   readonly forcedCloses: boolean[] = []
+  listError?: Error
   tools: McpToolDefinition[] = [{ inputSchema: { type: "object" }, name: "generate.image" }]
   result: McpToolCallResult = { content: [{ text: "done", type: "text" }] }
   readonly toolErrors = new Map<string, Error>()
@@ -469,6 +470,7 @@ class FakeMcpClient implements GenerationPluginMcpClient {
 
   async listTools(signal?: AbortSignal) {
     this.listSignals.push(signal)
+    if (this.listError) throw this.listError
     return this.tools
   }
 }
@@ -669,6 +671,31 @@ describe("GenerationPluginRuntime", () => {
     expect(clients[0]!.calls.map(({ name }) => name)).toEqual([
       "service.authorize",
       "llm.gateway.start",
+      "service.authorization.complete",
+    ])
+    expect(clients[0]!.closed).toBe(0)
+  })
+
+  test("keeps service authorization alive when generation catalog inspection fails", async () => {
+    const combined = mutablePlugin(generationPlugin())
+    combined.contributes.service = { actions: ["authorize"] }
+    const { clients, runtime } = setup(
+      [combined],
+      [runtimeModelDefinition(), "service.authorize", "service.authorization.complete"],
+    )
+    const authorization = await runtime.callService(combined.id, "authorize")
+    const model = (await runtime.listTools()).filter(({ kind }) => kind === "model")
+    clients[0]!.listError = new Error("Generation catalog is unavailable until authorization completes")
+
+    await expect(runtime.inspectModelCatalog(model)).rejects.toThrow("unavailable until authorization completes")
+    expect(clients[0]!.closed).toBe(0)
+
+    await authorization.completeAuthorization!({
+      authorization_id: "request_0123456789abcdef",
+      schema: "convax.plugin-service-external-authorization-completion/1",
+    })
+    expect(clients[0]!.calls.map(({ name }) => name)).toEqual([
+      "service.authorize",
       "service.authorization.complete",
     ])
     expect(clients[0]!.closed).toBe(0)

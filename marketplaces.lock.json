@@ -15,7 +15,9 @@
         "kind": "plugin",
         "marketplaceId": "convax-official",
         "setup": "automatic",
-        "targets": ["darwin-arm64"]
+        "targets": [
+          "darwin-arm64"
+        ]
       }
     ],
     "recoveryArtifacts": [
@@ -33,7 +35,9 @@
           "sourceKey": "c214bdc5f0af1e19a2bf8d98bd73b816e51ceaae2c4872bb07c76bde57e1e9bb",
           "version": "0.2.1"
         },
-        "targets": ["darwin-arm64"],
+        "targets": [
+          "darwin-arm64"
+        ],
         "version": "0.3.2"
       },
       {
@@ -50,8 +54,10 @@
           "sourceKey": "c214bdc5f0af1e19a2bf8d98bd73b816e51ceaae2c4872bb07c76bde57e1e9bb",
           "version": "0.3.14"
         },
-        "targets": ["darwin-arm64"],
-        "version": "0.5.1"
+        "targets": [
+          "darwin-arm64"
+        ],
+        "version": "1.0.6"
       },
       {
         "id": "storyai-3d-director-desk",
@@ -105,7 +111,7 @@
         "version": "0.2.2"
       }
     ],
-    "revision": 6
+    "revision": 12
   },
   "resolved": {
     "builtinBundle": {
@@ -125,20 +131,20 @@
         "name": "marketplace.json",
         "sha256": "371a7ca2fc29a492a599878d53ca62a36ac98ca160d6d3b880aec8d72c48f001",
         "size": 563,
-        "url": "https://github.com/convaxai/convax-plugins/releases/download/registry-v2-ba2f8fb9a6bdf5dc6aff9730ebdc006c78fcafa14907ab03de7a3a5a4ed0c38d/marketplace.json"
+        "url": "https://github.com/convaxai/convax-plugins/releases/download/registry-v2-9824d9eca1ec12d0c767bd40d7160df332a7b9d99619c7f033d2c62bd0307cac/marketplace.json"
       },
       "registry": {
         "name": "registry-v2.json",
-        "sha256": "6d91b02d1925ca15403baf37298eeac92b055d1027562fc141d7142febf982b1",
-        "size": 26831,
-        "url": "https://github.com/convaxai/convax-plugins/releases/download/registry-v2-ba2f8fb9a6bdf5dc6aff9730ebdc006c78fcafa14907ab03de7a3a5a4ed0c38d/registry-v2.json"
+        "sha256": "1081a6cc5e2dc487910ff9272fcf0825c9eefe3aa3c774db4a145756ec99fa6d",
+        "size": 27160,
+        "url": "https://github.com/convaxai/convax-plugins/releases/download/registry-v2-9824d9eca1ec12d0c767bd40d7160df332a7b9d99619c7f033d2c62bd0307cac/registry-v2.json"
       },
-      "revision": "ba2f8fb9a6bdf5dc6aff9730ebdc006c78fcafa14907ab03de7a3a5a4ed0c38d",
+      "revision": "9824d9eca1ec12d0c767bd40d7160df332a7b9d99619c7f033d2c62bd0307cac",
       "showcase": {
         "name": "showcase-v2.json",
-        "sha256": "d6a356480bbbf6ce491eef6be3f9f3beed4ed9180489c7219ed19b75429b721f",
+        "sha256": "ca4fd291a46f48a5d1fdd8928c060be5fc620a5d5297423783eb2c7be1e2b9ef",
         "size": 15031,
-        "url": "https://github.com/convaxai/convax-plugins/releases/download/registry-v2-ba2f8fb9a6bdf5dc6aff9730ebdc006c78fcafa14907ab03de7a3a5a4ed0c38d/showcase-v2.json"
+        "url": "https://github.com/convaxai/convax-plugins/releases/download/registry-v2-9824d9eca1ec12d0c767bd40d7160df332a7b9d99619c7f033d2c62bd0307cac/showcase-v2.json"
       }
     },
     "packages": [
@@ -174,7 +180,7 @@
         "version": "0.4.1"
       }
     ],
-    "policyDigest": "eca25adba53c1a51dffa5dcd06a2e0778c4a92c9ec10c71d32342c812ef39953",
+    "policyDigest": "6f700bac98d791ec5eb08679460957104bdf57c4f3c04c2688a1c6f1526ec50b",
     "recoveryArtifacts": [
       {
         "artifact": {
@@ -212,17 +218,17 @@
       },
       {
         "artifact": {
-          "name": "plugin-nexus-service-0.5.1.zip",
-          "sha256": "c50211dbde1c163988c4dfd0d8e8753a1305972debe0b02e3f7338ed60a0ee1e",
-          "size": 2880,
-          "url": "https://github.com/convaxai/convax-plugins/releases/download/plugin-nexus-service-v0.5.1/plugin-nexus-service-0.5.1.zip"
+          "name": "plugin-nexus-service-1.0.6.zip",
+          "sha256": "4626d0a6a2d9259946afd941a720b0b3e9c08eca8938cb5b96f21f985e716032",
+          "size": 3369,
+          "url": "https://github.com/convaxai/convax-plugins/releases/download/plugin-nexus-service-v1.0.6/plugin-nexus-service-1.0.6.zip"
         },
         "companions": [
           {
-            "name": "nexus-service-0.4.1-darwin-arm64-convax-nexus-mcp",
-            "sha256": "0a15afdbedacb4f98f8dd65d59a263cc7e7b5ee99bac874f320a5ed501476c2f",
-            "size": 63495650,
-            "url": "https://github.com/convaxai/convax-plugins/releases/download/plugin-nexus-service-v0.5.1/nexus-service-0.4.1-darwin-arm64-convax-nexus-mcp",
+            "name": "nexus-service-1.0.6-darwin-arm64-convax-nexus-mcp",
+            "sha256": "8c140b70261d334a8d18baa99543c345dbc4282c8e85a6a7ba84bf6fc950c9f5",
+            "size": 63546848,
+            "url": "https://github.com/convaxai/convax-plugins/releases/download/plugin-nexus-service-v1.0.6/nexus-service-1.0.6-darwin-arm64-convax-nexus-mcp",
             "arch": "arm64",
             "platform": "darwin"
           }
@@ -232,7 +238,7 @@
         "marketplaceId": "convax-official",
         "ownedSkills": [],
         "setup": "explicit",
-        "version": "0.5.1",
+        "version": "1.0.6",
         "retired": {
           "artifact": {
             "sha256": "32899a84630de5d41fbc5011d1271b9d1309a21056b17c8d7afe70107fc01f65",

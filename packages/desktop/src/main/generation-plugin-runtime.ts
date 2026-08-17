@@ -1053,32 +1053,25 @@ export class GenerationPluginRuntime implements PluginCapabilityRuntimeInspectio
     })
     const selectedPlugin = selectedModels[0]!.selected.plugin
     const runtime = await this.#runtimeFor(selectedPlugin)
-    let availableTools: ReadonlyMap<string, McpToolDefinition>
-    try {
-      availableTools = await this.#availableTools(runtime, signal, true)
-    } catch (error) {
-      if (!(error instanceof Error && error.name === "AbortError")) this.#evict(runtime)
-      throw error
-    }
-    let inspected: readonly InspectedGenerationModel[]
-    try {
-      inspected = selectedModels.flatMap(({ expected, selected }) => {
-        const definition = availableTools.get(selected.tool.id)
-        if (!definition) {
-          throw new Error(`Generation Plugin ${pluginId} did not expose its declared MCP tool: ${selected.tool.id}`)
-        }
-        const projection = projectGenerationToolInputSchema(expected.id, definition.inputSchema)
-        const resolved = resolveGenerationToolSelection(expected, expected.id, projection.modelSelector, true)
-        const summaries = resolved.variants?.map(({ summary }) => summary) ?? [expected]
-        return summaries.map((summary) => ({
-          description: { ...projection.description, toolId: summary.id },
-          summary,
-        }))
-      })
-    } catch (error) {
-      if (!(error instanceof Error && error.name === "AbortError")) this.#evict(runtime)
-      throw error
-    }
+    // Catalog inspection is a read-only display probe. A dynamic catalog can
+    // be unavailable until the same shared sidecar completes authorization;
+    // retiring it here would close that in-flight browser authorization.
+    const availableTools = await this.#availableTools(runtime, signal, true)
+    // Keep projection failures isolated to this catalog refresh. Preparation
+    // revalidates the exact tool schema before any generation call.
+    const inspected: readonly InspectedGenerationModel[] = selectedModels.flatMap(({ expected, selected }) => {
+      const definition = availableTools.get(selected.tool.id)
+      if (!definition) {
+        throw new Error(`Generation Plugin ${pluginId} did not expose its declared MCP tool: ${selected.tool.id}`)
+      }
+      const projection = projectGenerationToolInputSchema(expected.id, definition.inputSchema)
+      const resolved = resolveGenerationToolSelection(expected, expected.id, projection.modelSelector, true)
+      const summaries = resolved.variants?.map(({ summary }) => summary) ?? [expected]
+      return summaries.map((summary) => ({
+        description: { ...projection.description, toolId: summary.id },
+        summary,
+      }))
+    })
     if (new Set(inspected.map(({ summary }) => summary.id)).size !== inspected.length) {
       throw new Error(`Generation Plugin model catalog contains colliding selections: ${pluginId}`)
     }
