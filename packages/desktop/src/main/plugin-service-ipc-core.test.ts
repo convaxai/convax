@@ -121,15 +121,95 @@ describe("Plugin service IPC boundary", () => {
     const operations = new PluginServiceIpcOperations()
     const owner = new TestSender(1)
     const other = new TestSender(2)
-    const first = operations.run(owner, "status\0account-tools", waitForAbort)
-    await expect(operations.run(owner, "status\0account-tools", async () => "duplicate")).rejects.toThrow(
+    const first = operations.run(owner, "authorize\0account-tools", waitForAbort)
+    await expect(operations.run(owner, "authorize\0account-tools", async () => "duplicate")).rejects.toThrow(
       "already active",
     )
-    await expect(operations.run(other, "status\0account-tools", async () => "other")).resolves.toBe("other")
+    await expect(operations.run(other, "authorize\0account-tools", async () => "other")).resolves.toBe("other")
     expect(owner.listenerCount()).toBe(1)
     owner.destroy()
     await expect(first).rejects.toMatchObject({ name: "AbortError" })
     operations.dispose()
+  })
+
+  test("joins duplicate read operations for one sender and aborts the shared request on destruction", async () => {
+    const operations = new PluginServiceIpcOperations()
+    const owner = new TestSender(1)
+    const operation = mock(waitForAbort)
+
+    const first = operations.runShared(owner, "status\0account-tools", operation)
+    const second = operations.runShared(owner, "status\0account-tools", operation)
+
+    expect(second).toBe(first)
+    await Promise.resolve()
+    expect(operation).toHaveBeenCalledTimes(1)
+    const firstOutcome = first.then(
+      () => null,
+      (error: unknown) => error,
+    )
+    const secondOutcome = second.then(
+      () => null,
+      (error: unknown) => error,
+    )
+    owner.destroy()
+    expect(await firstOutcome).toMatchObject({ name: "AbortError" })
+    expect(await secondOutcome).toMatchObject({ name: "AbortError" })
+    operations.dispose()
+  })
+
+  test("coalesces duplicate status IPC calls without coalescing service mutations", async () => {
+    type Event = { sender: TestSender }
+    const handlers = new Map<string, (event: Event, input?: unknown) => unknown>()
+    const getStatus = mock(async (_pluginId: string, signal?: AbortSignal) => {
+      if (!signal) throw new Error("Missing status signal")
+      return waitForAbort(signal)
+    })
+    const authorize = mock(async (_pluginId: string, signal?: AbortSignal) => {
+      if (!signal) throw new Error("Missing authorization signal")
+      return waitForAbort(signal)
+    })
+    const dispose = registerPluginServiceIpcCore(
+      executor({ authorize, getStatus }),
+      { isTrustedSender: () => true },
+      {
+        handle: (channel, handler) => handlers.set(channel, handler),
+        publishChange: () => undefined,
+        removeHandler: (channel) => handlers.delete(channel),
+      },
+    )
+    const sender = new TestSender(1)
+    const input = { pluginId: "account-tools" }
+    const statusHandler = handlers.get(pluginServiceIpcChannels.getStatus)
+    const authorizeHandler = handlers.get(pluginServiceIpcChannels.authorize)
+    if (!statusHandler || !authorizeHandler) throw new Error("Missing service handler")
+
+    const firstStatus = statusHandler({ sender }, input) as Promise<PluginServiceStatus>
+    const secondStatus = statusHandler({ sender }, input) as Promise<PluginServiceStatus>
+    await Promise.resolve()
+    expect(getStatus).toHaveBeenCalledTimes(1)
+
+    const firstAuthorization = authorizeHandler({ sender }, input) as Promise<PluginServiceStatus>
+    await Promise.resolve()
+    await expect(authorizeHandler({ sender }, input)).rejects.toThrow("already active")
+    expect(authorize).toHaveBeenCalledTimes(1)
+
+    const firstStatusOutcome = firstStatus.then(
+      () => null,
+      (error: unknown) => error,
+    )
+    const secondStatusOutcome = secondStatus.then(
+      () => null,
+      (error: unknown) => error,
+    )
+    const authorizationOutcome = firstAuthorization.then(
+      () => null,
+      (error: unknown) => error,
+    )
+    sender.destroy()
+    expect(await firstStatusOutcome).toMatchObject({ name: "AbortError" })
+    expect(await secondStatusOutcome).toMatchObject({ name: "AbortError" })
+    expect(await authorizationOutcome).toMatchObject({ name: "AbortError" })
+    dispose()
   })
 
   test("aborts every operation on disposal and fails future work closed", async () => {

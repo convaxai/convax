@@ -13,9 +13,14 @@ export interface PluginServiceIpcSender {
 }
 
 interface SenderState {
-  controllers: Map<string, AbortController>
+  operations: Map<string, ActiveOperation>
   destroyed(): void
   sender: PluginServiceIpcSender
+}
+
+interface ActiveOperation {
+  controller: AbortController
+  promise: Promise<unknown>
 }
 
 function abortError(message: string) {
@@ -56,7 +61,7 @@ export function parsePluginServiceCheckoutTarget(input: unknown) {
   return { planKey: value.planKey, pluginId: requireWebPluginId(value.pluginId) }
 }
 
-/** Sender-scoped cancellation and duplicate suppression without an Electron dependency. */
+/** Sender-scoped cancellation, mutation suppression, and read single-flight without an Electron dependency. */
 export class PluginServiceIpcOperations {
   readonly #senders = new Map<number, SenderState>()
   #disposed = false
@@ -65,22 +70,62 @@ export class PluginServiceIpcOperations {
     if (this.#disposed) throw new Error("Plugin service IPC is disposed")
   }
 
-  async run<Result>(
+  run<Result>(
     sender: PluginServiceIpcSender,
     operationKey: string,
     operation: (signal: AbortSignal) => Promise<Result>,
   ) {
+    return this.#guardedRun(sender, operationKey, operation, false)
+  }
+
+  runShared<Result>(
+    sender: PluginServiceIpcSender,
+    operationKey: string,
+    operation: (signal: AbortSignal) => Promise<Result>,
+  ) {
+    return this.#guardedRun(sender, operationKey, operation, true)
+  }
+
+  #guardedRun<Result>(
+    sender: PluginServiceIpcSender,
+    operationKey: string,
+    operation: (signal: AbortSignal) => Promise<Result>,
+    joinActive: boolean,
+  ): Promise<Result> {
+    try {
+      return this.#run(sender, operationKey, operation, joinActive)
+    } catch (error) {
+      return Promise.reject(error)
+    }
+  }
+
+  #run<Result>(
+    sender: PluginServiceIpcSender,
+    operationKey: string,
+    operation: (signal: AbortSignal) => Promise<Result>,
+    joinActive: boolean,
+  ): Promise<Result> {
     this.assertActive()
     const state = this.#stateFor(sender)
-    if (state.controllers.has(operationKey)) throw new Error("Plugin service request is already active")
-    const controller = new AbortController()
-    state.controllers.set(operationKey, controller)
-    try {
-      return await operation(controller.signal)
-    } finally {
-      if (state.controllers.get(operationKey) === controller) state.controllers.delete(operationKey)
-      this.#releaseWhenIdle(state)
+    const current = state.operations.get(operationKey)
+    if (current) {
+      if (joinActive) return current.promise as Promise<Result>
+      throw new Error("Plugin service request is already active")
     }
+    const controller = new AbortController()
+    const active: ActiveOperation = {
+      controller,
+      promise: Promise.resolve(),
+    }
+    const promise = Promise.resolve()
+      .then(() => operation(controller.signal))
+      .finally(() => {
+        if (state.operations.get(operationKey) === active) state.operations.delete(operationKey)
+        this.#releaseWhenIdle(state)
+      })
+    active.promise = promise
+    state.operations.set(operationKey, active)
+    return promise
   }
 
   dispose() {
@@ -88,9 +133,9 @@ export class PluginServiceIpcOperations {
     this.#disposed = true
     for (const state of this.#senders.values()) {
       state.sender.removeListener("destroyed", state.destroyed)
-      for (const controller of state.controllers.values())
-        controller.abort(abortError("Plugin service IPC was disposed"))
-      state.controllers.clear()
+      for (const operation of state.operations.values())
+        operation.controller.abort(abortError("Plugin service IPC was disposed"))
+      state.operations.clear()
     }
     this.#senders.clear()
   }
@@ -98,13 +143,14 @@ export class PluginServiceIpcOperations {
   #stateFor(sender: PluginServiceIpcSender) {
     const current = this.#senders.get(sender.id)
     if (current) return current
-    const controllers = new Map<string, AbortController>()
+    const operations = new Map<string, ActiveOperation>()
     const state: SenderState = {
-      controllers,
+      operations,
       destroyed: () => {
         if (this.#senders.get(sender.id) === state) this.#senders.delete(sender.id)
-        for (const controller of controllers.values()) controller.abort(abortError("The service renderer closed"))
-        controllers.clear()
+        for (const operation of operations.values())
+          operation.controller.abort(abortError("The service renderer closed"))
+        operations.clear()
       },
       sender,
     }
@@ -114,7 +160,7 @@ export class PluginServiceIpcOperations {
   }
 
   #releaseWhenIdle(state: SenderState) {
-    if (state.controllers.size || this.#senders.get(state.sender.id) !== state) return
+    if (state.operations.size || this.#senders.get(state.sender.id) !== state) return
     state.sender.removeListener("destroyed", state.destroyed)
     this.#senders.delete(state.sender.id)
   }
@@ -165,16 +211,17 @@ export function registerPluginServiceIpcCore<Event extends { sender: PluginServi
   const register = <Result>(
     channel: string,
     operation: (pluginId: string, signal: AbortSignal) => Promise<Result>,
-    publish = false,
+    behavior: "read" | "mutation" = "read",
   ) => {
     transport.handle(channel, async (event, input) => {
       if (!options.isTrustedSender(event)) throw new Error("Plugin service IPC request came from an untrusted renderer")
       if (disposed) throw new Error("Plugin service IPC is disposed")
       const { pluginId } = parsePluginServiceTarget(input)
       const operationKey = `${channel}\0${pluginId}`
-      return operations.run(event.sender, operationKey, async (signal) => {
+      const run = behavior === "read" ? operations.runShared.bind(operations) : operations.run.bind(operations)
+      return run(event.sender, operationKey, async (signal) => {
         const result = await operation(pluginId, signal)
-        if (publish) transport.publishChange()
+        if (behavior === "mutation") transport.publishChange()
         return result
       })
     })
@@ -187,12 +234,16 @@ export function registerPluginServiceIpcCore<Event extends { sender: PluginServi
   })
   register(pluginServiceIpcChannels.getStatus, (pluginId, signal) => executor.getStatus(pluginId, signal))
   register(pluginServiceIpcChannels.getUsageHistory, (pluginId, signal) => executor.getUsageHistory(pluginId, signal))
-  register(pluginServiceIpcChannels.authorize, (pluginId, signal) => executor.authorize(pluginId, signal), true)
-  register(pluginServiceIpcChannels.reauthorize, (pluginId, signal) => executor.reauthorize(pluginId, signal), true)
+  register(pluginServiceIpcChannels.authorize, (pluginId, signal) => executor.authorize(pluginId, signal), "mutation")
+  register(
+    pluginServiceIpcChannels.reauthorize,
+    (pluginId, signal) => executor.reauthorize(pluginId, signal),
+    "mutation",
+  )
   register(
     pluginServiceIpcChannels.cancelAuthorization,
     (pluginId, signal) => executor.cancelAuthorization(pluginId, signal),
-    true,
+    "mutation",
   )
   transport.handle(pluginServiceIpcChannels.checkout, async (event, input) => {
     if (!options.isTrustedSender(event)) throw new Error("Plugin service IPC request came from an untrusted renderer")
@@ -204,7 +255,7 @@ export function registerPluginServiceIpcCore<Event extends { sender: PluginServi
       return result
     })
   })
-  register(pluginServiceIpcChannels.signOut, (pluginId, signal) => executor.signOut(pluginId, signal), true)
+  register(pluginServiceIpcChannels.signOut, (pluginId, signal) => executor.signOut(pluginId, signal), "mutation")
 
   return () => {
     if (disposed) return
