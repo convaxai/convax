@@ -157,19 +157,39 @@ retired model-catalog tool. An installed snapshot that does not satisfy the curr
 manifest remains invalid and non-executable; Host never parses it as migration or
 in-place update input.
 
-The packaged product lock may retain a bounded replacement closure for offline
-recovery of one exact retired-Host-API Plugin binding. This is not a preinstall or
-discovery source: the Host exposes it only to the existing explicit update path
-after quarantine inspection matches source, Plugin id, old version, archive
-SHA-256/size, immutable snapshot digest, and old Host API major. Fresh installs,
-default provisioning, mismatched snapshots, and directory scans cannot consume it.
-The successful CAS remains inert for the quarantined process until restart.
+Packaged Marketplace content is governed by
+`convax.marketplace-product-lock/3`. Its policy and resolved state each contain one
+bounded `packages` collection keyed by exact Official `{kind,id}` identity. Every
+entry carries canonical purposes and targets plus one immutable resolved package
+closure. A Plugin closure may carry both `default-install` and
+`retired-recovery`, so the artifact, companion, and owned-Skill bytes are stored and
+verified once rather than duplicated by purpose. A standalone Skill entry may
+carry only `default-install`, must be portable, and is rejected if Registry
+provenance identifies it as Plugin-owned.
 
-Plugin-owned Skills are read directly from the leased immutable closure. A generic
+`default-install` is an explicit product provisioning decision, not Marketplace
+membership metadata and never something inferred from Catalog presence, Official
+branding, cached bytes, or a directory scan. The Host passes the exact verified
+candidate through the ordinary Plugin or standalone-Skill installer and preserves
+its Official provenance and normal lifecycle. General Marketplace membership and
+packaged byte presence still grant no installation or execution authority.
+
+A `retired-recovery` purpose remains available only to the existing explicit update
+path after quarantine inspection matches source, Plugin id, old version, archive
+SHA-256/size, immutable snapshot digest, and old Host API major. That purpose never
+authorizes a fresh install or default provisioning. When one closure also carries
+`default-install`, a fresh installation may consume the bytes only through that
+independent purpose; a missing or mismatched retired binding still cannot enter the
+recovery path. The successful recovery CAS remains inert for the quarantined
+process until restart.
+
+Plugin-owned Skills are read directly from the leased immutable closure and never
+become standalone product-lock packages. A generic
 `resolveSkillPaths` port passes only absolute Skill directories to
 `@convax/agent-runtime`; the Agent runtime never receives Plugin ids, ActiveSet
-policy, or ownership journals. Standalone Skills retain their independent managed
-directory and lifecycle.
+policy, or ownership journals. Official standalone Skills selected for
+`default-install` use the same exact packaged-candidate flow as Plugins, then retain
+their independent managed directory and lifecycle.
 
 ## Plugin-to-Plugin calls
 

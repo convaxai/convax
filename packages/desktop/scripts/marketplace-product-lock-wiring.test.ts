@@ -3,7 +3,11 @@ import { readFile } from "node:fs/promises"
 import { join } from "node:path"
 
 import { canonicalJson } from "@convax/marketplace"
-import { validateLockedPluginManifest } from "./stage-marketplace-product-lock"
+import {
+  deduplicateStagedMarketplaceArtifacts,
+  validateLockedPluginManifest,
+  validateLockedSkillArchive,
+} from "./stage-marketplace-product-lock"
 
 test("Desktop packaging verifies the one root Marketplace product lock before consuming staged bytes", async () => {
   const manifest = JSON.parse(await readFile(join(import.meta.dir, "..", "package.json"), "utf8")) as {
@@ -27,14 +31,58 @@ test("stages every selected package as one deterministic artifact group", async 
   const source = await readFile(join(import.meta.dir, "stage-marketplace-product-lock.ts"), "utf8")
   expect(source).toContain("descriptor.registry.v1 !== undefined")
   expect(source).not.toContain("convax-plugins/registry/v1/index.json")
-  expect(source).toContain('prefix: "packages"')
-  expect(source).toContain('prefix: "recovery-artifacts"')
-  expect(source).toContain("`${prefix}/${entry.id}/${entry.artifact.name}`")
-  expect(source).toContain("`${prefix}/${entry.id}/skills/${skill.name}`")
+  expect(source).not.toContain("recovery-artifacts")
+  expect(source).toContain('entry.kind === "skill"')
+  expect(source).toContain("`packages/${entry.kind}/${entry.id}/${entry.artifact.name}`")
+  expect(source).toContain("`packages/plugin/${entry.id}/skills/${skill.name}`")
   expect(source).toContain(
-    "`${prefix}/${entry.id}/companions/${companion.platform}-${companion.arch}/${companion.name}`",
+    "`packages/plugin/${entry.id}/companions/${companion.platform}-${companion.arch}/${companion.name}`",
   )
-  expect(source).toContain("staged.map(({ lock, path }) =>")
+  expect(source).toContain("packagedArtifacts.map(({ lock, path }) =>")
+  expect(source).toContain("assertCanonicalOfficialMarketplaceDescriptor(descriptor, lock.policy.official)")
+})
+
+test("deduplicates byte-identical locked artifacts onto one deterministic packaged path", () => {
+  const bytes = new Uint8Array([1, 2, 3])
+  const shared = { sha256: "a".repeat(64), size: bytes.byteLength }
+  const artifact = (name: string, path: string) => ({
+    bytes,
+    lock: {
+      ...shared,
+      name,
+      url: `https://github.com/convaxai/convax-plugins/releases/download/plugin-fixture-v1.0.0/${name}`,
+    },
+    path,
+  })
+
+  expect(
+    deduplicateStagedMarketplaceArtifacts([
+      artifact("shared-second", "packages/plugin/zeta/companions/darwin-arm64/shared-second"),
+      artifact("shared-first", "packages/plugin/alpha/companions/darwin-arm64/shared-first"),
+    ]).map(({ path }) => path),
+  ).toEqual(["packages/plugin/alpha/companions/darwin-arm64/shared-first"])
+  expect(
+    deduplicateStagedMarketplaceArtifacts([
+      artifact("shared-first", "packages/plugin/alpha/companions/darwin-arm64/shared-first"),
+      artifact("shared-second", "packages/plugin/zeta/companions/darwin-arm64/shared-second"),
+    ]).map(({ path }) => path),
+  ).toEqual(["packages/plugin/alpha/companions/darwin-arm64/shared-first"])
+})
+
+test("validates a standalone Skill archive without requiring Plugin closure fields", () => {
+  const valid = {
+    "SKILL.md": new TextEncoder().encode(
+      "---\nname: canvas-storyboard-workflow\ndescription: Create a storyboard from a Canvas.\n---\n\n# Storyboard workflow\n",
+    ),
+  }
+  expect(validateLockedSkillArchive(valid, { id: "canvas-storyboard-workflow" })).toEqual({
+    description: "Create a storyboard from a Canvas.",
+    name: "canvas-storyboard-workflow",
+  })
+  expect(() => validateLockedSkillArchive(valid, { id: "different-skill" })).toThrow("identity changed")
+  expect(() =>
+    validateLockedSkillArchive({ "skill.md": valid["SKILL.md"] }, { id: "canvas-storyboard-workflow" }),
+  ).toThrow("exactly one root SKILL.md")
 })
 
 test("compares the canonical validated Plugin projection with parser-added defaults", () => {

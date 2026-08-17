@@ -65,6 +65,7 @@ async function assertPackedLockInputParser(cliPath: string, cwd: string): Promis
 
 const packageRoot = resolve(import.meta.dir, "..")
 const marketplaceRoot = resolve(packageRoot, "../marketplace")
+const boundedValueRoot = resolve(packageRoot, "../bounded-value")
 const pluginApiRoot = resolve(packageRoot, "../plugin-api")
 const pluginSdkRoot = resolve(packageRoot, "../plugin-sdk")
 const temporaryRoot = await mkdtemp(join(tmpdir(), "convax-marketplace-kit-pack-check-"))
@@ -74,12 +75,13 @@ try {
   await mkdir(tarballRoot)
   await mkdir(consumerRoot)
   const marketplaceTarball = await pack(marketplaceRoot, tarballRoot)
+  const boundedValueTarball = await pack(boundedValueRoot, tarballRoot)
   const pluginApiTarball = await pack(pluginApiRoot, tarballRoot)
   const pluginSdkTarball = await pack(pluginSdkRoot, tarballRoot)
   const kitTarball = await pack(packageRoot, tarballRoot)
   await assertPackedDependency(kitTarball, "@convax/marketplace", "^0.2.1")
-  await assertPackedDependency(kitTarball, "@convax/plugin-api", "^2.0.0")
-  await assertPackedDependency(kitTarball, "@convax/plugin-sdk", "^0.1.1")
+  await assertPackedDependency(kitTarball, "@convax/plugin-api", "^3.1.0")
+  await assertPackedDependency(kitTarball, "@convax/plugin-sdk", "^0.4.0")
   await writeFile(
     join(consumerRoot, "package.json"),
     `${JSON.stringify(
@@ -87,12 +89,14 @@ try {
         private: true,
         type: "module",
         dependencies: {
+          "@convax/bounded-value": `file:${boundedValueTarball}`,
           "@convax/marketplace": `file:${marketplaceTarball}`,
           "@convax/marketplace-kit": `file:${kitTarball}`,
           "@convax/plugin-api": `file:${pluginApiTarball}`,
           "@convax/plugin-sdk": `file:${pluginSdkTarball}`,
         },
         overrides: {
+          "@convax/bounded-value": `file:${boundedValueTarball}`,
           "@convax/marketplace": `file:${marketplaceTarball}`,
           "@convax/plugin-api": `file:${pluginApiTarball}`,
           "@convax/plugin-sdk": `file:${pluginSdkTarball}`,

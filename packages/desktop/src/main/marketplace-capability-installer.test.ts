@@ -5,6 +5,7 @@ import { DesktopMarketplaceCapabilityInstaller } from "./marketplace-capability-
 function fixture() {
   const hardRefreshPlugin = mock(async () => undefined)
   const refreshPetProvider = mock(async () => undefined)
+  const scheduleStartupRefresh = mock(() => undefined)
   const installer = new DesktopMarketplaceCapabilityInstaller({
     authorizePlugin: async () => null,
     currentPluginAuthorization: async () => null,
@@ -21,11 +22,12 @@ function fixture() {
     resolvePackage: async () => {
       throw new Error("not used")
     },
+    scheduleStartupRefresh,
     uninstallPlugin: async () => undefined,
     uninstallSkill: async () => undefined,
     verifyPluginAuthorization: async () => false,
   })
-  return { hardRefreshPlugin, installer, refreshPetProvider }
+  return { hardRefreshPlugin, installer, refreshPetProvider, scheduleStartupRefresh }
 }
 
 test("refreshes Pet discovery after a committed Marketplace Plugin lifecycle change", async () => {
@@ -36,6 +38,21 @@ test("refreshes Pet discovery after a committed Marketplace Plugin lifecycle cha
   expect(value.hardRefreshPlugin).toHaveBeenCalledTimes(1)
   expect(value.hardRefreshPlugin).toHaveBeenCalledWith("soft-companion")
   expect(value.refreshPetProvider).toHaveBeenCalledWith("soft-companion")
+})
+
+test("forwards one non-blocking startup refresh for the committed Plugin and Skill batch", () => {
+  const value = fixture()
+
+  value.installer.scheduleStartupRefresh([
+    { id: "canvas-storyboard", kind: "skill" },
+    { id: "ffmpeg-tools", kind: "plugin" },
+    { id: "ignored", kind: "mcp-server" },
+  ])
+
+  expect(value.scheduleStartupRefresh).toHaveBeenCalledWith([
+    { id: "canvas-storyboard", kind: "skill" },
+    { id: "ffmpeg-tools", kind: "plugin" },
+  ])
 })
 
 test("does not refresh Pet discovery for standalone Skill or MCP lifecycle changes", async () => {

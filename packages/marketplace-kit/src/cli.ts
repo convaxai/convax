@@ -8,6 +8,7 @@ import {
   changedMarketplaceVersions,
   createMarketplaceTemplate,
   composeProductLockInput,
+  stagePublishedProductLockCatalog,
   type MarketplacePublishSelection,
   type MarketplaceRemovalSelection,
   type StarterKind,
@@ -66,8 +67,14 @@ async function fetchReleaseArtifact(artifact: { url: string; size: number; sha25
   throw new TypeError("artifact fetch failed")
 }
 
-export async function runMarketplaceCli(args = process.argv.slice(2)): Promise<void> {
+export async function runMarketplaceCli(
+  args = process.argv.slice(2),
+  adapters: {
+    fetchArtifact?: (artifact: { url: string; size: number; sha256: string }) => Promise<Uint8Array>
+  } = {},
+): Promise<void> {
   const [command, rootArgument, ...rest] = args
+  const fetchArtifact = adapters.fetchArtifact ?? fetchReleaseArtifact
   if (command === "check") {
     await checkMarketplace(rootArgument ?? ".")
     return
@@ -88,7 +95,7 @@ export async function runMarketplaceCli(args = process.argv.slice(2)): Promise<v
       initialOfficial: rest.includes("--initial"),
       publishSelections: changed,
       removeSelections: removed,
-      fetchArtifact: changed || removed ? fetchReleaseArtifact : undefined,
+      fetchArtifact: changed || removed ? fetchArtifact : undefined,
     })
     return
   }
@@ -100,6 +107,27 @@ export async function runMarketplaceCli(args = process.argv.slice(2)): Promise<v
   }
   if (command === "bundle") {
     await buildBuiltinBundle({ root: rootArgument ?? ".", outDir: option(rest, "--out") ?? "dist/builtin" })
+    return
+  }
+  if (command === "stage-product-lock-catalog") {
+    if (!rootArgument || rootArgument.startsWith("--")) {
+      throw new TypeError("stage-product-lock-catalog requires a Marketplace root")
+    }
+    const descriptorPath = option(rest, "--descriptor")
+    const registryPath = option(rest, "--registry")
+    const showcasePath = option(rest, "--showcase")
+    const outDir = option(rest, "--out")
+    if (!descriptorPath || !registryPath || !showcasePath || !outDir) {
+      throw new TypeError("stage-product-lock-catalog requires --descriptor, --registry, --showcase, and --out")
+    }
+    await stagePublishedProductLockCatalog({
+      root: rootArgument,
+      outDir,
+      descriptorPath,
+      registryPath,
+      showcasePath,
+      fetchArtifact,
+    })
     return
   }
   if (command === "lock-input") {
@@ -134,7 +162,9 @@ export async function runMarketplaceCli(args = process.argv.slice(2)): Promise<v
     await addTarget(option(rest, "--root") ?? ".", rootArgument, { target, file })
     return
   }
-  throw new TypeError("usage: convax-marketplace check|changed|build-index|bundle|lock-input|add|new|add-target")
+  throw new TypeError(
+    "usage: convax-marketplace check|changed|build-index|bundle|stage-product-lock-catalog|lock-input|add|new|add-target",
+  )
 }
 
 if (import.meta.main) {

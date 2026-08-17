@@ -30,6 +30,7 @@ import {
   type MarketplaceRuntimeSurface,
 } from "./marketplace-runtime-surface"
 import type { VerifiedMarketplaceCandidate } from "./marketplace-artifact-installer"
+import { assertCanonicalOfficialMarketplaceDescriptor } from "./marketplace-product-source-identity"
 import { unpackSafeZip } from "./safe-zip"
 
 const maxManifestBytes = 4 * 1024 * 1024
@@ -49,6 +50,30 @@ interface PackagedManifest {
     schema: "convax.builtin-reservation/1"
   }
   schema: "convax.packaged-marketplace-product/1"
+}
+
+function artifactKey(artifact: { sha256: string; size: number }) {
+  return `${artifact.sha256}\0${artifact.size}`
+}
+
+function lockedProductArtifacts(lock: MarketplaceProductLock): MarketplaceArtifactLock[] {
+  return [
+    lock.resolved.builtinBundle,
+    lock.resolved.official.descriptor,
+    lock.resolved.official.registry,
+    lock.resolved.official.showcase,
+    ...lock.resolved.packages.flatMap((entry) =>
+      entry.kind === "plugin" ? [entry.artifact, ...entry.ownedSkills, ...entry.companions] : [entry.artifact],
+    ),
+  ]
+}
+
+function assertExactPackagedArtifactClosure(lock: MarketplaceProductLock, paths: readonly PackagedPath[]) {
+  const expected = new Set(lockedProductArtifacts(lock).map(artifactKey))
+  const actual = new Set(paths.map(artifactKey))
+  if (actual.size !== expected.size || [...actual].some((key) => !expected.has(key))) {
+    throw new Error("Packaged Marketplace product paths do not exactly close its product lock")
+  }
 }
 
 export interface PackagedRetiredPluginRecovery {
@@ -98,7 +123,7 @@ function parseManifest(value: unknown): PackagedManifest {
   }
   const lock = parseMarketplaceProductLock(input.lock)
   const seenPaths = new Set<string>()
-  const seenDigests = new Set<string>()
+  const seenArtifacts = new Set<string>()
   const paths = input.paths.map((value) => {
     if (!value || typeof value !== "object" || Array.isArray(value)) {
       throw new Error("Packaged Marketplace product path is invalid")
@@ -112,15 +137,18 @@ function parseManifest(value: unknown): PackagedManifest {
       !Number.isSafeInteger(entry.size) ||
       Number(entry.size) < 1 ||
       Number(entry.size) > maxArtifactBytes ||
-      seenPaths.has(relativePath) ||
-      seenDigests.has(entry.sha256)
+      seenPaths.has(relativePath)
     ) {
       throw new Error("Packaged Marketplace product path is invalid")
     }
+    const parsed = { path: relativePath, sha256: entry.sha256, size: Number(entry.size) }
+    const key = artifactKey(parsed)
+    if (seenArtifacts.has(key)) throw new Error("Packaged Marketplace product path is invalid")
     seenPaths.add(relativePath)
-    seenDigests.add(entry.sha256)
-    return { path: relativePath, sha256: entry.sha256, size: Number(entry.size) }
+    seenArtifacts.add(key)
+    return parsed
   })
+  assertExactPackagedArtifactClosure(lock, paths)
   const reservation = input.reservation
   if (
     !reservation ||
@@ -167,8 +195,9 @@ function parseManifest(value: unknown): PackagedManifest {
   }
 }
 
-function artifactKey(artifact: { sha256: string; size: number }) {
-  return `${artifact.sha256}\0${artifact.size}`
+function supportsCurrentTarget(targets: readonly string[]) {
+  const current = `${process.platform}-${process.arch}`
+  return targets.length === 0 || targets.some((target) => target === current)
 }
 
 export class PackagedMarketplaceProduct {
@@ -239,6 +268,7 @@ export class PackagedMarketplaceProduct {
         new TextDecoder("utf-8", { fatal: true }).decode(await read(manifest.lock.resolved.official.descriptor)),
       ),
     )
+    assertCanonicalOfficialMarketplaceDescriptor(descriptor, manifest.lock.policy.official)
     const registry = parseRegistryV2(
       JSON.parse(
         new TextDecoder("utf-8", { fatal: true }).decode(await read(manifest.lock.resolved.official.registry)),
@@ -290,7 +320,12 @@ export class PackagedMarketplaceProduct {
       throw new Error("Only packaged Plugin and Skill artifacts use the verified candidate publisher")
     }
     const lockedPackage = this.lock.resolved.packages.find(
-      (entry) => entry.kind === item.kind && entry.id === item.id && entry.version === item.version,
+      (entry) =>
+        entry.kind === item.kind &&
+        entry.id === item.id &&
+        entry.version === item.version &&
+        entry.purposes.some((purpose) => purpose === "default-install") &&
+        supportsCurrentTarget(entry.targets),
     )
     if (!lockedPackage || artifactKey(lockedPackage.artifact) !== artifactKey(item.delivery)) {
       throw new Error("Package is not selected by the Marketplace product lock")
@@ -304,14 +339,17 @@ export class PackagedMarketplaceProduct {
   ): Promise<VerifiedMarketplaceCandidate | null> {
     if (item.kind !== "plugin" || item.delivery.kind !== "artifact") return null
     const delivery = item.delivery
-    const lockedPackage = this.lock.resolved.recoveryArtifacts.find(
+    const lockedPackage = this.lock.resolved.packages.find(
       (entry) =>
-        entry.kind === item.kind &&
+        entry.kind === "plugin" &&
+        "retired" in entry &&
+        entry.purposes.some((purpose) => purpose === "retired-recovery") &&
+        supportsCurrentTarget(entry.targets) &&
         entry.id === item.id &&
         entry.version === item.version &&
         artifactKey(entry.artifact) === artifactKey(delivery),
     )
-    if (!lockedPackage) return null
+    if (!lockedPackage || !("retired" in lockedPackage)) return null
     const retired = lockedPackage.retired
     if (
       recovery.pluginId !== lockedPackage.id ||
@@ -329,12 +367,19 @@ export class PackagedMarketplaceProduct {
   retiredPluginSourceMigrations(): readonly PackagedRetiredPluginSourceMigration[] {
     const toSourceIdentity = this.#officialSourceKey()
     return Object.freeze(
-      this.lock.resolved.recoveryArtifacts.map((entry) =>
-        Object.freeze({
-          fromSourceIdentity: entry.retired.sourceKey,
-          pluginId: entry.id,
-          toSourceIdentity,
-        }),
+      this.lock.resolved.packages.flatMap((entry) =>
+        entry.kind === "plugin" &&
+        "retired" in entry &&
+        entry.purposes.some((purpose) => purpose === "retired-recovery") &&
+        supportsCurrentTarget(entry.targets)
+          ? [
+              Object.freeze({
+                fromSourceIdentity: entry.retired.sourceKey,
+                pluginId: entry.id,
+                toSourceIdentity,
+              }),
+            ]
+          : [],
       ),
     )
   }
@@ -346,6 +391,9 @@ export class PackagedMarketplaceProduct {
     const artifactBytes = await this.#read(lockedPackage.artifact)
     const companionBytes: Record<string, Uint8Array> = {}
     for (const declaration of item.companions ?? []) {
+      if (lockedPackage.kind !== "plugin") {
+        throw new Error("Standalone Skill product locks cannot contain Plugin companions")
+      }
       const target = declaration.targets.find(
         (entry) => entry.platform === process.platform && entry.arch === process.arch,
       )
