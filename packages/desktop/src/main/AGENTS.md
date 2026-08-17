@@ -20,6 +20,11 @@ authority and lifecycle coordination, not reusable domain semantics.
 
 ## Baseline rules
 
+- Create and show one inert local startup window immediately after Electron is
+  ready, before collaboration, Project, Plugin, Agent, generation, Pet, or other
+  product-runtime restoration. Do not grant that document trusted-sender authority;
+  bind the completed Main bridges to the same window before loading the trusted
+  Renderer, and replace indefinite loading with a bounded local failure surface.
 - Keep packaged Main as one self-contained CommonJS dependency bundle. Only Electron
   and Node built-ins may remain external; a bare package import or packaged
   `node_modules` dependency is a build failure.

@@ -965,8 +965,20 @@ resolving “latest.” Purpose is policy, not another copy of the artifact: one
 closure may serve both default installation and retired recovery, but each runtime
 path must independently prove the matching purpose before consuming it.
 
-Desktop creates the first application window before starting one process-wide
-background provisioning single-flight. That job installs verified Builtin members,
+After Electron becomes ready, Desktop creates and shows one inert local startup
+window before loading the collaboration descriptor or restoring Project, Plugin,
+Agent, generation, Pet, and other product runtimes. The startup document has no
+script or trusted-sender authority; Main binds the completed runtime to that same
+window and only then replaces it with the trusted Renderer. A required initialization
+failure replaces indefinite loading with a bounded local failure surface. Development
+and packaged runtimes follow this same visibility order. A quarantined Plugin
+runtime is a completed fail-closed Plugin restoration outcome, not a required Host
+initialization failure; it never prevents the window from reaching non-Plugin
+Project and Canvas capabilities.
+
+After Main binds the window and starts loading the trusted Renderer, Desktop starts
+one process-wide background provisioning single-flight. That job installs verified
+Builtin members,
 then sends each current-target `default-install` entry through the ordinary
 Marketplace installer and, for Plugins, the immutable closure and global ActiveSet
 CAS. It presents no approval dialog and never blocks Canvas switching or first-window
@@ -979,6 +991,14 @@ delay that refresh, but neither the provisioning success marker nor shutdown dra
 it. A user uninstall records a per-entry `ProvisioningDecision`;
 later startup jobs preserve that decision instead of silently reinstalling the
 entry.
+
+Development materialization of locked Marketplace artifacts may download distinct
+content-addressed entries with a fixed small concurrency bound and report only
+aggregate counts and bytes. Every artifact still passes the exact URL policy, size,
+SHA-256, regular-file, single-link, fsync, and atomic-publication checks used by the
+strict product lock. Progress never exposes a URL, native path, SourceKey, or digest,
+and a preparation failure disables the stale staged product rather than using it as
+fallback.
 
 The current defaults are the Builtin `canvas-storyboard` Skill; the Official
 `ffmpeg-tools`, `jianying-editor`, and `nexus-service` Plugins on

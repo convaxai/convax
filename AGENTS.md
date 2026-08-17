@@ -294,6 +294,11 @@ user directory.
 
 ## Repository-wide hard rules
 
+- Desktop Main creates and shows one inert local startup window immediately after
+  Electron readiness, before product-runtime restoration. That document is never a
+  trusted Renderer or capability principal; Main loads the trusted Renderer into
+  the same window only after required bridges are ready, and required initialization
+  failure replaces indefinite loading with a bounded local failure surface.
 - UI, Agent, Plugin, and native entry points call the same owner-defined application
   or business operations. Edge adapters do not recreate domain invariants.
 - Main's per-shard `replicaDoc`, rebuilt from accepted durable causal objects, is
