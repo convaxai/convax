@@ -14,21 +14,31 @@
         "id": "ffmpeg-tools",
         "kind": "plugin",
         "marketplaceId": "convax-official",
-        "purposes": ["default-install"],
-        "targets": ["darwin-arm64"]
+        "purposes": [
+          "default-install"
+        ],
+        "targets": [
+          "darwin-arm64"
+        ]
       },
       {
         "id": "jianying-editor",
         "kind": "plugin",
         "marketplaceId": "convax-official",
-        "purposes": ["default-install"],
-        "targets": ["darwin-arm64"]
+        "purposes": [
+          "default-install"
+        ],
+        "targets": [
+          "darwin-arm64"
+        ]
       },
       {
         "id": "cutout-studio",
         "kind": "plugin",
         "marketplaceId": "convax-official",
-        "purposes": ["retired-recovery"],
+        "purposes": [
+          "retired-recovery"
+        ],
         "retired": {
           "artifact": {
             "sha256": "1167cc5541a05e755135c354ab8f6bee04c343d3d5c7b8300ae3ff3562a088a0",
@@ -39,14 +49,19 @@
           "sourceKey": "c214bdc5f0af1e19a2bf8d98bd73b816e51ceaae2c4872bb07c76bde57e1e9bb",
           "version": "0.2.1"
         },
-        "targets": ["darwin-arm64"],
+        "targets": [
+          "darwin-arm64"
+        ],
         "version": "0.3.2"
       },
       {
         "id": "nexus-service",
         "kind": "plugin",
         "marketplaceId": "convax-official",
-        "purposes": ["default-install", "retired-recovery"],
+        "purposes": [
+          "default-install",
+          "retired-recovery"
+        ],
         "retired": {
           "artifact": {
             "sha256": "32899a84630de5d41fbc5011d1271b9d1309a21056b17c8d7afe70107fc01f65",
@@ -57,84 +72,108 @@
           "sourceKey": "c214bdc5f0af1e19a2bf8d98bd73b816e51ceaae2c4872bb07c76bde57e1e9bb",
           "version": "0.3.14"
         },
-        "targets": ["darwin-arm64"],
-        "version": "1.0.4"
+        "targets": [
+          "darwin-arm64"
+        ],
+        "version": "1.0.6"
       },
       {
         "id": "ad-idea",
         "kind": "skill",
         "marketplaceId": "convax-official",
-        "purposes": ["default-install"],
+        "purposes": [
+          "default-install"
+        ],
         "targets": []
       },
       {
         "id": "audiobook",
         "kind": "skill",
         "marketplaceId": "convax-official",
-        "purposes": ["default-install"],
+        "purposes": [
+          "default-install"
+        ],
         "targets": []
       },
       {
         "id": "convax-plugin-authoring",
         "kind": "skill",
         "marketplaceId": "convax-official",
-        "purposes": ["default-install"],
+        "purposes": [
+          "default-install"
+        ],
         "targets": []
       },
       {
         "id": "ecommerce-image",
         "kind": "skill",
         "marketplaceId": "convax-official",
-        "purposes": ["default-install"],
+        "purposes": [
+          "default-install"
+        ],
         "targets": []
       },
       {
         "id": "film-shot",
         "kind": "skill",
         "marketplaceId": "convax-official",
-        "purposes": ["default-install"],
+        "purposes": [
+          "default-install"
+        ],
         "targets": []
       },
       {
         "id": "image-remix",
         "kind": "skill",
         "marketplaceId": "convax-official",
-        "purposes": ["default-install"],
+        "purposes": [
+          "default-install"
+        ],
         "targets": []
       },
       {
         "id": "short-drama-screenwriter",
         "kind": "skill",
         "marketplaceId": "convax-official",
-        "purposes": ["default-install"],
+        "purposes": [
+          "default-install"
+        ],
         "targets": []
       },
       {
         "id": "skill-creator",
         "kind": "skill",
         "marketplaceId": "convax-official",
-        "purposes": ["default-install"],
+        "purposes": [
+          "default-install"
+        ],
         "targets": []
       },
       {
         "id": "skill-reviewer",
         "kind": "skill",
         "marketplaceId": "convax-official",
-        "purposes": ["default-install"],
+        "purposes": [
+          "default-install"
+        ],
         "targets": []
       },
       {
         "id": "video-prompting",
         "kind": "skill",
         "marketplaceId": "convax-official",
-        "purposes": ["default-install"],
+        "purposes": [
+          "default-install"
+        ],
         "targets": []
       },
       {
         "id": "storyai-3d-director-desk",
         "kind": "plugin",
         "marketplaceId": "convax-official",
-        "purposes": ["retired-recovery"],
+        "purposes": [
+          "retired-recovery"
+        ],
         "retired": {
           "artifact": {
             "sha256": "a910abb3091ea973afaab8885ff77a1d69ac3fb2605f6bbf86079f33ce1af8f9",
@@ -152,7 +191,9 @@
         "id": "storyboard-studio",
         "kind": "plugin",
         "marketplaceId": "convax-official",
-        "purposes": ["retired-recovery"],
+        "purposes": [
+          "retired-recovery"
+        ],
         "retired": {
           "artifact": {
             "sha256": "b1b07d89093c7fb4d68431581266321c74e4e6717c012561edc56dd5bcf6634b",
@@ -170,7 +211,9 @@
         "id": "video-timeline",
         "kind": "plugin",
         "marketplaceId": "convax-official",
-        "purposes": ["retired-recovery"],
+        "purposes": [
+          "retired-recovery"
+        ],
         "retired": {
           "artifact": {
             "sha256": "71c64f025a29a9c55ed156aa33172b9a016a4ac24df54d8274bd4422d7fc7a9f",
@@ -185,7 +228,7 @@
         "version": "0.2.2"
       }
     ],
-    "revision": 7
+    "revision": 13
   },
   "resolved": {
     "builtinBundle": {
@@ -205,20 +248,20 @@
         "name": "marketplace.json",
         "sha256": "371a7ca2fc29a492a599878d53ca62a36ac98ca160d6d3b880aec8d72c48f001",
         "size": 563,
-        "url": "https://github.com/convaxai/convax-plugins/releases/download/registry-v2-94aa035ff9e6dce9a38de951da970b354bd339db6c4cf2ac2c8da8ed4a312066/marketplace.json"
+        "url": "https://github.com/convaxai/convax-plugins/releases/download/registry-v2-43b4506e203ac94e81505136f9f96e3d0fcfa31896b8bdcefbb93af2c8baa554/marketplace.json"
       },
       "registry": {
         "name": "registry-v2.json",
-        "sha256": "b0b8d5358b8fec4019cff81ae3f3991e0f444ddc457b6ff495f4f121d730751a",
+        "sha256": "35716027c65685fa56d35955e23618d687a3d82f5e64c48c7489122698d8691c",
         "size": 37912,
-        "url": "https://github.com/convaxai/convax-plugins/releases/download/registry-v2-94aa035ff9e6dce9a38de951da970b354bd339db6c4cf2ac2c8da8ed4a312066/registry-v2.json"
+        "url": "https://github.com/convaxai/convax-plugins/releases/download/registry-v2-43b4506e203ac94e81505136f9f96e3d0fcfa31896b8bdcefbb93af2c8baa554/registry-v2.json"
       },
-      "revision": "94aa035ff9e6dce9a38de951da970b354bd339db6c4cf2ac2c8da8ed4a312066",
+      "revision": "43b4506e203ac94e81505136f9f96e3d0fcfa31896b8bdcefbb93af2c8baa554",
       "showcase": {
         "name": "showcase-v2.json",
-        "sha256": "c543d540ac5436110074d8502a94590cce33be9cca036d82c71ee1ceb3a3da03",
+        "sha256": "2de884004e9f409275620f1b0acc7188d22c7d67d4c8927a8434a5abd74ccb86",
         "size": 15031,
-        "url": "https://github.com/convaxai/convax-plugins/releases/download/registry-v2-94aa035ff9e6dce9a38de951da970b354bd339db6c4cf2ac2c8da8ed4a312066/showcase-v2.json"
+        "url": "https://github.com/convaxai/convax-plugins/releases/download/registry-v2-43b4506e203ac94e81505136f9f96e3d0fcfa31896b8bdcefbb93af2c8baa554/showcase-v2.json"
       }
     },
     "packages": [
@@ -250,8 +293,12 @@
             "url": "https://github.com/convaxai/convax-plugins/releases/download/skill-ffmpeg-canvas-v0.4.0/skill-ffmpeg-canvas-0.4.0.zip"
           }
         ],
-        "purposes": ["default-install"],
-        "targets": ["darwin-arm64"],
+        "purposes": [
+          "default-install"
+        ],
+        "targets": [
+          "darwin-arm64"
+        ],
         "version": "0.4.1"
       },
       {
@@ -282,8 +329,12 @@
             "url": "https://github.com/convaxai/convax-plugins/releases/download/skill-jianying-editor-v3.0.0/skill-jianying-editor-3.0.0.zip"
           }
         ],
-        "purposes": ["default-install"],
-        "targets": ["darwin-arm64"],
+        "purposes": [
+          "default-install"
+        ],
+        "targets": [
+          "darwin-arm64"
+        ],
         "version": "3.0.3"
       },
       {
@@ -307,7 +358,9 @@
         "kind": "plugin",
         "marketplaceId": "convax-official",
         "ownedSkills": [],
-        "purposes": ["retired-recovery"],
+        "purposes": [
+          "retired-recovery"
+        ],
         "retired": {
           "artifact": {
             "sha256": "1167cc5541a05e755135c354ab8f6bee04c343d3d5c7b8300ae3ff3562a088a0",
@@ -318,22 +371,24 @@
           "sourceKey": "c214bdc5f0af1e19a2bf8d98bd73b816e51ceaae2c4872bb07c76bde57e1e9bb",
           "version": "0.2.1"
         },
-        "targets": ["darwin-arm64"],
+        "targets": [
+          "darwin-arm64"
+        ],
         "version": "0.3.2"
       },
       {
         "artifact": {
-          "name": "plugin-nexus-service-1.0.4.zip",
-          "sha256": "82e04f0373deff49e175c57ea417195d746f99b7c0c6a543120bc2be2c4efdfd",
+          "name": "plugin-nexus-service-1.0.6.zip",
+          "sha256": "4626d0a6a2d9259946afd941a720b0b3e9c08eca8938cb5b96f21f985e716032",
           "size": 3369,
-          "url": "https://github.com/convaxai/convax-plugins/releases/download/plugin-nexus-service-v1.0.4/plugin-nexus-service-1.0.4.zip"
+          "url": "https://github.com/convaxai/convax-plugins/releases/download/plugin-nexus-service-v1.0.6/plugin-nexus-service-1.0.6.zip"
         },
         "companions": [
           {
-            "name": "nexus-service-1.0.4-darwin-arm64-convax-nexus-mcp",
-            "sha256": "00c86f0b6500bae440fb63fc270ea280a85549cd5a808c3a5b28e646ee67d9a7",
-            "size": 63528674,
-            "url": "https://github.com/convaxai/convax-plugins/releases/download/plugin-nexus-service-v1.0.4/nexus-service-1.0.4-darwin-arm64-convax-nexus-mcp",
+            "name": "nexus-service-1.0.6-darwin-arm64-convax-nexus-mcp",
+            "sha256": "8c140b70261d334a8d18baa99543c345dbc4282c8e85a6a7ba84bf6fc950c9f5",
+            "size": 63546848,
+            "url": "https://github.com/convaxai/convax-plugins/releases/download/plugin-nexus-service-v1.0.6/nexus-service-1.0.6-darwin-arm64-convax-nexus-mcp",
             "arch": "arm64",
             "platform": "darwin"
           }
@@ -342,7 +397,10 @@
         "kind": "plugin",
         "marketplaceId": "convax-official",
         "ownedSkills": [],
-        "purposes": ["default-install", "retired-recovery"],
+        "purposes": [
+          "default-install",
+          "retired-recovery"
+        ],
         "retired": {
           "artifact": {
             "sha256": "32899a84630de5d41fbc5011d1271b9d1309a21056b17c8d7afe70107fc01f65",
@@ -353,8 +411,10 @@
           "sourceKey": "c214bdc5f0af1e19a2bf8d98bd73b816e51ceaae2c4872bb07c76bde57e1e9bb",
           "version": "0.3.14"
         },
-        "targets": ["darwin-arm64"],
-        "version": "1.0.4"
+        "targets": [
+          "darwin-arm64"
+        ],
+        "version": "1.0.6"
       },
       {
         "artifact": {
@@ -366,7 +426,9 @@
         "id": "ad-idea",
         "kind": "skill",
         "marketplaceId": "convax-official",
-        "purposes": ["default-install"],
+        "purposes": [
+          "default-install"
+        ],
         "targets": [],
         "version": "0.3.1"
       },
@@ -380,7 +442,9 @@
         "id": "audiobook",
         "kind": "skill",
         "marketplaceId": "convax-official",
-        "purposes": ["default-install"],
+        "purposes": [
+          "default-install"
+        ],
         "targets": [],
         "version": "0.2.1"
       },
@@ -394,7 +458,9 @@
         "id": "convax-plugin-authoring",
         "kind": "skill",
         "marketplaceId": "convax-official",
-        "purposes": ["default-install"],
+        "purposes": [
+          "default-install"
+        ],
         "targets": [],
         "version": "0.1.4"
       },
@@ -408,7 +474,9 @@
         "id": "ecommerce-image",
         "kind": "skill",
         "marketplaceId": "convax-official",
-        "purposes": ["default-install"],
+        "purposes": [
+          "default-install"
+        ],
         "targets": [],
         "version": "0.2.1"
       },
@@ -422,7 +490,9 @@
         "id": "film-shot",
         "kind": "skill",
         "marketplaceId": "convax-official",
-        "purposes": ["default-install"],
+        "purposes": [
+          "default-install"
+        ],
         "targets": [],
         "version": "0.3.1"
       },
@@ -436,7 +506,9 @@
         "id": "image-remix",
         "kind": "skill",
         "marketplaceId": "convax-official",
-        "purposes": ["default-install"],
+        "purposes": [
+          "default-install"
+        ],
         "targets": [],
         "version": "0.2.1"
       },
@@ -450,7 +522,9 @@
         "id": "short-drama-screenwriter",
         "kind": "skill",
         "marketplaceId": "convax-official",
-        "purposes": ["default-install"],
+        "purposes": [
+          "default-install"
+        ],
         "targets": [],
         "version": "0.3.1"
       },
@@ -464,7 +538,9 @@
         "id": "skill-creator",
         "kind": "skill",
         "marketplaceId": "convax-official",
-        "purposes": ["default-install"],
+        "purposes": [
+          "default-install"
+        ],
         "targets": [],
         "version": "0.3.1"
       },
@@ -478,7 +554,9 @@
         "id": "skill-reviewer",
         "kind": "skill",
         "marketplaceId": "convax-official",
-        "purposes": ["default-install"],
+        "purposes": [
+          "default-install"
+        ],
         "targets": [],
         "version": "0.3.1"
       },
@@ -492,7 +570,9 @@
         "id": "video-prompting",
         "kind": "skill",
         "marketplaceId": "convax-official",
-        "purposes": ["default-install"],
+        "purposes": [
+          "default-install"
+        ],
         "targets": [],
         "version": "0.3.1"
       },
@@ -515,7 +595,9 @@
             "url": "https://github.com/convaxai/convax-plugins/releases/download/skill-storyai-3d-director-desk-v0.2.0/skill-storyai-3d-director-desk-0.2.0.zip"
           }
         ],
-        "purposes": ["retired-recovery"],
+        "purposes": [
+          "retired-recovery"
+        ],
         "retired": {
           "artifact": {
             "sha256": "a910abb3091ea973afaab8885ff77a1d69ac3fb2605f6bbf86079f33ce1af8f9",
@@ -548,7 +630,9 @@
             "url": "https://github.com/convaxai/convax-plugins/releases/download/skill-storyboard-studio-v0.2.0/skill-storyboard-studio-0.2.0.zip"
           }
         ],
-        "purposes": ["retired-recovery"],
+        "purposes": [
+          "retired-recovery"
+        ],
         "retired": {
           "artifact": {
             "sha256": "b1b07d89093c7fb4d68431581266321c74e4e6717c012561edc56dd5bcf6634b",
@@ -574,7 +658,9 @@
         "kind": "plugin",
         "marketplaceId": "convax-official",
         "ownedSkills": [],
-        "purposes": ["retired-recovery"],
+        "purposes": [
+          "retired-recovery"
+        ],
         "retired": {
           "artifact": {
             "sha256": "71c64f025a29a9c55ed156aa33172b9a016a4ac24df54d8274bd4422d7fc7a9f",
@@ -589,7 +675,7 @@
         "version": "0.2.2"
       }
     ],
-    "policyDigest": "b7faa9e510e378d95a42909c5e5f1581a59027105fafd4616d80409369516ef9"
+    "policyDigest": "b76678379504779180a169ece9b3775c34185935b193bea52728f72cb81eab20"
   },
   "schema": "convax.marketplace-product-lock/3"
 }

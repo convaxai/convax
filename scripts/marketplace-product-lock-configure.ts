@@ -3,7 +3,7 @@ import { resolve } from "node:path"
 
 import type { MarketplaceProductPolicy } from "./marketplace-product-lock"
 
-export const CURRENT_MARKETPLACE_PRODUCT_POLICY_REVISION = 7
+export const CURRENT_MARKETPLACE_PRODUCT_POLICY_REVISION = 13
 
 const DEFAULT_STANDALONE_SKILLS = [
   "ad-idea",
@@ -81,7 +81,7 @@ export function configureMarketplaceProductPolicy(revision: number): Marketplace
           version: "0.3.14",
         },
         targets: ["darwin-arm64"],
-        version: "1.0.4",
+        version: "1.0.6",
       },
       ...DEFAULT_STANDALONE_SKILLS.map((id): MarketplaceProductPolicy["packages"][number] => ({
         id,
