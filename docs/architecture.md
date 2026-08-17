@@ -223,6 +223,11 @@ flowchart TB
   Release --> Main
   DesktopUpdateFeed -->|version, release notes, SHA-512 and signed package| Main
 
+  subgraph ExternalServices["External first-party service boundary"]
+    AuthXNexus["AuthX identity + Nexus resource control plane<br/>signed administrator binding handoff"]
+  end
+  PluginRuntime -->|system-browser OAuth + runtime HTTPS only| AuthXNexus
+
   subgraph State["State and persistence"]
     UserData["Electron userData<br/>bindings, Marketplace, grants, immutable Plugin closures<br/>isolated per identified development task"]
     ProjectRoot["Project root / .convax<br/>identity, final-frame objects/journals/heads, checkpoints/floors, managed assets"]
@@ -1707,22 +1712,27 @@ server-side integration binding, then resolves its product authorization and
 provider secrets server-side. Direct use does not add a second token exchange,
 static service key, renderer field or Host credential store.
 
-For a first-party resource preconfigured on the upstream Application, the
-authorization server's Application-integration control plane may idempotently create
-one corresponding Resource Server Application aggregate before any end-user login.
-The integration id is the external uniqueness key: retry and response loss return
-the same Resource Server Application id, conflicting identity fails closed, disable
-retains history, and re-enable reactivates the same aggregate. The Resource Server
-resolves its own product template into Plan, Quota and provider state; the
-authorization server persists only the returned Application id/version, never those
-product facts. One system-browser Application login can then use the same short-lived
-Application Access Token at the bound first-party Resource Server when the
-integration-owned capability scope is present, without a second Resource Server
-login, consent, connect or bootstrap action. The Resource Server may idempotently
-create subject access inside its status or request authorization transaction.
-Desktop and the companion never call the integration Management API or select the
-Resource Server Application. This server-side composition changes no Convax package
-dependency, runtime route, persistence target or architecture-map node.
+For a first-party resource configured on the upstream Application, Enable creates a
+short-lived, purpose-bound, signed administrator handoff and opens the Resource
+Server Console. That Console requires an authenticated administrator in the same
+Organization and accepts only Resource Server-owned Workspace, Plan and provider
+choices; Application identity, issuer, client, Project, environment and return URI
+come only from the signed handoff. Completion creates or reactivates one immutable
+Resource Server Application aggregate and returns to the exact upstream Application
+integration page. The integration id is the external uniqueness key: retry and lost
+browser returns resolve the same aggregate, conflicting identity or product choices
+fail closed, disable retains history, and re-enable reactivates that same aggregate.
+The authorization server persists only the returned Application id/version and
+desired/observed state, never Resource Server product facts.
+
+This administrator-time binding does not add an end-user login. One system-browser
+Application login can use the same short-lived Application Access Token at the bound
+first-party Resource Server when the integration-owned capability scope is present,
+without a second Resource Server login, consent, connect or bootstrap action. The
+Resource Server may idempotently create subject access inside its status or request
+authorization transaction. Desktop and the companion never call the integration
+Management API or select the Resource Server Application. This composition changes
+no Convax package dependency, runtime persistence target or Host credential boundary.
 
 Checkout is also a fixed host operation, not a generic Plugin link. Renderer may
 select only a bounded Plan key advertised by the current v2 status. Preload forwards

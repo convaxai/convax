@@ -333,12 +333,14 @@ user directory.
 - A first-party Resource Server integration may be preconfigured on the upstream
   Application so one Application login uses the same Application Access Token with
   an integration-owned capability scope. Its binding and subject JIT access remain
-  server-side; Host, Renderer and companion never expose a second resource
+  server-side; Host, Renderer and companion never expose a second end-user resource
   login/connect step or call the integration Management API.
-- Enabling that integration may idempotently create one corresponding Resource
-  Server Application. The integration id is its external uniqueness key; retries
-  reuse the same aggregate, disable retains history, re-enable retains identity, and
-  the upstream Application stores no Resource Server Plan, Quota or provider facts.
+- Enabling that integration may redirect an authorized Application administrator
+  through a short-lived signed handoff to the Resource Server Console. The
+  administrator selects Resource Server-owned Workspace, Plan and provider facts
+  there; the integration id is the external uniqueness key, retries reuse the same
+  aggregate, disable retains history, re-enable retains identity, and the upstream
+  Application stores none of those product facts.
 - `WorkbenchController` is the sole active Input/Canvas source.
   `ProjectCanvasController` owns catalog CRUD, never active selection.
 - Only `@convax/project/node` may read or write private Project metadata. Renderer,
