@@ -9,7 +9,7 @@ import { PinnedHttpsFetcher } from "../src/main/pinned-https-fetch"
 import { readMarketplaceProductLock } from "../../../scripts/marketplace-product-lock"
 
 function artifacts(lock: MarketplaceProductLock) {
-  return [
+  const resolved = [
     lock.resolved.builtinBundle,
     lock.resolved.official.descriptor,
     lock.resolved.official.registry,
@@ -18,6 +18,43 @@ function artifacts(lock: MarketplaceProductLock) {
       entry.kind === "plugin" ? [entry.artifact, ...entry.ownedSkills, ...entry.companions] : [entry.artifact],
     ),
   ]
+  const unique = new Map<string, MarketplaceArtifactLock>()
+  for (const artifact of resolved) {
+    const existing = unique.get(artifact.sha256)
+    if (existing && existing.size !== artifact.size) {
+      throw new Error(`Marketplace product lock reuses one digest with incompatible sizes: ${artifact.sha256}`)
+    }
+    if (!existing) unique.set(artifact.sha256, artifact)
+  }
+  return [...unique.values()]
+}
+
+export async function runBoundedMarketplaceTasks<T>(options: {
+  concurrency: number
+  items: readonly T[]
+  task: (item: T, index: number) => Promise<void>
+}) {
+  if (!Number.isSafeInteger(options.concurrency) || options.concurrency < 1 || options.concurrency > 8) {
+    throw new Error("Marketplace artifact concurrency must be an integer from 1 through 8")
+  }
+  let cursor = 0
+  let failed = false
+  let firstError: unknown
+  const worker = async () => {
+    while (!failed) {
+      const index = cursor
+      cursor += 1
+      if (index >= options.items.length) return
+      try {
+        await options.task(options.items[index]!, index)
+      } catch (error) {
+        if (!failed) firstError = error
+        failed = true
+      }
+    }
+  }
+  await Promise.all(Array.from({ length: Math.min(options.concurrency, options.items.length) }, () => worker()))
+  if (failed) throw firstError
 }
 
 async function readExact(file: string, artifact: MarketplaceArtifactLock) {
@@ -138,51 +175,95 @@ async function syncDirectory(directory: string) {
 
 export async function materializeMarketplaceProductLock(options: {
   cacheRoot: string
-  fetcher?: PinnedHttpsFetcher
+  downloadConcurrency?: number
+  fetcher?: Pick<PinnedHttpsFetcher, "fetch">
   localReleaseRoot?: string
   lockPath: string
+  onPlan?: (plan: {
+    cachedArtifacts: number
+    downloadArtifacts: number
+    downloadBytes: number
+    totalArtifacts: number
+    totalBytes: number
+  }) => void
+  onProgress?: (progress: {
+    completedArtifacts: number
+    completedBytes: number
+    downloadArtifacts: number
+    downloadBytes: number
+  }) => void
 }) {
   const lock = await readMarketplaceProductLock(options.lockPath)
   const root = path.resolve(options.cacheRoot, "artifact-v1")
   await fs.mkdir(root, { mode: 0o700, recursive: true })
   const fetcher = options.fetcher ?? new PinnedHttpsFetcher()
-  for (const artifact of artifacts(lock)) {
+  const resolvedArtifacts = artifacts(lock)
+  const missingArtifacts: MarketplaceArtifactLock[] = []
+  let cachedArtifacts = 0
+  for (const artifact of resolvedArtifacts) {
     const target = path.join(root, artifact.sha256)
     try {
       await readExact(target, artifact)
+      cachedArtifacts += 1
       continue
     } catch (error) {
       if (!(error && typeof error === "object" && "code" in error && error.code === "ENOENT")) {
         await fs.rm(target, { force: true })
       }
     }
-    const bytes = options.localReleaseRoot
-      ? await readLocalRelease(path.resolve(options.localReleaseRoot), artifact)
-      : await fetcher.fetch(artifact.url, "release", {
-          maxBytes: artifact.size,
-          repository: { owner: "convaxai", repository: "convax-plugins" },
-        })
-    if (bytes.byteLength !== artifact.size || sha256Hex(bytes) !== artifact.sha256) {
-      throw new Error(`Materialized Marketplace artifact does not match its product lock: ${artifact.sha256}`)
-    }
-    const temporary = path.join(root, `.${artifact.sha256}.${randomUUID()}.tmp`)
-    const handle = await fs.open(temporary, "wx", 0o600)
-    try {
-      await handle.writeFile(bytes)
-      await handle.sync()
-    } finally {
-      await handle.close()
-    }
-    try {
-      await fs.link(temporary, target)
-      await fs.unlink(temporary)
-      await syncDirectory(root)
-    } catch (error) {
-      await fs.rm(temporary, { force: true })
-      if (!(error && typeof error === "object" && "code" in error && error.code === "EEXIST")) throw error
-    }
-    await readExact(target, artifact)
+    missingArtifacts.push(artifact)
   }
+  const downloadBytes = missingArtifacts.reduce((total, artifact) => total + artifact.size, 0)
+  options.onPlan?.({
+    cachedArtifacts,
+    downloadArtifacts: missingArtifacts.length,
+    downloadBytes,
+    totalArtifacts: resolvedArtifacts.length,
+    totalBytes: resolvedArtifacts.reduce((total, artifact) => total + artifact.size, 0),
+  })
+  let completedArtifacts = 0
+  let completedBytes = 0
+  await runBoundedMarketplaceTasks({
+    concurrency: options.downloadConcurrency ?? 4,
+    items: missingArtifacts,
+    task: async (artifact) => {
+      const target = path.join(root, artifact.sha256)
+      const bytes = options.localReleaseRoot
+        ? await readLocalRelease(path.resolve(options.localReleaseRoot), artifact)
+        : await fetcher.fetch(artifact.url, "release", {
+            maxBytes: artifact.size,
+            repository: { owner: "convaxai", repository: "convax-plugins" },
+          })
+      if (bytes.byteLength !== artifact.size || sha256Hex(bytes) !== artifact.sha256) {
+        throw new Error(`Materialized Marketplace artifact does not match its product lock: ${artifact.sha256}`)
+      }
+      const temporary = path.join(root, `.${artifact.sha256}.${randomUUID()}.tmp`)
+      const handle = await fs.open(temporary, "wx", 0o600)
+      try {
+        await handle.writeFile(bytes)
+        await handle.sync()
+      } finally {
+        await handle.close()
+      }
+      try {
+        await fs.link(temporary, target)
+        await fs.unlink(temporary)
+        await syncDirectory(root)
+      } catch (error) {
+        await fs.rm(temporary, { force: true })
+        if (!(error && typeof error === "object" && "code" in error && error.code === "EEXIST")) throw error
+      }
+      await readExact(target, artifact)
+      completedArtifacts += 1
+      completedBytes += artifact.size
+      options.onProgress?.({
+        completedArtifacts,
+        completedBytes,
+        downloadArtifacts: missingArtifacts.length,
+        downloadBytes,
+      })
+    },
+  })
   return { artifactRoot: root, lock }
 }
 

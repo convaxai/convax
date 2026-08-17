@@ -75,6 +75,7 @@ import {
 import electronUpdater from "electron-updater"
 import { resolveMainWindowChrome, setNativeMainWindowControlsVisible } from "./main-window-chrome"
 import { registerMainWindowControlsIpc } from "./main-window-controls-ipc"
+import { desktopStartupFailurePageUrl, desktopStartupPageUrl } from "./main-window-startup"
 import appIcon from "../../resources/icon.png?asset"
 import { registerAgentIpc } from "./agent-ipc"
 import {
@@ -577,11 +578,7 @@ function activateMainWindow() {
   window.focus()
 }
 
-function createWindow(
-  projectManager: NodeProjectManager,
-  projectAssetGcScheduler: Pick<ProjectAssetGcScheduler, "closeAll">,
-  projectFilePreviews: Pick<ProjectFilePreviewService, "revokeOwner">,
-) {
+function createWindowShell(options: { renderStartup?: boolean } = {}) {
   const window = new BrowserWindow({
     title: applicationName,
     icon: appIcon,
@@ -590,7 +587,8 @@ function createWindow(
     height: 820,
     minWidth: 720,
     minHeight: 520,
-    backgroundColor: "#f7f8f7",
+    backgroundColor: "#111511",
+    show: true,
     webPreferences: {
       preload: join(import.meta.dirname, "../preload/index.js"),
       contextIsolation: true,
@@ -608,6 +606,24 @@ function createWindow(
   }
   mainWindow = window
   if (pendingMainWindowActivation) activateMainWindow()
+  window.once("closed", () => {
+    if (mainWindow === window) mainWindow = null
+  })
+  if (options.renderStartup !== false) {
+    void window.loadURL(desktopStartupPageUrl(applicationName)).catch((error) => {
+      if (!window.isDestroyed()) console.error("Could not render the Convax startup window", error)
+    })
+  }
+  return window
+}
+
+function bindWindowRuntime(
+  window: BrowserWindow,
+  projectManager: NodeProjectManager,
+  projectAssetGcScheduler: Pick<ProjectAssetGcScheduler, "closeAll">,
+  projectFilePreviews: Pick<ProjectFilePreviewService, "revokeOwner">,
+) {
+  if (window.isDestroyed()) return null
   const webContentsId = window.webContents.id
   const pluginFrameBindings = new PluginFrameBindingRegistry(window.webContents)
   const pluginFrameBindingSweep = setInterval(() => {
@@ -626,7 +642,6 @@ function createWindow(
     disposePluginFrameBindings()
     trustedWebContents.delete(webContentsId)
     projectFilePreviews.revokeOwner(webContentsId)
-    if (mainWindow === window) mainWindow = null
     projectAssetGcScheduler.closeAll()
   })
   window.webContents.once("destroyed", disposePluginFrameBindings)
@@ -708,6 +723,19 @@ function createWindow(
   return window
 }
 
+function createWindow(
+  projectManager: NodeProjectManager,
+  projectAssetGcScheduler: Pick<ProjectAssetGcScheduler, "closeAll">,
+  projectFilePreviews: Pick<ProjectFilePreviewService, "revokeOwner">,
+) {
+  return bindWindowRuntime(
+    createWindowShell({ renderStartup: false }),
+    projectManager,
+    projectAssetGcScheduler,
+    projectFilePreviews,
+  )!
+}
+
 function startApplication() {
   const userDataDirectory = app.getPath("userData")
   const recordPackagedSmokeStartup = async (stage: string, error?: unknown) => {
@@ -748,6 +776,13 @@ function startApplication() {
       app.dock.setIcon(appIcon)
       if (developmentIdentity) app.dock.setBadge(developmentIdentity.label)
     }
+
+    // Keep the first visible surface independent from Project, Plugin, Agent,
+    // Marketplace and recovery initialization. The inert local document has no
+    // trusted sender authority and is replaced only after every Main bridge is
+    // ready for the real Renderer.
+    const startupWindow = createWindowShell()
+    await recordPackagedSmokeStartup("window-created")
 
     const ipcSecurity = {
       isTrustedSender: (event: IpcMainEvent | IpcMainInvokeEvent) =>
@@ -3075,7 +3110,7 @@ function startApplication() {
         })
     })
 
-    const window = createWindow(projectManager, projectAssetGcScheduler, projectFilePreviews)
+    const window = bindWindowRuntime(startupWindow, projectManager, projectAssetGcScheduler, projectFilePreviews)
     const resolveUpdateWindow = () =>
       mainWindow && !mainWindow.isDestroyed()
         ? mainWindow
@@ -3087,13 +3122,12 @@ function startApplication() {
       },
       productName: applicationName,
     })
-    if (app.isPackaged) {
+    if (app.isPackaged && window) {
       automaticUpdateCheck = setTimeout(() => {
         if (!window.isDestroyed()) void updateController.checkAutomatically(window)
       }, 15_000)
       automaticUpdateCheck.unref()
     }
-    await recordPackagedSmokeStartup("window-created")
     if (marketplaceStartupProvisioning) {
       void marketplaceStartupProvisioning
         .start()
@@ -3125,6 +3159,14 @@ function startApplication() {
         createWindow(projectManager, projectAssetGcScheduler, projectFilePreviews)
       },
     )
+  }).catch((error) => {
+    console.error("Convax Main startup failed", error)
+    const window = mainWindow
+    if (window && !window.isDestroyed()) {
+      void window.loadURL(desktopStartupFailurePageUrl(applicationName)).catch((pageError) => {
+        if (!window.isDestroyed()) console.error("Could not render the Convax startup failure window", pageError)
+      })
+    }
   })
   app.on("window-all-closed", () => {
     if (process.platform === "darwin") return

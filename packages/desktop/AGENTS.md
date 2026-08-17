@@ -43,6 +43,10 @@ contract and its routed references.
 
 ## Process boundaries
 
+- Main creates and shows the inert local startup window before restoring product
+  runtimes. The startup document has no trusted-sender authority; the same window
+  loads the trusted Renderer only after required Main bridges are ready, and startup
+  failure replaces the loading surface instead of leaving it indefinite.
 - Main owns Electron/native I/O, Project Node adapters, authoritative repositories,
   ActiveSet and installed capability authority, Agent runtime composition, trusted
   IPC, and the signed packaged-application update lifecycle.
@@ -75,6 +79,10 @@ contract and its routed references.
 
 ## Shared composition rules
 
+- Development Marketplace materialization may use only fixed bounded concurrency
+  for distinct locked artifacts. Preserve exact URL/size/digest verification,
+  single-link cache files, fsync and atomic staging, fail closed without a stale
+  product fallback, and expose only aggregate count/byte progress.
 - Keep Project lifecycle, Project Files, Project Canvas, Canvas, generation, Agent,
   Plugin, Plugin capability, and Plugin service bridge namespaces distinct. Do not
   add general file methods to `window.convax.projects` or a generic invoke bridge.
