@@ -85,12 +85,6 @@ export function parsePluginRuntimeSurface(
   }
 }
 
-export function projectRegistryPackagePluginCategories(
-  item: Pick<RegistryPackage, "delivery" | "id" | "kind" | "manifest" | "version">,
-): readonly MarketplacePluginCategory[] {
-  return projectRegistryPackageRuntimeProjection(item).pluginCategories
-}
-
 export function projectRegistryPackageRuntimeProjection(
   item: Pick<RegistryPackage, "delivery" | "id" | "kind" | "manifest" | "version">,
 ): MarketplaceCatalogRuntimeProjection {
@@ -111,12 +105,6 @@ export function projectRegistryPackageRuntimeProjection(
     pluginCategories: projected.pluginCategories,
     runtimeSurface: projected.runtimeSurface,
   }
-}
-
-export function projectRegistryPackageRuntimeSurface(
-  item: Pick<RegistryPackage, "delivery" | "id" | "kind" | "manifest" | "version">,
-): MarketplaceRuntimeSurface {
-  return projectRegistryPackageRuntimeProjection(item).runtimeSurface
 }
 
 export function projectMcpRuntimeSurface(delivery: MarketplaceDelivery): MarketplaceRuntimeSurface {
