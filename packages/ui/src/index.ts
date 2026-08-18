@@ -1,5 +1,14 @@
 export { Button, buttonVariants } from "./components/button"
 export {
+  BeamButton,
+  BeamSurface,
+  type BeamButtonProps,
+  type BeamIntensity,
+  type BeamMotion,
+  type BeamSurfaceProps,
+  type BeamTone,
+} from "./components/beam"
+export {
   CommandMenu,
   type CommandMenuItem,
   type CommandMenuProps,

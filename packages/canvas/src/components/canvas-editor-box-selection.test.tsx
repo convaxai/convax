@@ -65,6 +65,43 @@ function Passthrough(props: { children?: ReactNode }) {
 }
 
 mock.module("@convax/ui", () => ({
+  BeamButton: (props: {
+    "aria-label"?: string
+    beam?: string
+    children?: ReactNode
+    className?: string
+    disabled?: boolean
+    onClick?: React.MouseEventHandler<HTMLButtonElement>
+    onPointerDown?: React.PointerEventHandler<HTMLButtonElement>
+    reducedMotion?: boolean
+    tone?: string
+    type?: "button" | "submit" | "reset"
+  }) => (
+    <button
+      aria-label={props["aria-label"]}
+      className={props.className}
+      data-slot="beam-button"
+      data-ui-beam={props.beam ?? "idle"}
+      data-ui-beam-motion={props.reducedMotion === undefined ? undefined : props.reducedMotion ? "reduce" : "animate"}
+      data-ui-beam-tone={props.tone ?? "spectrum"}
+      disabled={props.disabled}
+      onClick={props.onClick}
+      onPointerDown={props.onPointerDown}
+      type={props.type}
+    >
+      {props.children}
+    </button>
+  ),
+  BeamSurface: (props: { beam?: string; children?: ReactNode; className?: string; tone?: string }) => (
+    <div
+      className={props.className}
+      data-slot="beam-surface"
+      data-ui-beam={props.beam ?? "idle"}
+      data-ui-beam-tone={props.tone ?? "spectrum"}
+    >
+      {props.children}
+    </div>
+  ),
   Button: (props: {
     children?: ReactNode
     className?: string
@@ -1139,6 +1176,9 @@ test("keeps active controls interactive while a failed card stays selectable wit
     const failedOverlay = container.querySelector<HTMLElement>('[data-canvas-file-generation-activity="failed"]')
     expect(activeOverlay).not.toBeNull()
     expect(cancelButton).toBeDefined()
+    expect(cancelButton?.dataset.slot).toBe("beam-button")
+    expect(cancelButton?.getAttribute("data-ui-beam")).toBe("pulse-inner")
+    expect(cancelButton?.getAttribute("data-ui-beam-tone")).toBe("warning")
     expect(failedOverlay).not.toBeNull()
     expect(failedOverlay?.classList.contains("pointer-events-none")).toBe(true)
     expect(failedOverlay?.querySelector("button")).toBeNull()

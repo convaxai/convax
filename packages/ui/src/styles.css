@@ -108,6 +108,54 @@
   }
 }
 
+/* Adapter around border-beam. Surface children remain the only visual frame. */
+:where(.ui-beam-root--surface) {
+  display: block !important;
+  min-width: 0;
+  width: 100%;
+}
+
+:where(.ui-beam-root--surface > [data-slot="beam-surface"]) {
+  width: 100%;
+}
+
+:where(.ui-beam-root--button) {
+  display: inline-flex !important;
+  flex: none;
+  width: fit-content;
+}
+
+:root[data-reduced-motion="true"] :where(.ui-beam-root),
+:root[data-reduced-motion="true"] :where(.ui-beam-root)::before,
+:root[data-reduced-motion="true"] :where(.ui-beam-root)::after,
+:root[data-reduced-motion="true"] :where(.ui-beam-root > [data-beam-bloom]) {
+  animation: none !important;
+  transition: none !important;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  :root:not([data-reduced-motion="false"]) :where(.ui-beam-root),
+  :root:not([data-reduced-motion="false"]) :where(.ui-beam-root)::before,
+  :root:not([data-reduced-motion="false"]) :where(.ui-beam-root)::after,
+  :root:not([data-reduced-motion="false"]) :where(.ui-beam-root > [data-beam-bloom]) {
+    animation: none !important;
+    transition: none !important;
+  }
+}
+
+@media (forced-colors: active) {
+  :where(.ui-beam-root)::before,
+  :where(.ui-beam-root)::after,
+  :where(.ui-beam-root > [data-beam-bloom]) {
+    display: none !important;
+  }
+
+  :where([data-ui-beam]) {
+    border-color: CanvasText;
+    forced-color-adjust: none;
+  }
+}
+
 /* Shared loading visuals: spin / pulse only; owners own busy truth and copy. */
 @keyframes ui-loading-spin {
   to {

@@ -35,6 +35,8 @@ function animationEvent(name: string) {
 }
 
 void mock.module("@convax/ui", () => ({
+  BeamButton: (props: { children?: ReactNode }) => <button>{props.children}</button>,
+  BeamSurface: Passthrough,
   Button: ({
     asChild: _asChild,
     children,

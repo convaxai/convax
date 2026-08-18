@@ -16,6 +16,8 @@ import {
 } from "@convax/canvas"
 import { createCanvasGenerationTargetGuard } from "@convax/canvas/application"
 import {
+  BeamButton,
+  BeamSurface,
   Button,
   SegmentedTabs,
   ToolInputForm,
@@ -258,6 +260,7 @@ type ScopedLoad<T> =
 export interface CanvasCardGenerationPanelProps {
   catalogVersion?: string | number
   generation: CanvasAssistantGenerationCapability
+  onGenerationActivityChange?: (active: boolean) => void
   onOpenServices?: () => void
   request: CanvasAssistantRequest
   service: CanvasGenerateService
@@ -309,6 +312,8 @@ export function CanvasCardGenerationPanel(props: CanvasCardGenerationPanelProps)
   const [operationError, setOperationError] = useState<string>()
   const [operationMessage, setOperationMessage] = useState<string>()
   const [generating, setGenerating] = useState(false)
+  const generationActivityChangeRef = useRef(props.onGenerationActivityChange)
+  generationActivityChangeRef.current = props.onGenerationActivityChange
   const catalogRequestRef = useRef(new CanvasCardGenerationCatalogRequestTracker())
   const descriptionRequestRef = useRef(new CanvasCardGenerationCatalogRequestTracker())
   const mountedRef = useRef(false)
@@ -411,6 +416,17 @@ export function CanvasCardGenerationPanel(props: CanvasCardGenerationPanelProps)
       descriptionRequestRef.current.invalidate()
     }
   }, [])
+
+  useEffect(() => {
+    generationActivityChangeRef.current?.(generating)
+  }, [generating])
+
+  useEffect(
+    () => () => {
+      generationActivityChangeRef.current?.(false)
+    },
+    [],
+  )
 
   useEffect(() => {
     setDismissedMentionedNodeIds(new Set())
@@ -617,7 +633,10 @@ export function CanvasCardGenerationPanel(props: CanvasCardGenerationPanelProps)
       data-canvas-card-generation-panel
       onSubmit={runGeneration}
     >
-      <div className="flex min-h-0 flex-1 flex-col overflow-hidden" data-canvas-card-generation-surface="single">
+      <div
+        className="flex min-h-0 flex-1 flex-col overflow-hidden"
+        data-canvas-card-generation-surface="single"
+      >
         {mentionedNodes.length > 0 ? (
           <div className="flex flex-wrap gap-1 px-0.5 pt-2">
             {mentionedNodes.map((node) => (
@@ -739,14 +758,16 @@ export function CanvasCardGenerationPanel(props: CanvasCardGenerationPanelProps)
               />
             ) : null}
           </div>
-          <Button
+          <BeamButton
             aria-label={generating ? "Generating" : "Generate"}
+            beam={generating ? "pulse-inner" : "idle"}
             disabled={!canGenerate || generating}
             size="icon-sm"
+            tone="spectrum"
             type="submit"
           >
             {generating ? <LoaderCircle className="animate-spin motion-reduce:animate-none" /> : <ArrowUp />}
-          </Button>
+          </BeamButton>
         </div>
       </div>
     </form>
@@ -894,12 +915,14 @@ function canvasGenerationModelSelectionTitle(tool: CanvasGenerationToolSummary) 
     : `${serviceName} · ${modelName}`
 }
 
-export interface CanvasCardConversationPanelProps extends Omit<CanvasCardGenerationPanelProps, "generation"> {
+export interface CanvasCardConversationPanelProps
+  extends Omit<CanvasCardGenerationPanelProps, "generation" | "onGenerationActivityChange"> {
   agent: ReactNode
 }
 
 export function CanvasCardConversationPanel(props: CanvasCardConversationPanelProps) {
   const [tab, setTab] = useState<"generate" | "agent">("generate")
+  const [generationActive, setGenerationActive] = useState(false)
   const id = useId()
   const generation = props.request.generation
   if (!generation) {
@@ -928,9 +951,12 @@ export function CanvasCardConversationPanel(props: CanvasCardConversationPanelPr
   ] as const
 
   return (
-    <div
+    <BeamSurface
+      beam={generationActive ? "rotate" : "idle"}
       className={`relative flex min-h-0 w-full min-w-0 flex-col overflow-hidden rounded-[28px] border border-border/70 bg-card text-card-foreground shadow-xl shadow-black/10 transition-[border-color,box-shadow] focus-within:border-ring/60 focus-within:shadow-2xl focus-within:shadow-black/15${tab === "agent" ? " h-[340px] max-h-[calc(100vh-96px)]" : ""}`}
       data-canvas-card-conversation-panel
+      focusBeam
+      tone="spectrum"
     >
       <div className="shrink-0 px-3 pt-3">
         <SegmentedTabs
@@ -954,6 +980,7 @@ export function CanvasCardConversationPanel(props: CanvasCardConversationPanelPr
         <CanvasCardGenerationPanel
           catalogVersion={props.catalogVersion}
           generation={generation}
+          onGenerationActivityChange={setGenerationActive}
           onOpenServices={props.onOpenServices}
           request={props.request}
           service={props.service}
@@ -968,6 +995,6 @@ export function CanvasCardConversationPanel(props: CanvasCardConversationPanelPr
       >
         {props.agent}
       </div>
-    </div>
+    </BeamSurface>
   )
 }

@@ -13,7 +13,7 @@ import type { ProjectEntry } from "@convax/project-files"
 import { parseProjectEntryDrag, PROJECT_ENTRY_DRAG_TYPE } from "@convax/project-files/drag"
 import type { PetDisplayedSession } from "../pet-contracts"
 import { parseProjectCanvasDrag, PROJECT_CANVAS_DRAG_TYPE, type ProjectCanvas } from "@convax/project/canvas"
-import { Button, cn, createToolInputDefaultValues, Loading, LoadingSpinner, reconcileToolInputValues, Tooltip, TooltipProvider, validateToolInputValues } from "@convax/ui"
+import { BeamButton, BeamSurface, Button, cn, createToolInputDefaultValues, Loading, LoadingSpinner, reconcileToolInputValues, Tooltip, TooltipProvider, validateToolInputValues } from "@convax/ui"
 import type {
   GenerationToolDescription,
   GenerationToolInput,
@@ -2300,13 +2300,16 @@ export const AgentPanel = forwardRef<AgentPanelHandle, AgentPanelProps>(function
                     trigger={suggestion.trigger}
                   />
                 ) : null}
-                <div
+                <BeamSurface
+                  beam={
+                    responseStopping || runtimeBusy || submitting ? "rotate" : "idle"
+                  }
                   className={cn(
                     "agent-composer-frame",
                     compactEmbeddedChrome
                       ? "bg-transparent py-2.5"
                       : "rounded-[24px] bg-surface-raised p-2 shadow-[var(--ui-shadow-low)] transition-[background-color,box-shadow] focus-within:shadow-[var(--ui-shadow-medium)]",
-                    dropActive && "bg-primary/5 ring-2 ring-primary/40",
+                    dropActive && "bg-interactive-selected ring-2 ring-primary/40",
                   )}
                   data-agent-composer-disabled={interactionDisabled || !props.projectId ? "true" : undefined}
                   data-agent-composer-has-content={
@@ -2324,6 +2327,8 @@ export const AgentPanel = forwardRef<AgentPanelHandle, AgentPanelProps>(function
                             ? "drop"
                             : "idle"
                   }
+                  focusBeam
+                  tone={responseStopping ? "warning" : "spectrum"}
                   onDragEnter={(event) => {
                     if (!supportsResourceDrop(event.dataTransfer)) return
                     containEmbeddedResourceDrag(embedded, event)
@@ -2607,11 +2612,13 @@ export const AgentPanel = forwardRef<AgentPanelHandle, AgentPanelProps>(function
                     <span className="min-w-0 flex-1" />
                     {runtimeBusy || responseStopping ? (
                       <Tooltip content={responseStopping ? "Stopping…" : "Stop"}>
-                        <Button
+                        <BeamButton
                           aria-label={responseStopping ? "Stopping response" : "Stop response"}
+                          beam="pulse-inner"
                           disabled={responseStopping}
                           onClick={() => void abort()}
                           size="icon-sm"
+                          tone={responseStopping ? "warning" : "spectrum"}
                           variant="outline"
                         >
                           {responseStopping ? (
@@ -2619,12 +2626,13 @@ export const AgentPanel = forwardRef<AgentPanelHandle, AgentPanelProps>(function
                           ) : (
                             <Square className="fill-current" />
                           )}
-                        </Button>
+                        </BeamButton>
                       </Tooltip>
                     ) : (
                       <Tooltip content={validatedLlmSelection ? "Send" : "Choose an LLM model in Services"}>
-                        <Button
+                        <BeamButton
                           aria-label="Send message"
+                          beam={submitting ? "pulse-inner" : "idle"}
                           disabled={
                             !props.projectId ||
                             interactionDisabled ||
@@ -2633,17 +2641,18 @@ export const AgentPanel = forwardRef<AgentPanelHandle, AgentPanelProps>(function
                           }
                           onClick={() => void send()}
                           size="icon-sm"
+                          tone="spectrum"
                         >
                           {submitting ? (
                             <LoaderCircle className="animate-spin motion-reduce:animate-none" />
                           ) : (
                             <Send />
                           )}
-                        </Button>
+                        </BeamButton>
                       </Tooltip>
                     )}
                   </div>
-                </div>
+                </BeamSurface>
               </div>
             </div>
           </>

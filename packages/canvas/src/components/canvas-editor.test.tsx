@@ -121,6 +121,8 @@ function MockReactFlow(props: {
 }
 
 mock.module("@convax/ui", () => ({
+  BeamButton: (props: { children?: ReactNode }) => <button>{props.children}</button>,
+  BeamSurface: Passthrough,
   Button: (props: { "aria-label"?: string; children?: ReactNode; onClick?: () => void }) => {
     if (props["aria-label"]) {
       buttonContents.set(props["aria-label"], props.children)
