@@ -115,5 +115,5 @@ Related references:
 
 - [Plugin and Skill platform](docs/plugin-skill-platform.md)
 - [Plugin-to-Host change governance](docs/plugin-host-change-governance.md)
-- [DeepSeek Harness migration assessment](docs/deepseek-harness-migration-assessment.md)
+- [DeepSeek Harness migration design](docs/deepseek-harness-migration-assessment.md)
 - [Canvas selection and actions](docs/canvas-selection-context.md)

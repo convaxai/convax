@@ -1,410 +1,443 @@
 # DeepSeek Harness migration assessment
 
-Status: decision-ready research; not a current runtime contract and not authorization to remove OpenCode.
+Status: accepted target design; implementation-ready after the two Go/No-Go proofs
+in section 13. This document is not the current runtime contract and does not by
+itself authorize removing OpenCode from a release.
 
 Research date: 2026-08-18.
 
 ## 1. Decision
 
-Do not replace the current OpenCode runtime with DeepSeek Harness immediately.
+Adopt DeepSeek Harness (DSH) as the single target Agent runtime. Do not build a
+dual-backend router, an OpenCode fallback, or a Convax-owned Agent control protocol.
 
-Adopt DeepSeek Harness as the target runtime only through a new implementation of
-the existing `AgentRuntime` boundary, backed by a closed, Convax-managed Harness
-subprocess. The preferred transport is a successor to the DeepSeek Harness SDK
-JSON-RPC protocol. The current ACP, headless, and SDK transports do not satisfy the
-Convax contract.
+The target topology is:
 
-The first implementation task is therefore an upstream/prototype compatibility
-slice, not a product cutover. Product cutover remains blocked until all gates in
-§9 pass.
+- at most one independent DSH process for each live Project;
+- all sessions for the same Project share that process;
+- Desktop Main owns Project-to-process composition, capability issuance, and
+  lifecycle, but not Agent session semantics;
+- the parent and child reuse the official DSH Host ApiProxy contract over an
+  Electron MessagePort carrier;
+- DSH/Cordis Plugins own Prompt, Skill, Tool, Hook, MCP, LLM, and session-persistence
+  mechanics inside the child;
+- Convax product capabilities enter DSH only through an authenticated,
+  Project-scoped Host MCP endpoint backed by the existing owner-defined business
+  operations; and
+- new sessions use DSH only. A DSH failure never replays the prompt through
+  OpenCode.
 
-This decision preserves the current ownership boundary:
+The first implementation is a packaged vertical slice. It is Go only if a real
+packaged Electron app proves both the official Host control plane and two-Project
+capability isolation. Those are the only adoption gates.
 
-- `@convax/agent-runtime` owns the host-agnostic runtime adapter, session projection,
-  protected execution boundary, and managed Skill filesystem mechanics;
-- Desktop Main owns Project scope, product tools, Plugin/Marketplace authority,
-  provider credentials, IPC, persistence composition, and packaged-runtime staging;
-- Canvas, Project, and Plugin owners keep their existing domain semantics;
-- the Renderer continues to depend only on `AgentClient`.
+## 2. What changed from the previous assessment
 
-## 2. Evidence baseline
+The previous document inspected the narrow SDK JSON-RPC and ACP transports and
+concluded that Convax needed a successor SDK protocol. That was the wrong control
+plane boundary.
 
-The comparison is pinned to exact source rather than product names.
+The inspected DSH release already includes `@deepseek-ai/dsh-host-apiproxy`. Its
+browser-safe contract defines the four wire quadrants:
 
-| Subject             | Evidence used                                                                                                                                                                                                                                         |
-| ------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Convax              | `origin/main` at `226794d2339f8f50d2870698743ba588416f18fb`; `@convax/agent-runtime` pins `opencode-ai` and `@opencode-ai/sdk` `1.18.1`                                                                                                               |
-| OpenCode registry   | npm `latest` was `1.18.18`; this assessment evaluates the repository-pinned `1.18.1`, not an assumed latest upgrade                                                                                                                                   |
-| DeepSeek Harness    | [`dsh-v0.1.0-rc.7`](https://github.com/deepseek-ai/deepseek-harness/releases/tag/dsh-v0.1.0-rc.7), commit [`99f6f02fecdb7dff40c3fbc9470f5907c29f74ca`](https://github.com/deepseek-ai/deepseek-harness/tree/99f6f02fecdb7dff40c3fbc9470f5907c29f74ca) |
-| Harness publication | `0.1.0-rc.7` was published under npm's `next` tag for the inspected SDK/ACP packages; the GitHub release is a prerelease and contains no binary assets                                                                                                |
+1. client request;
+2. server response;
+3. server request; and
+4. client response.
 
-Primary Harness references are the pinned repository's
-[`architecture.md`](https://github.com/deepseek-ai/deepseek-harness/blob/99f6f02fecdb7dff40c3fbc9470f5907c29f74ca/docs/architecture.md),
-[`dsh-sdk-client`](https://github.com/deepseek-ai/deepseek-harness/blob/99f6f02fecdb7dff40c3fbc9470f5907c29f74ca/packages/sdk/client/README.md),
-[`dsh-sdk-jsonrpc-server`](https://github.com/deepseek-ai/deepseek-harness/blob/99f6f02fecdb7dff40c3fbc9470f5907c29f74ca/packages/sdk/server/README.md),
-[`dsh-acp`](https://github.com/deepseek-ai/deepseek-harness/blob/99f6f02fecdb7dff40c3fbc9470f5907c29f74ca/packages/acp/acp/README.md),
-[`dsh-session`](https://github.com/deepseek-ai/deepseek-harness/blob/99f6f02fecdb7dff40c3fbc9470f5907c29f74ca/packages/core/session/README.md),
-and [`dsh-mcp-client`](https://github.com/deepseek-ai/deepseek-harness/blob/99f6f02fecdb7dff40c3fbc9470f5907c29f74ca/packages/mcp/mcp-client/README.md).
+It also exposes the Host-facing session, history, fork, prompt, cancel, model,
+event, approval, question, Skill, settings, credential, and related interaction
+surfaces needed by a product client. The contract is deliberately separated from
+its physical fetch/SSE carrier.
 
-The evidence is time-bounded. Re-run the matrix against the exact proposed Harness
-release before implementation or dependency changes.
+Convax therefore does not need to wait for a new Agent business protocol. It needs
+one new transport aspect that carries the official envelopes across a private
+parent-child MessagePort, preserving the official schemas, errors, correlations,
+streams, and interaction semantics.
 
-## 3. Current Convax contract
+The old twelve-gate parity matrix also mixed core adoption blockers with features
+that can be intentionally omitted from the first release. Remote MCP OAuth,
+OpenCode session conversion, the OpenCode Hook ABI, hot profile replacement, and
+automatic child recovery are now explicit deferred features rather than reasons to
+retain a second runtime.
 
-The replacement target is not merely an LLM loop. The current `AgentRuntime` and
-Desktop composition require all of the following:
+## 3. Evidence baseline
 
-1. list, create, reopen, and project complete session state;
-2. prompt an existing session with exact provider/model selection, instructions,
-   files, directories, structured Convax resources, and selected Skills;
-3. preserve exact response provider/model identity;
-4. cancel an admitted prompt and propagate cancellation into long-running Host tools;
-5. project busy/retry/idle state, reasoning, tool lifecycle, errors, pending
-   permissions, and pending questions;
-6. support one-shot and remembered permission replies plus multi-question answers;
-7. expose model and capability catalogs;
-8. load only Host-selected managed and immutable Plugin-owned Skill directories
-   while keeping ambient project execution disabled;
-9. load Host-authorized immutable Hook modules from one leased ActiveSet generation;
-10. connect Host-authenticated loopback MCP and validated remote HTTPS MCP, including
-    OAuth status and authentication operations;
-11. deny `.convax` through lexical and symlink-aware enforcement and disable raw
-    shell/LSP when the strong guard is required;
-12. refresh providers, Skills, Hooks, MCP, and Host tools without deleting durable
-    sessions, while admitted work finishes on its original configuration generation;
-13. package a verified runtime, license, and provenance record for every supported
-    platform/architecture; and
-14. dispose the process tree and in-flight transports to quiescence.
+| Subject               | Evidence used                                                                                                                                                                                                                                         |
+| --------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Convax                | `origin/main` at `f8440b1d3fd9427b3063a178662106b0d03b1a1a`; the current runtime pins `opencode-ai` and `@opencode-ai/sdk` `1.18.1`                                                                                                                   |
+| DeepSeek Harness      | [`dsh-v0.1.0-rc.7`](https://github.com/deepseek-ai/deepseek-harness/releases/tag/dsh-v0.1.0-rc.7), commit [`99f6f02fecdb7dff40c3fbc9470f5907c29f74ca`](https://github.com/deepseek-ai/deepseek-harness/tree/99f6f02fecdb7dff40c3fbc9470f5907c29f74ca) |
+| Primary control plane | [`dsh-host-apiproxy`](https://github.com/deepseek-ai/deepseek-harness/blob/99f6f02fecdb7dff40c3fbc9470f5907c29f74ca/packages/host/apiproxy/README.md), not the narrower SDK JSON-RPC or ACP adapters                                                  |
+| Runtime composition   | [`dsh-app-boot`](https://github.com/deepseek-ai/deepseek-harness/blob/99f6f02fecdb7dff40c3fbc9470f5907c29f74ca/packages/boot/app-boot/README.md) plus exact-pinned Cordis Plugins                                                                     |
 
-Desktop Main already keeps product execution on the correct side of this boundary.
-Canvas, generation, Plugin operation, and managed MCP tools enter the runtime through
-`AgentToolProvider` and an authenticated local MCP bridge. That composition can be
-reused. No Harness adapter should learn Project, Canvas, Plugin, or Marketplace
-semantics.
+The evidence is time-bounded. Implementation must pin one exact DSH version and
+re-run both Go/No-Go proofs against the packaged bytes proposed for release.
 
-## 4. Harness capability matrix
+## 4. Ownership
 
-Harness core is stronger than any one published transport. A green core capability
-does not make a transport green.
+The design preserves Convax ownership instead of moving product semantics into DSH.
 
-| Capability                  | Harness rc.7 evidence                                                                                                                    | Convax disposition                                                                                                                                           |
-| --------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| Event-sourced sessions      | Core has an append-only `SessionEvent` log, projections, flush, fork, persistence seams, crash repair, and `agents.resume()`             | Strong fit, but the selected transport must expose list/resume/state                                                                                         |
-| Session list/resume         | Core persistence supports list/load/prepare and Agent Loop supports resume                                                               | Blocked: ACP supports fresh sessions only; SDK server calls `agents.create()` and exposes neither list nor resume                                            |
-| Prompt cancellation         | Core `Agent.cancel()` is cooperative and durable; ACP exposes cancellation                                                               | Blocked on SDK: no prompt-cancel or per-session-close method; abandoning work closes the whole process                                                       |
-| Per-prompt model route      | Core request assembly can select an exact route                                                                                          | Blocked on SDK: provider/model/cwd are fixed by one process-wide `initialize`; `session/prompt` carries content only                                         |
-| Session event projection    | SDK streams full `session.event` and whole-Agent status notifications                                                                    | Feasible after adding cold state reads and a stable protocol version                                                                                         |
-| Permission                  | Core approval is audited and fail-closed; ACP offers one-shot machine decisions                                                          | Partial: no allow-always rule, no tool arguments, and SDK has no server-to-client request path                                                               |
-| User questions              | Core has a typed multi-question seam and Web provider                                                                                    | Blocked: ACP explicitly omits human questions and SDK exposes no question channel                                                                            |
-| Skills                      | Scoped registry and filesystem provider are capable and dynamically invalidated                                                          | Partial: default roots include project `.dsh`/`.agents`; Convax requires an isolated custom-root composition and selected-Skill injection over the transport |
-| Host tools                  | Harness MCP tools preserve typed schemas/results and propagate `AbortSignal`                                                             | Partial: the client uses an absolute timeout and does not request progress-based timeout reset; Convax Host tools use progress as an inactivity heartbeat    |
-| Remote MCP                  | stdio and Streamable HTTP tools, stable names, reconnect, and cancellation exist                                                         | Blocked for parity: no OAuth lifecycle/status surface; Resources and Prompts are not bridged                                                                 |
-| Hooks                       | Harness has typed Cordis extension points plus Claude Code/Codex command-hook bridges                                                    | Incompatible with `convax.plugin/8`, whose `hooks` file is an immutable OpenCode Plugin ESM module                                                           |
-| Protected paths             | Harness has workspace file policy and OS sandbox providers                                                                               | Insufficient: filesystem reads always pass, policy has one workspace root, and it does not implement Convax's protected subtree contract                     |
-| Dynamic configuration       | Cordis profiles and patches can replace plugin rows                                                                                      | Requires a Host-owned generation protocol; user profiles/HMR cannot become Plugin execution authority                                                        |
-| Provider mapping            | `dsh-llm-pi-ai` supports hand-declared OpenAI-compatible routes, headers, models, and OpenRouter thinking dialect                        | Feasible with explicit `openai -> openai-completions` and `openrouter -> openai-completions + openrouter compat` mapping and parity tests                    |
-| Structured prompt resources | ACP accepts text/images and flattens resource links; SDK accepts LLM content blocks                                                      | Blocked for files, directories, Convax resource snapshots, selected Skills, per-prompt instructions, and current agent/variant fields                        |
-| Distribution                | TypeScript SDK requires an explicit command and states that it has no bundled-runtime resolution; Python owns a separate runtime carrier | Blocked: rc.7 has no GitHub binary assets and Convax has no verified cross-platform DSH runtime closure                                                      |
-| Compatibility stability     | Session format remains version `0`; SDK handshake reports protocol `0.0.1` with no version negotiation                                   | Blocked for durable product data and rolling upgrades                                                                                                        |
+### `@convax/agent-runtime`
 
-## 5. Rejected integration shapes
+Owns the host-agnostic DSH integration:
 
-### 5.1 Headless profile
+- the existing vendor-neutral `AgentRuntime` / `AgentClient` behavior;
+- the parent-side Host ApiProxy client and transport-neutral carrier endpoint;
+- the child boot entry and closed DSH composition;
+- renderer-safe projection of official events and interactions;
+- generic configuration inputs such as cwd, state root, Prompt content, Skill roots,
+  MCP rows, model routes, and protected execution posture; and
+- deterministic disposal of one child handle.
 
-Reject for product integration. It accepts one task, creates one fresh Agent, prints
-the final text, and exits. It has no follow-up, interactive permission/question,
-session browsing, or product lifecycle surface.
+It does not import Electron and does not learn Project, Canvas, Plugin,
+Marketplace, ActiveSet, or Automation semantics.
 
-### 5.2 ACP subprocess
+### Desktop Main
 
-Reject as the primary Convax transport. ACP has valuable cancellation and approval
-semantics, but it is deliberately automation-only. It supports fresh sessions,
-committed answers, text/images, and one workspace. It explicitly omits list/load/
-resume, transcript replay, questions, model selection UI, MCP configuration,
-reasoning, plans, titles, and tool presentation.
+Owns the product and native composition:
 
-ACP remains useful as a conformance oracle for prompt cancellation, not as the
-Desktop integration protocol.
+- `ProjectId -> DshProjectProcessHandle` lifecycle registry;
+- stable Project binding and private state-root derivation;
+- Electron utility-process startup, MessagePort transfer, health, close, and forced
+  termination;
+- exact ActiveSet lease resolution and generation of the child configuration;
+- Project-scoped Prompt content, Skill roots, model gateway routes, and MCP
+  capabilities;
+- authenticated Host MCP endpoints and tokens;
+- live Project/Canvas/Plugin authority rechecks at each business operation; and
+- typed IPC projection to Renderer, Task, and Automation callers.
 
-### 5.3 In-process Cordis tree inside Electron Main
+This registry is not an Agent backend router. It maps one stable Project identity to
+one DSH process handle and never selects an execution engine.
 
-Reject as the product topology. It could reach all core services and is useful for
-a laboratory adapter, but it would put a large, dynamically composed plugin tree in
-the Desktop Main process, couple runtime crashes and module loading to the product
-composition root, and make bounded process disposal and packaged dependency closure
-harder to prove.
+### Existing domain and Plugin owners
 
-It also does not solve the OpenCode Hook ABI or cross-release session-format
-compatibility.
+Project, Canvas, Workbench, Marketplace, Plugin API, and Plugin SDK keep their
+current business semantics. DSH does not become the owner of Canvas mutation,
+Project persistence, Plugin grants, Marketplace identity, or generation execution.
+UI, Agent, and Plugin entry points continue to call the same owner-defined
+operations.
 
-### 5.4 Current SDK subprocess
+## 5. Target architecture
 
-Select as the direction, reject as currently sufficient. Its process ownership,
-stdio protocol, durable event stream, and explicit shutdown align with Convax. Its
-missing lifecycle and interaction methods are bounded and belong in an SDK protocol
-successor instead of private imports into Harness internals.
+```mermaid
+flowchart LR
+  subgraph Renderer["Renderer"]
+    UI["Agent / Task / Automation UI"]
+  end
 
-## 6. Target architecture
+  subgraph Main["@convax/desktop · Electron Main"]
+    IPC["Existing typed IPC"]
+    Registry["Project DSH process registry<br/>ProjectId -> child handle"]
+    Carrier["Host ApiProxy MessagePort carrier<br/>transport only"]
+    HostMCPA["Project A authenticated Host MCP"]
+    HostMCPB["Project B authenticated Host MCP"]
+    Business["Project / Canvas / Plugin<br/>business services"]
+  end
 
-```text
-Renderer
-  -> existing AgentClient IPC
-Desktop Main
-  -> existing product scope, resources, ActiveSet lease, provider and tool owners
-@convax/agent-runtime
-  -> DeepSeekHarnessAgentRuntime (new AgentRuntime implementation)
-     -> bounded worker pool keyed by host-resolved workspace directory
-        -> one closed Convax Harness SDK subprocess per active workspace generation
-           -> event-sourced session + persistence
-           -> isolated Skill providers
-           -> Convax Host-tool MCP bridge
-           -> validated remote MCP rows
-           -> configured LLM routes
+  subgraph Runtime["@convax/agent-runtime"]
+    Parent["DSH parent client"]
+    ChildEntry["Closed DSH child boot"]
+  end
+
+  subgraph ChildA["Project A DSH utility process"]
+    ApiA["Official Host ApiProxy"]
+    CoreA["Cordis root + sessions"]
+    PluginsA["Prompt / Skills / Tools / Hooks<br/>MCP / LLM / persistence Plugins"]
+  end
+
+  subgraph ChildB["Project B DSH utility process"]
+    ApiB["Official Host ApiProxy"]
+    CoreB["Cordis root + sessions"]
+    PluginsB["Prompt / Skills / Tools / Hooks<br/>MCP / LLM / persistence Plugins"]
+  end
+
+  UI --> IPC --> Registry --> Parent --> Carrier
+  Carrier <--> ApiA
+  Carrier <--> ApiB
+  ChildEntry --> CoreA
+  ChildEntry --> CoreB
+  ApiA --> CoreA --> PluginsA --> HostMCPA --> Business
+  ApiB --> CoreB --> PluginsB --> HostMCPB --> Business
 ```
 
-The worker pool is lazy and bounded. A worker receives one workspace directory and
-one Host-owned state root; `@convax/agent-runtime` does not receive Project identity.
-Separate workers avoid cross-Project cwd, credentials, session, and tool-scope
-leakage inherent in rc.7's process-wide SDK initialization.
+The process boundary is the first Project-isolation layer. The independently issued
+Host MCP capability is the second. A bad Prompt, Skill, Tool, or Cordis Plugin
+configuration in Project A must still be unable to call Project B because the child
+never receives B's endpoint or token and Main revalidates A's live authority on each
+call.
 
-### 6.1 Closed composition
+## 6. Why one process per Project
 
-The Convax Harness profile must be generated from code-owned templates and exact
-Host inputs. It must:
+DSH can host several sessions and workspaces in one Cordis root. That capability is
+not sufficient reason to place separate Convax Project authorities in one process.
 
-- disable user profile patches, project `.dsh`/`.agents` discovery, HMR, and ambient
-  executable plugin loading;
-- resolve bare Harness packages from the packaged runtime closure, never the Project;
-- mount no raw filesystem, shell, terminal, LSP, web-fetch, or subprocess-facing
-  model tools in the parity release;
-- mount the core session/agent/tool services, a durable backend, selected Skill
-  providers, the SDK server, approved model adapters, and approved MCP clients only;
-- keep secrets out of YAML and disk, using a scrubbed per-generation environment or
-  a Host credential bridge;
-- set telemetry explicitly rather than inheriting Harness defaults; and
-- write state only below the Host-supplied runtime root.
+One process per live Project gives the product a direct isolation boundary for:
 
-Not mounting raw file/shell tools is the first strong protected-path implementation.
-The model can mutate Convax only through typed Host tools, where existing owners
-enforce scope. A future raw coding-tool release needs a generic DSH protected-subtree
-guard with lexical, realpath, symlink-swap, platform, and cancellation tests before
-it can replace this posture.
+- cwd and environment;
+- Prompt and Skill roots;
+- Tool and MCP registration;
+- MCP endpoint and bearer token;
+- model gateway routes and ephemeral credentials;
+- session persistence and event streams; and
+- Cordis Plugin state and teardown.
 
-### 6.2 Configuration generations
+It also contains a child crash, loop, memory leak, or teardown failure to one
+Project. Closing a Project revokes its MessagePort and Host MCP capability and then
+terminates the complete child tree.
 
-Desktop resolves provider routes, Hook/Skill/MCP contributions, and Host tools from
-one exact ActiveSet lease. Agent Runtime materializes one content-digested, secret-
-free Harness configuration generation.
+All sessions in the same Project share the process. Per-session processes would add
+startup, memory, persistence, and recovery cost without improving the product's
+actual authority boundary. DSH Agent Presets may still express personas within one
+Project child; they do not replace Project isolation.
 
-A hard refresh must:
+## 7. Official control plane and Electron carrier
 
-1. block new Agent operations;
-2. validate the candidate configuration against an isolated empty probe root;
-3. let admitted operations and Host-tool calls settle on the old generation;
-4. close the old process to quiescence;
-5. start the candidate against the workspace's durable root;
-6. resume requested sessions explicitly; and
-7. release the old ActiveSet lease only after no process can load its bytes.
+The carrier must reuse official Host ApiProxy types, schemas, errors, and method
+maps. A recommended shape is a new `AbstractApiClient` transport aspect on the
+parent and `toFetchHandler(ctx.apiProxy)` on the child, joined by one transferred
+MessagePort.
 
-No directory presence, profile patch, or last-good mutable file selects execution
-authority. Failed candidates leave the previous generation active until admission
-is blocked for the final swap; a failed final start reports runtime error and never
-silently starts an ambient profile.
+The carrier owns only physical delivery semantics:
 
-### 6.3 Host tools and MCP
+- bounded frame and queue sizes;
+- request correlation;
+- both official Host downlink streams and their generation;
+- caller cancellation, Project close, and app-quit propagation;
+- child `ready`, `fatal`, and `closed` lifecycle;
+- malformed, late, duplicate, and unknown frame rejection; and
+- deterministic port and process disposal.
 
-Reuse the existing authenticated loopback Streamable HTTP server for
-`AgentToolProvider`. Configure it as a DSH MCP server with a literal loopback URL,
-one fixed Authorization header, and a random bearer token. Preserve content-free
-progress and cancellation.
+It does not own session identifiers, history folding, event vocabulary, approval
+policy, question semantics, tool schemas, model selection, Skill discovery, or
+Project authorization. It must not redeclare a similar set of DTOs or add a
+`convax.agent-engine/*` business protocol.
 
-Before adoption, the DSH MCP client must either request
-`resetTimeoutOnProgress: true` or expose equivalent inactivity semantics. An absolute
-deadline is not a substitute for the current one-hour inactivity window because a
-progressing generation job may legitimately run longer.
+The first choice is Electron `utilityProcess`. An equivalent independently owned
+child process is acceptable only if the packaged proof demonstrates the same private
+MessagePort, process-tree ownership, module closure, cancellation, and deterministic
+shutdown. DSH must not remain in Electron Main as one in-process Cordis root.
 
-Plugin remote MCP cannot cut over until Harness owns an OAuth flow with status,
-connect, authenticate, disconnect, and credential-removal operations equivalent to
-the current Agent Runtime surface. Convax must not export or reinterpret OpenCode
-OAuth credentials.
+## 8. Project process lifecycle and persistence
 
-### 6.4 Models and credentials
+1. On the first Agent operation for a Project, Main resolves the stable Project
+   binding, derives an owner-only runtime root, creates one authenticated Host MCP
+   capability, and starts the packaged child entry.
+2. Main supplies only a product-generated, allowlisted profile plus that Project's
+   cwd, Prompt content, Skill roots, model routes, state root, and MCP capability.
+3. The child completes App Boot, Plugin activation, persistence open, and Host
+   ApiProxy readiness before Main reports the runtime ready.
+4. Later sessions for the same Project reuse the handle. Another Project receives a
+   different child, configuration, state root, endpoint, and token.
+5. Project close and app quit first reject new work, cancel in-flight calls, perform
+   a bounded DSH flush, revoke Host MCP, close the MessagePort, and terminate a child
+   that does not exit within the shutdown bound.
+6. In the first release, an unexpected child exit makes that Project's Agent
+   unavailable. It does not replay side effects, restart automatically, or fall back
+   to OpenCode.
 
-Desktop continues to resolve exact installed Plugin LLM gateways. For each Harness
-generation it supplies:
+DSH sessions persist below Desktop userData in a private directory partitioned by a
+stable Host-derived Project key. They do not enter portable `.convax`, and a raw
+Project path is not used as a storage directory name. Renderer and product tasks
+store the DSH session id plus their existing Project scope; there is no second native
+session-id mapping authority.
 
-- a namespaced provider id;
-- exact model ids/names;
-- the gateway base URL;
-- `openai-completions` for the current `openai` protocol;
-- `openai-completions` plus OpenRouter compatibility for `openrouter`; and
-- a generation-scoped credential reference whose secret exists only in the scrubbed
-  child environment or Host credential bridge.
+## 9. DSH/Cordis Plugin composition
 
-The successor SDK protocol must allow exact provider/model selection for each
-prompt, not only process initialization. The response projection must read the
-provider/model recorded by the committed Harness assistant message.
+“Plugin” names two distinct boundaries here:
 
-### 6.5 Skills
+- a DSH/Cordis Plugin composes runtime mechanics inside the isolated child;
+- a Convax Plugin is an installed, immutable product capability governed by
+  `convax.plugin/8`, ActiveSet leases, grants, and Host business boundaries.
 
-Use the DSH Skill registry with isolated filesystem providers configured with
-`includeDefaultRoots: false`. Pass only:
+They must not be conflated. Convax Plugins never gain direct access to the Cordis
+root, MessagePort, native paths, or another Project.
 
-- the existing managed standalone-Skill root;
-- exact immutable Plugin-owned Skill directories from the ActiveSet lease; and
-- separately validated read-only external global roots if Convax continues to expose
-  them.
+| Product need              | DSH owner                         | Convax responsibility                                                 |
+| ------------------------- | --------------------------------- | --------------------------------------------------------------------- |
+| sessions, control, events | Host ApiProxy and session Plugins | typed IPC projection, Project routing, safe redaction                 |
+| Prompt                    | system-prompt Plugin              | supply approved product content                                       |
+| Skills                    | Skill registry/filesystem Plugins | supply only managed and exact leased read-only roots                  |
+| Hooks                     | DSH/Cordis hook Plugins           | accept only a future DSH-native ABI; do not load OpenCode Hook bytes  |
+| Host tools                | DSH MCP client Plugin             | issue one authenticated Project-scoped Host MCP capability            |
+| remote MCP                | DSH MCP client Plugin             | supply admitted static/managed rows; OAuth rows unavailable initially |
+| LLM                       | DSH LLM Plugin                    | supply validated loopback gateway routes and ephemeral credentials    |
+| session persistence       | DSH persistence Plugins           | supply the Project-keyed private root and shutdown bound              |
 
-Selected Skills must be loaded through the DSH registry's user-invocation boundary.
-Do not copy Skill bodies into prompt strings in Desktop or reimplement discovery.
-The SDK successor therefore needs a typed selected-Skill prompt input.
+The mechanics live in DSH Plugins, but authority and business execution remain in
+their current Convax owners. In particular, using an MCP Plugin for Canvas tools
+does not move Canvas validation or persistence out of Canvas/Main.
 
-### 6.6 Hooks
+The current `convax.plugin/8` Hook contribution is an immutable OpenCode Plugin ESM
+module and is not compatible with Cordis. The first cutover marks Hook-bearing
+installations unavailable. A future DSH-native Hook contribution requires a
+separate human-approved Plugin Host change and contract release; this design PR does
+not silently reinterpret v8 bytes.
 
-There is no safe generic adapter from a `convax.plugin/8` OpenCode Plugin module to a
-Cordis or Claude/Codex command hook. The APIs, event vocabulary, loading lifecycle,
-and authority model differ.
+## 10. Closed product profile
 
-Choose exactly one before cutover:
+The product must not boot DSH's developer default profile. Each Project profile is
+generated from exact Host inputs and fails closed:
 
-1. publish a new Plugin Host major with a generic Harness-native declarative Hook
-   contract, update every authoring/reference surface, and keep v8 Hook-bearing
-   Plugins unavailable until updated; or
-2. retain an OpenCode compatibility runtime for v8 Hooks, which means the product
-   has not fully replaced OpenCode and must carry two execution/security boundaries.
+- only exact-pinned, approved DSH packages and Convax-owned adapter entries exist;
+- user profile patches, HMR, ambient Cordis modules, and Project `.dsh`, `.agents`,
+  `.claude`, or `.opencode` discovery are disabled;
+- Skill providers use `includeDefaultRoots: false` and receive only Host-managed
+  roots;
+- native filesystem, bash, terminal, LSP, code runtime, subprocess, and arbitrary
+  web/network tools are not mounted in the parity profile;
+- Project and Canvas access is available only through typed Host MCP tools;
+- one child never receives another Project's cwd, configuration, state root,
+  endpoint, token, model credential, or session;
+- runtime/profile directories are owner-only and durable config contains no
+  long-lived credential;
+- events, logs, diagnostics, and Renderer projections redact tokens, native paths,
+  executable configuration, and raw provider errors; and
+- each Host MCP call rechecks live Project binding, Canvas authority/revision,
+  protected paths, Plugin principal, and cancellation immediately before effects.
 
-The recommended product decision is option 1. It requires explicit human approval
-through the Plugin-to-Host change process. An agent-authored proposal is not that
-approval.
+This posture satisfies protected-path isolation by not mounting raw coding tools.
+Adding them later requires a separate generic DSH confinement design with lexical,
+realpath, symlink-swap, Windows-path, network, process, and cancellation proof.
 
-## 7. Required Harness SDK successor
+## 11. OpenCode cutover and deferred features
 
-Do not implement Convax against `./src/*` deep imports. Contribute or wait for a
-published protocol that provides at least:
+The first release is a clean runtime cutover:
 
-| Method or channel                 | Required semantics                                                                         |
-| --------------------------------- | ------------------------------------------------------------------------------------------ |
-| `initialize`                      | negotiated protocol version/capabilities; no unvalidated `0.0.1` peer                      |
-| `session/list`                    | bounded headers/titles for one configured persistence root                                 |
-| `session/create`                  | exact session id and immutable cwd                                                         |
-| `session/resume`                  | load, repair, and publish an existing persisted session                                    |
-| `session/state`                   | bounded cold/live event or projection read with pending interactions                       |
-| `session/prompt`                  | exact provider/model, instructions, typed resources, selected Skills, and enqueue identity |
-| `session/cancel`                  | address admitted/queued work, reach idle, and propagate `AbortSignal`                      |
-| `session/close`                   | dispose one live Agent without shutting down the runtime                                   |
-| `capabilities/list`               | selected Skill and tool ids from the actual scoped composition                             |
-| `models/list`                     | exact configured provider/model catalog                                                    |
-| server request `approval/request` | one-shot and remembered replies or an explicit contract migration                          |
-| server request `question/request` | typed multi-question request, answer, rejection, and cancellation                          |
-| MCP control                       | status, OAuth start/finish, connect/disconnect, and auth removal                           |
-| notifications                     | ordered session events, status, interaction lifecycle, and configuration generation        |
+- every new, resumed, displayed, prompted, and canceled session is a DSH session;
+- no call probes two backends and no DSH error triggers an OpenCode retry;
+- no OpenCode Data Fixer, session import, neutral archive, or legacy reader is
+  required for adoption;
+- existing OpenCode session/config bytes remain untouched and are neither decoded,
+  rewritten, nor deleted by DSH startup;
+- OpenCode OAuth credentials and Hook modules are not imported;
+- OAuth-dependent remote MCP installations and Hook-bearing Plugins are projected
+  explicitly unavailable; and
+- automatic child crash recovery, hot profile replacement, and side-effect replay
+  are deferred.
 
-The protocol must define shutdown, transport loss, duplicate request, late reply,
-unknown session, restart, and version-mismatch behavior. Client and server conformance
-fixtures must be published with the protocol.
+Convax currently also uses the OpenCode-shipped Bun runtime for interpreted verified
+Plugin companions. That hidden responsibility must move to an independently packaged
+app-owned Bun artifact before the OpenCode executable can be removed. Companion
+execution remains a Desktop-owned verified process boundary and is not moved into
+DSH.
 
-## 8. Session and state migration
+These omissions are explicit compatibility cuts, not reasons to retain OpenCode.
+They may be designed independently after the two adoption proofs.
 
-Do not translate OpenCode records into Harness `SessionEvent` logs. Harness session
-format is prerelease version `0`; request headers, tool-pairing, model provenance,
-and recovery records have invariants that an OpenCode projection cannot reconstruct.
+## 12. Implementation slices
 
-Use a two-release migration:
+### M0: freeze the child contract
 
-1. while OpenCode is still the production runtime, export every reachable session
-   through `AgentRuntime.getSessionState()` into a versioned, checksummed, read-only
-   neutral archive;
-2. verify archive counts and bytes before marking a scope migrated;
-3. start new Harness sessions in a separate state root;
-4. show archived OpenCode sessions read-only with an explicit provenance label;
-5. never replay archived tool calls or pending permission/question requests; and
-6. remove the OpenCode executable only in a later release after archive acceptance.
+- pin the exact DSH package closure, licenses, integrity, and SBOM inputs;
+- implement the transport frame and bound correlation, streams, cancel, close, and
+  lifecycle without defining a business method;
+- define the Project-keyed private state root and Host MCP capability lifecycle;
+- define the closed product profile and package allowlist; and
+- decouple app-owned Bun from the OpenCode executable.
 
-Do not dual-write one live conversation to both runtimes. Do not infer successful
-Harness resume from a matching session id. OpenCode-owned MCP OAuth credentials stay
-in place and users re-authenticate through the future Harness flow.
+### M1: packaged single-Project vertical slice
 
-For the first cutover, preserve stable legacy identifiers such as audit actor
-`opencode:<scope>` and service id `builtin:opencode` if changing them would rewrite
-durable or user preference state. Treat them as compatibility tokens and schedule a
-separate evidence-backed migration; do not combine identity cleanup with runtime
-replacement.
+- launch one DSH child from a packaged Electron app;
+- exercise official session create/list/history/fork/prompt/cancel, event streams,
+  approval, and question round-trips through the carrier;
+- call one read-only and one revision-guarded mutating Canvas tool through the
+  authenticated Host MCP capability; and
+- prove Project close, app quit, child fatal, MessagePort close, bounded flush, and
+  process-tree cleanup.
 
-## 9. Go/no-go gates
+### M2: two-Project isolation proof
 
-Cutover is **NO-GO** until every row passes on macOS arm64/x64, Windows x64/arm64,
-and Linux x64/arm64 where Convax claims support.
+- run Project A and B concurrently with multiple sessions in each;
+- exchange Project ids, cwd values, Prompt content, Skill roots, tool names, MCP
+  endpoints, bearer tokens, model routes, session ids, state roots, and event
+  subscriptions in negative tests;
+- prove that closing or crashing A does not affect B; and
+- prove that every cross-Project call fails at the Host business boundary even when
+  the child sends a syntactically valid request.
 
-| Gate                | Required evidence                                                                                                                              |
-| ------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------- |
-| G1 protocol         | Published, version-negotiated SDK protocol implements every §7 operation with client/server conformance tests                                  |
-| G2 sessions         | create/list/state/resume survive clean restart, crash-tail repair, max-token termination, and incompatible-format rejection                    |
-| G3 interaction      | permission once/always/reject and questions round-trip; abort/dispose resolves every waiter; late replies cannot cross sessions                |
-| G4 model routing    | one session can change exact provider/model between prompts and projects cannot observe each other's catalogs or credentials                   |
-| G5 resources/Skills | file, directory, structured resource, and selected Skill semantics match current contract; no ambient project Skill/config is discovered       |
-| G6 Host tools       | schemas/results match; progress resets inactivity; stop and transport loss abort long-running Host work; stale scope cannot call               |
-| G7 MCP              | HTTPS validation, reconnect, OAuth, status/auth controls, cancellation, and ActiveSet generation refresh pass                                  |
-| G8 Hooks            | approved Host-major decision implemented, or the release explicitly admits OpenCode remains as a compatibility runtime                         |
-| G9 protection       | `.convax` read/write/execute probes, symlink aliases/swaps, shell/LSP absence, and platform path cases fail closed                             |
-| G10 packaging       | reproducible signed runtime artifact, checksum, license, provenance/SBOM, target-arch verification, and packaged smoke exist                   |
-| G11 lifecycle       | concurrent prompt/refresh, cancellation/restart, process crash, Electron quit, and repeated open/close leave no orphan process or locked store |
-| G12 migration       | neutral archive is count/byte verified, old sessions are read-only, new sessions use a separate root, and rollback loses neither               |
+### M3: complete the cutover
 
-A focused package test, source build, ACP demo, or successful single prompt proves
-none of these gates by itself.
+- compose the production Prompt, Skills, admitted Hooks, managed/static MCP, LLM,
+  and persistence Plugins;
+- run packaged platform/architecture smoke for DSH ESM, Loader/native peers,
+  signing, state durability, cancellation, and exit cleanup;
+- delete OpenCode runtime, SDK, configuration, OAuth wiring, and packaged bytes;
+- update the canonical architecture, Mermaid map, package contracts, boundaries,
+  protocol version, and package/packaged tests in the implementation PR.
 
-## 10. Delivery slices
+## 13. Go/No-Go gates
 
-1. **Upstream protocol spike:** implement the smallest versioned list/resume/state/
-   cancel/interaction extension against a pinned Harness branch and prove it with
-   upstream conformance tests. Do not change Convax production dependencies.
-2. **Convax contract fixture:** add a vendor-neutral `AgentRuntime` conformance suite
-   and run the current OpenCode implementation against it first.
-3. **Read-only DSH adapter:** status, list/create/resume/state, event projection, and
-   model catalog with mock/replay LLM only.
-4. **Prompt parity:** exact model routing, instructions, resources, Skills,
-   questions, permissions, and cancellation.
-5. **Tool/MCP parity:** authenticated Host bridge, progress/cancel, remote MCP OAuth,
-   and atomic configuration generation.
-6. **Packaging:** deterministic runtime staging and packaged smoke on the full matrix.
-7. **Migration release:** neutral OpenCode archive and opt-in internal DSH runtime.
-8. **Cutover release:** DSH default only after G1-G12; remove OpenCode in the later
-   archive-accepted release.
+There are exactly two adoption gates.
 
-Each slice must remain independently revertible. A feature flag may select the
-runtime during internal validation, but production must have one authoritative
-runtime per new session. Shadow evaluation uses deterministic replay/read-only tools;
-it must not execute the same side-effecting prompt in both runtimes.
+### G1: packaged child and official control plane
 
-## 11. Repository impact when implementation is approved
+A real packaged Electron application can start, drive, and close the DSH process.
+The official Host ApiProxy envelopes and schemas, bidirectional interactions,
+streams, cancellation, close, and persistence all work through the private carrier.
+The proof must not use an in-process Cordis root, a development-only source loader,
+or re-declared Convax DTOs.
 
-The implementation changes architecture and must update together:
+### G2: Project capability isolation
 
-- root `AGENTS.md` package ownership and dependency rules;
-- `packages/agent-runtime/AGENTS.md` and public vendor-neutral contract comments;
-- `docs/architecture.md` package, canonical state, persistence, Agent, MCP, and
-  Electron/package sections;
-- `docs/plugin-skill-platform.md` and the Plugin SDK/API release process if Hooks
-  change;
-- Desktop Main configuration, runtime staging, provenance, packaged smoke, and
-  runtime service presentation;
-- package-boundary and architecture-test-coverage policy; and
-- dependency/license/SBOM records.
+Two concurrent Projects cannot observe or use each other's cwd, Prompt, Skills,
+Tools, MCP endpoint/token, model routes/credentials, sessions, persistence, or event
+streams. Cross-Project requests fail closed in Main's owner-defined business
+operations, and one child failure does not revoke the other's capability.
 
-This assessment intentionally does not edit those current contracts because no
-runtime behavior or approved Plugin Host contract changed.
+The implementation is acceptable only if it also demonstrates:
 
-## 12. Falsifiers
+- no OpenCode server, SDK, router, or fallback exists in the new runtime path;
+- the carrier contains no DSH business method or duplicate schema;
+- the closed profile loads no ambient root or high-authority native tools;
+- child close/fatal revokes both the MessagePort and Host MCP capability and never
+  replays an external side effect;
+- the app-owned Bun responsibility no longer depends on OpenCode; and
+- affected package tests, root boundaries/checks, pack checks, and the claimed
+  packaged platform smoke pass.
 
-Revisit this decision if a newer exact Harness release proves all of the following:
+Remote MCP OAuth, OpenCode session import/Data Fixer, OpenCode Hook ABI
+compatibility, automatic crash recovery, hot profile replacement, and an additional
+Convax control-plane protocol are not Go/No-Go gates.
 
-- a stable interactive SDK transport already exposes §7;
-- a verified cross-platform runtime closure is published for TypeScript consumers;
-- MCP OAuth and progress-aware inactivity are implemented;
-- a supported generic Hook compatibility layer accepts the exact immutable v8 bytes;
-  and
-- session-format compatibility is promised across the versions Convax must ship.
+## 14. Canonical architecture impact
 
-Conversely, abandon the migration if satisfying the Hook, interaction, and packaging
-gates requires a permanent private fork or duplicates more security/lifecycle code
-than the OpenCode adapter it replaces.
+This PR remains a design decision and does not change the current production
+runtime. Therefore `docs/architecture.md`, the architecture Mermaid map, root
+`AGENTS.md`, and the Agent Runtime/Desktop contracts correctly continue to name
+OpenCode as the current owner implementation.
+
+The first implementation PR that makes DSH executable must update those files in
+the same change. At minimum it must:
+
+- rename `@convax/agent-runtime` ownership from OpenCode integration to generic DSH
+  Host integration;
+- add the per-Project process and Host ApiProxy carrier to the architecture map;
+- change the Agent session, Skill, Hook, MCP, provider, and persistence prose;
+- record the private DSH state root under Desktop userData;
+- update Desktop Main lifecycle and packaged dependency closure rules;
+- update `packages/agent-runtime/AGENTS.md`, `packages/desktop/AGENTS.md`, and
+  `packages/desktop/src/main/AGENTS.md`;
+- update package-boundary and architecture-coverage tests; and
+- update `desktopProtocolVersion` only if the trusted Renderer bridge changes.
+
+No `@convax/plugin-api` or `@convax/plugin-sdk` change is authorized by this design.
+A DSH-native Convax Hook ABI, if pursued, is a separate human-approved Host task.
+
+## 15. Primary references
+
+- [Host ApiProxy contract, four-quadrant messages, and fetch carrier](https://github.com/deepseek-ai/deepseek-harness/blob/99f6f02fecdb7dff40c3fbc9470f5907c29f74ca/packages/host/apiproxy/README.md)
+- [Host ApiProxy browser-safe API surface](https://github.com/deepseek-ai/deepseek-harness/blob/99f6f02fecdb7dff40c3fbc9470f5907c29f74ca/packages/host/apiproxy/src/api/index.ts)
+- [API Gateway separation between Typert Remote and physical connection](https://github.com/deepseek-ai/deepseek-harness/blob/99f6f02fecdb7dff40c3fbc9470f5907c29f74ca/docs/api-gateway.md)
+- [App Boot profile, patch, and Cordis Loader composition](https://github.com/deepseek-ai/deepseek-harness/blob/99f6f02fecdb7dff40c3fbc9470f5907c29f74ca/packages/boot/app-boot/README.md)
+- [MCP client Plugin transports, headers, timeout, and reconnect behavior](https://github.com/deepseek-ai/deepseek-harness/blob/99f6f02fecdb7dff40c3fbc9470f5907c29f74ca/packages/mcp/mcp-client/README.md)
+
+## 16. Final recommendation
+
+Proceed with one pre-release cutover to DSH using one independently owned process
+per live Project, the official Host ApiProxy contract, and an authenticated
+Project-scoped Host MCP capability. Reject dual backends, per-session processes, an
+in-process Electron Main Cordis root, and a Convax-owned Agent business protocol.
+
+The first implementation PR should prove only the packaged child carrier and
+two-Project capability isolation. Both passing is Go; either failing is No-Go.
