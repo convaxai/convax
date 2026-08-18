@@ -8,6 +8,8 @@ function Passthrough(props: { children?: ReactNode }) {
 }
 
 mock.module("@convax/ui", () => ({
+  BeamButton: (props: { children?: ReactNode }) => <button>{props.children}</button>,
+  BeamSurface: Passthrough,
   Button: (props: React.ButtonHTMLAttributes<HTMLButtonElement>) => <button {...props} />,
   FolderGlyph: (props: { size?: string }) => (
     <span data-ui-folder-glyph="" data-ui-folder-glyph-size={props.size ?? "picker"} />

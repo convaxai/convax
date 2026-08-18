@@ -40,12 +40,16 @@ import {
 function installTestWindow() {
   const testWindow = new Window({ url: "https://convax.test/" })
   const globals = {
+    cancelAnimationFrame: testWindow.cancelAnimationFrame.bind(testWindow),
     Element: testWindow.Element,
     Event: testWindow.Event,
+    getComputedStyle: testWindow.getComputedStyle.bind(testWindow),
     HTMLElement: testWindow.HTMLElement,
     HTMLTextAreaElement: testWindow.HTMLTextAreaElement,
+    MutationObserver: testWindow.MutationObserver,
     Node: testWindow.Node,
     document: testWindow.document,
+    requestAnimationFrame: testWindow.requestAnimationFrame.bind(testWindow),
     window: testWindow,
   }
   const originalDescriptors = new Map<string, PropertyDescriptor | undefined>()
@@ -778,6 +782,16 @@ describe("Canvas card generation lifecycle", () => {
       })
       expect(generate).toHaveBeenCalledTimes(1)
       expect(acceptedSignal?.aborted).toBeFalse()
+      const generatingSurface = document.querySelector<HTMLElement>('[data-canvas-card-generation-surface="single"]')
+      expect(generatingSurface?.dataset.slot).toBeUndefined()
+      expect(generatingSurface?.getAttribute("data-ui-beam")).toBeNull()
+      const conversationSurface = document.querySelector<HTMLElement>("[data-canvas-card-conversation-panel]")
+      expect(conversationSurface?.dataset.slot).toBe("beam-surface")
+      expect(conversationSurface?.getAttribute("data-ui-beam")).toBe("rotate")
+      const generatingButton = document.querySelector<HTMLButtonElement>('button[aria-label="Generating"]')
+      expect(generatingButton?.dataset.slot).toBe("beam-button")
+      expect(generatingButton?.getAttribute("data-ui-beam")).toBe("pulse-inner")
+      expect(generatingButton?.disabled).toBeTrue()
 
       await act(async () => {
         root?.render(<div data-active-canvas-id="canvas-two">Another Canvas</div>)
@@ -804,6 +818,9 @@ describe("Canvas card generation lifecycle", () => {
       expect(document.querySelector<HTMLTextAreaElement>("textarea")?.value).toBe(
         "Keep generating while I switch Canvas",
       )
+      expect(
+        document.querySelector<HTMLElement>("[data-canvas-card-conversation-panel]")?.getAttribute("data-ui-beam"),
+      ).toBe("idle")
       expect(acceptedSignal?.aborted).toBeFalse()
 
       resolveGeneration({
@@ -966,6 +983,11 @@ describe("Canvas card generation lifecycle", () => {
     )
 
     expect(markup).toContain('data-canvas-card-conversation-panel="true"')
+    const conversationSurface = markup.match(/<[^>]*data-canvas-card-conversation-panel="true"[^>]*>/)?.[0] ?? ""
+    expect(conversationSurface).toContain('data-slot="beam-surface"')
+    expect(conversationSurface).toContain('data-ui-beam="idle"')
+    expect(conversationSurface).toContain('data-ui-beam-tone="spectrum"')
+    expect(conversationSurface).toContain('data-ui-beam-intensity="default"')
     expect(markup).toContain('aria-label="卡片对话模式"')
     expect(markup).toContain("inline-grid w-fit")
     expect(markup).toContain("rounded-[28px]")
@@ -976,6 +998,15 @@ describe("Canvas card generation lifecycle", () => {
     expect(markup).toContain('aria-label="Generation prompt"')
     expect(markup).not.toContain('autofocus=""')
     expect(markup).toContain('data-canvas-card-generation-surface="single"')
+    const generationSurface = markup.match(/<[^>]*data-canvas-card-generation-surface="single"[^>]*>/)?.[0] ?? ""
+    expect(generationSurface).not.toContain("data-slot")
+    expect(generationSurface).not.toContain("data-ui-beam")
+    expect(generationSurface).not.toContain("rounded-[20px]")
+    expect(generationSurface).not.toContain("border-border")
+    expect(generationSurface).not.toContain("bg-background")
+    expect(generationSurface).not.toContain("shadow")
+    expect(generationSurface).toContain("overflow-hidden")
+    expect(markup.match(/data-slot="beam-surface"/g)).toHaveLength(1)
     expect(markup).toContain("min-h-10 max-h-20 flex-none resize-none")
     expect(markup).toContain("[field-sizing:content]")
     expect(markup).toContain('rows="1"')
@@ -989,6 +1020,9 @@ describe("Canvas card generation lifecycle", () => {
     expect(markup).toContain("items-center gap-1 pt-1")
     expect(markup).toContain('aria-label="Generate"')
     const generateButton = markup.match(/<button[^>]*aria-label="Generate"[^>]*>/)?.[0] ?? ""
+    expect(generateButton).toContain('data-slot="beam-button"')
+    expect(generateButton).toContain('data-ui-beam="idle"')
+    expect(generateButton).toContain('data-ui-beam-tone="spectrum"')
     expect(generateButton).toContain("size-8")
     expect(generateButton).toContain("rounded-md")
     expect(generateButton).not.toContain("rounded-full")

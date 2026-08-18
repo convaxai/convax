@@ -1,4 +1,4 @@
-import { Button, LoadingSpinner, Tooltip, cn } from "@convax/ui"
+import { BeamButton, Button, LoadingSpinner, Tooltip, cn } from "@convax/ui"
 import type { Editor, JSONContent } from "@tiptap/core"
 import DragHandle, { type DragHandleProps } from "@tiptap/extension-drag-handle-react"
 import Placeholder from "@tiptap/extension-placeholder"
@@ -3028,19 +3028,22 @@ function FileGenerationActivityOverlay(props: {
       <div className="flex flex-col items-center gap-2 text-sm font-medium text-foreground">
         <LoadingSpinner reducedMotion={editor.reducedMotion} size="lg" tone="brand" />
         <span>{props.run.status === "submitting" ? "正在提交…" : "正在生成…"}</span>
-        <Button
+        <BeamButton
+          beam="pulse-inner"
           className="nodrag nowheel"
           onClick={(event) => {
             event.stopPropagation()
             props.onCancel()
           }}
           onPointerDown={(event) => event.stopPropagation()}
+          reducedMotion={editor.reducedMotion}
           size="sm"
+          tone="warning"
           type="button"
           variant="outline"
         >
           取消
-        </Button>
+        </BeamButton>
       </div>
     </div>
   )

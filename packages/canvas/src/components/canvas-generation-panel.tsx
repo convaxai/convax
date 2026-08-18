@@ -1,4 +1,6 @@
 import {
+  BeamButton,
+  BeamSurface,
   Button,
   Input,
   Loading,
@@ -390,24 +392,34 @@ export function CanvasGenerationPanel(props: CanvasGenerationPanelProps) {
             values={toolInput}
           />
         ) : null}
-        <div className="flex gap-2">
+        <BeamSurface
+          beam={props.submitting ? "rotate" : "idle"}
+          className="flex gap-1 rounded-xl border border-border/60 bg-background p-1 shadow-sm"
+          focusBeam
+          reducedMotion={props.reducedMotion}
+          tone="spectrum"
+        >
           <Input
             autoFocus={props.autoFocus}
+            className="border-transparent shadow-none focus-visible:border-transparent focus-visible:ring-0"
             data-canvas-shortcuts="ignore"
             disabled={inputDisabled}
             onChange={(event) => setPrompt(event.currentTarget.value)}
             placeholder="Describe what to create..."
             value={prompt}
           />
-          <Button
+          <BeamButton
             aria-label="Run generation"
+            beam={props.submitting ? "pulse-inner" : "idle"}
             disabled={submissionDisabled || (!prompt.trim() && projection.promptContextNodeIds.length === 0)}
+            reducedMotion={props.reducedMotion}
             size="icon"
+            tone="spectrum"
             type="submit"
           >
             {props.submitting ? <LoadingSpinner reducedMotion={props.reducedMotion} size="sm" /> : <Sparkles />}
-          </Button>
-        </div>
+          </BeamButton>
+        </BeamSurface>
       </form>
       <div className="mt-2 text-xs text-muted-foreground">
         {projection.promptContextNodeIds.length > 0 || projection.references.length > 0

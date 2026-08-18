@@ -74,18 +74,50 @@ function createService(listTools: CanvasGenerateService["listTools"]): CanvasGen
 }
 
 describe("CanvasGenerationPanel", () => {
-  test("marks the Canvas-owned generation surface for the shared panel motion policy", async () => {
+  test("maps the Canvas submitting state to the shared generation beam primitives", async () => {
+    const canvas = createCanvasDocument({ id: "canvas-generation-motion" })
+    const service = createService(mock(async () => []))
     const container = render(
       <CanvasGenerationPanel
-        document={createCanvasDocument({ id: "canvas-generation-motion" })}
-        generateService={createService(mock(async () => []))}
+        document={canvas}
+        generateService={service}
         onSubmit={() => undefined}
+        reducedMotion
         selectedNodeIds={[]}
       />,
     )
 
     await flushEffects()
     expect(container.querySelector(".convax-generation-panel")).not.toBeNull()
+    const idleSurface = container.querySelector<HTMLElement>('[data-slot="beam-surface"]')
+    const idleSubmit = container.querySelector<HTMLButtonElement>('button[aria-label="Run generation"]')
+    expect(idleSurface?.getAttribute("data-ui-beam")).toBe("idle")
+    expect(idleSurface?.getAttribute("data-ui-beam-motion")).toBe("reduce")
+    expect(idleSurface?.getAttribute("data-ui-beam-tone")).toBe("spectrum")
+    expect(idleSurface?.className).toContain("rounded-xl")
+    expect(idleSubmit?.dataset.slot).toBe("beam-button")
+    expect(idleSubmit?.getAttribute("data-ui-beam")).toBe("idle")
+
+    await act(async () => {
+      root?.render(
+        <CanvasGenerationPanel
+          document={canvas}
+          generateService={service}
+          onSubmit={() => undefined}
+          reducedMotion
+          selectedNodeIds={[]}
+          submitting
+        />,
+      )
+    })
+
+    const activeSurface = container.querySelector<HTMLElement>('[data-slot="beam-surface"]')
+    const activeSubmit = container.querySelector<HTMLButtonElement>('button[aria-label="Run generation"]')
+    expect(activeSurface?.getAttribute("data-ui-beam")).toBe("rotate")
+    expect(activeSubmit?.getAttribute("data-ui-beam")).toBe("pulse-inner")
+    expect(activeSubmit?.getAttribute("data-ui-beam-motion")).toBe("reduce")
+    expect(activeSubmit?.disabled).toBe(true)
+    expect(activeSubmit?.querySelector('[data-slot="loading-spinner"]')).not.toBeNull()
   })
 
   test("shows flat service and model names and submits the selected concrete model", async () => {

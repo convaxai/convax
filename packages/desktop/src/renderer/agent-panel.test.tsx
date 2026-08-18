@@ -730,6 +730,7 @@ describe("Agent composer source contract", () => {
     expect(source).toContain("key={`${conversationScope}:${sessionId}:${turn.id}`}")
     expect(source).toContain('aria-label={responseStopping ? "Stopping response" : "Stop response"}')
     expect(source).toContain("disabled={responseStopping}")
+    expect(source).toContain("onClick={() => void abort()}")
     expect(source).toContain('import "./agent-panel.css"')
     expect(source).toContain("loading && !sessionState")
     expect(source).toContain('label="Loading conversation…"')
@@ -764,13 +765,31 @@ describe("Agent composer source contract", () => {
     )
     expect(styles).toContain("--agent-composer-radius: 24px")
     expect(styles).toContain("--agent-message-enter-duration: 150ms")
-    expect(styles).toContain('.agent-composer-frame[data-agent-composer-state="running"]::before')
+    expect(source).toContain("BeamSurface,")
+    expect(source).toContain("BeamButton,")
+    expect(source).toMatch(
+      /<BeamSurface\s+beam=\{[\s\S]*?responseStopping \|\| runtimeBusy \|\| submitting \? "rotate" : "idle"[\s\S]*?focusBeam[\s\S]*?tone=\{responseStopping \? "warning" : "spectrum"\}/,
+    )
+    expect(source).toMatch(
+      /<BeamButton\s+aria-label=\{responseStopping \? "Stopping response" : "Stop response"\}[\s\S]*?beam="pulse-inner"[\s\S]*?tone=\{responseStopping \? "warning" : "spectrum"\}/,
+    )
+    expect(source).toMatch(
+      /<BeamButton\s+aria-label="Send message"[\s\S]*?beam=\{submitting \? "pulse-inner" : "idle"\}[\s\S]*?tone="spectrum"/,
+    )
     expect(source).toContain("data-agent-composer-disabled")
     expect(source).toContain("data-agent-composer-has-content")
+    expect(source).toContain("data-agent-composer-state")
     expect(styles).toContain(".agent-composer-frame:focus-within")
-    expect(styles).toContain('.agent-composer-frame[data-agent-composer-state="submitting"]::before')
     expect(styles).toContain('.agent-composer-frame[data-agent-composer-disabled="true"]')
+    expect(styles.match(/\.agent-composer-frame\[data-agent-composer-disabled="true"\]\s*\{[^}]*\}/)?.[0]).not.toContain(
+      "opacity",
+    )
+    expect(source).toContain('dropActive && "bg-interactive-selected ring-2 ring-primary/40"')
+    expect(source).not.toContain('dropActive && "bg-primary/5')
     expect(styles).toContain("@media (prefers-reduced-motion: reduce)")
+    expect(styles).not.toContain(".agent-composer-frame::before")
+    expect(styles).not.toContain("@keyframes agent-composer-edge")
+    expect(styles).not.toContain("@keyframes agent-composer-submit")
     expect(styles).not.toContain("transition: all")
   })
 

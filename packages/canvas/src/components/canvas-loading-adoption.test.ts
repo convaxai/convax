@@ -28,7 +28,10 @@ describe("Canvas loading adoption", () => {
     expect(nodeSource).toContain('role="status"')
     expect(nodeSource).toContain('role="alert"')
     expect(nodeSource).not.toContain("LoaderCircle")
-    expect(nodeSource).not.toContain("BorderBeam")
+    expect(nodeSource).toContain("BeamButton")
+    expect(nodeSource).toContain('beam="pulse-inner"')
+    expect(nodeSource).toMatch(/<BeamButton[\s\S]*?reducedMotion=\{editor\.reducedMotion\}[\s\S]*?>/)
+    expect(nodeSource).toContain('tone="warning"')
   })
 
   test("generation panel catalog waits use Loading without inventing lifecycle state", () => {
@@ -38,5 +41,11 @@ describe("Canvas loading adoption", () => {
     expect(generationSource).toContain("catalogStatus === \"error\"")
     expect(generationSource).toContain('role="alert"')
     expect(generationSource).not.toContain("LoaderCircle")
+    expect(generationSource).toContain("BeamSurface")
+    expect(generationSource).toContain("BeamButton")
+    expect(generationSource).toContain('beam={props.submitting ? "rotate" : "idle"}')
+    expect(generationSource).toContain('beam={props.submitting ? "pulse-inner" : "idle"}')
+    expect(generationSource).toMatch(/<BeamSurface[\s\S]*?reducedMotion=\{props\.reducedMotion\}[\s\S]*?>/)
+    expect(generationSource).toMatch(/<BeamButton[\s\S]*?reducedMotion=\{props\.reducedMotion\}[\s\S]*?>/)
   })
 })
