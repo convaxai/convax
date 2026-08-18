@@ -25,11 +25,12 @@
     "lint": "oxlint",
     "typecheck": "bun turbo typecheck",
     "test": "bun turbo test",
+    "skills:check": "bun scripts/repository-skill-check.ts",
     "package:boundaries": "bun scripts/package-boundary-check.ts",
     "plugin-api:history-policy": "bun scripts/plugin-api-history-policy.ts",
     "pack:check": "bun run package:boundaries && bun scripts/package-pack-smoke.ts",
     "check:test-coverage": "bun scripts/architecture-test-coverage-check.ts",
-    "check": "bun run lint && bun run typecheck && bun run test && bun run pack:check && bun --cwd packages/desktop smoke:open-project",
+    "check": "bun run skills:check && bun run lint && bun run typecheck && bun run test && bun run pack:check && bun --cwd packages/desktop smoke:open-project",
     "prepare": "husky"
   },
   "workspaces": {

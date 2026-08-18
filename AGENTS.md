@@ -36,6 +36,19 @@ cache through a frozen install, and deliver a reviewed branch and pull request. 
 must never symlink another checkout's dependency tree, merge, release, force-push,
 or treat a contributor workflow Skill as a shipped Convax capability.
 
+### Repository contributor Skills
+
+| Skill                                                                              | Canonical use                                                                                                                               |
+| ---------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------- |
+| [`solo-task`](.agents/skills/solo-task/SKILL.md)                                   | Isolated worktree preparation, validation, commit, push, and pull-request delivery.                                                         |
+| [`govern-convax-architecture`](.agents/skills/govern-convax-architecture/SKILL.md) | Package ownership, dependency, public contract, state, persistence, trust-boundary, and architecture-document governance.                   |
+| [`find-simplifications`](.agents/skills/find-simplifications/SKILL.md)             | Evidence-backed dead/duplicate/speculative surface audits, consumer classification, lifecycle review, and bounded simplification decisions. |
+
+These Skills are complementary. `find-simplifications` owns candidate evidence and
+decision quality, `govern-convax-architecture` owns architecture impact, and
+`solo-task` remains the only contributor workflow for worktree and pull-request
+delivery. They never become product-installed Skills or runtime authority.
+
 ## Instruction routing
 
 Before planning or editing:
@@ -99,6 +112,7 @@ the contract instead of choosing the more convenient interpretation.
 | Desktop application update, signing, notarization, release feed                          | [`docs/architecture.md` §§6 and 10](docs/architecture.md#desktop-application-update), [`docs/desktop-builds.md`](docs/desktop-builds.md), and the Desktop Main contract                                                                                                              |
 | Portable/native paths, filesystem trust, Windows path handling                           | [`docs/architecture.md` §11](docs/architecture.md#11-portable-paths-and-trust-boundaries) and the owning native-adapter contract                                                                                                                                                     |
 | External editor, retired built-in, native media drag-out                                 | [`docs/architecture.md` “Retired built-ins” and “Native Canvas media drag-out”](docs/architecture.md#retired-built-ins), then the Desktop Main/Renderer contracts                                                                                                                    |
+| Simplification, cleanup, dead code, duplicate state, dependency replacement              | [`.agents/skills/find-simplifications/SKILL.md`](.agents/skills/find-simplifications/SKILL.md), the relevant architecture sections, and every affected owner contract                                                                                                                |
 
 ## Required workflow
 
@@ -117,6 +131,10 @@ the contract instead of choosing the more convenient interpretation.
    protocol, directory responsibility, or validation requirements change.
 6. Run focused checks during iteration, then the required package and repository
    checks before handoff.
+7. For simplification work, classify production, non-production, and
+   ambiguous/dynamic consumers before removal. Static-analysis output is a lead,
+   not proof across published, persisted, generated, or dynamically registered
+   surfaces.
 
 ## Single current collaboration protocol
 

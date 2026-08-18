@@ -1,10 +1,6 @@
 import { describe, expect, test } from "bun:test"
 
-import {
-  parsePluginRuntimeSurface,
-  projectRegistryPackagePluginCategories,
-  projectRegistryPackageRuntimeSurface,
-} from "./marketplace-runtime-surface"
+import { parsePluginRuntimeSurface, projectRegistryPackageRuntimeProjection } from "./marketplace-runtime-surface"
 
 function manifest(overrides: Record<string, unknown> = {}) {
   return {
@@ -36,7 +32,7 @@ describe("Marketplace runtime-surface projection", () => {
   ] as const)("projects canonical v8 manifests to %s", (expected, value) => {
     expect(parsePluginRuntimeSurface(value).runtimeSurface).toBe(expected)
     expect(
-      projectRegistryPackageRuntimeSurface({
+      projectRegistryPackageRuntimeProjection({
         delivery: {
           kind: "artifact",
           sha256: "a".repeat(64),
@@ -47,7 +43,7 @@ describe("Marketplace runtime-surface projection", () => {
         kind: "plugin",
         manifest: value,
         version: "1.0.0",
-      }),
+      }).runtimeSurface,
     ).toBe(expected)
   })
 
@@ -80,7 +76,7 @@ describe("Marketplace runtime-surface projection", () => {
     })
     expect(parsePluginRuntimeSurface(value).pluginCategories).toEqual(["service", "video", "image", "skill"])
     expect(
-      projectRegistryPackagePluginCategories({
+      projectRegistryPackageRuntimeProjection({
         delivery: {
           kind: "artifact",
           sha256: "a".repeat(64),
@@ -91,7 +87,7 @@ describe("Marketplace runtime-surface projection", () => {
         kind: "plugin",
         manifest: value,
         version: "1.0.0",
-      }),
+      }).pluginCategories,
     ).toEqual(["service", "video", "image", "skill"])
   })
 
@@ -116,7 +112,7 @@ describe("Marketplace runtime-surface projection", () => {
 
   test("keeps Skill and validated MCP display policy independent of Plugin manifests", () => {
     expect(
-      projectRegistryPackagePluginCategories({
+      projectRegistryPackageRuntimeProjection({
         delivery: {
           kind: "artifact",
           sha256: "b".repeat(64),
@@ -126,10 +122,10 @@ describe("Marketplace runtime-surface projection", () => {
         id: "skill",
         kind: "skill",
         version: "1.0.0",
-      }),
+      }).pluginCategories,
     ).toEqual([])
     expect(
-      projectRegistryPackageRuntimeSurface({
+      projectRegistryPackageRuntimeProjection({
         delivery: {
           kind: "artifact",
           sha256: "b".repeat(64),
@@ -139,10 +135,10 @@ describe("Marketplace runtime-surface projection", () => {
         id: "skill",
         kind: "skill",
         version: "1.0.0",
-      }),
+      }).runtimeSurface,
     ).toBe("none")
     expect(
-      projectRegistryPackageRuntimeSurface({
+      projectRegistryPackageRuntimeProjection({
         delivery: {
           companions: [],
           extension: {
@@ -168,7 +164,7 @@ describe("Marketplace runtime-surface projection", () => {
         id: "io.example/canvas-tool",
         kind: "mcp-server",
         version: "1.0.0",
-      }),
+      }).runtimeSurface,
     ).toBe("agent-and-convax")
   })
 })
