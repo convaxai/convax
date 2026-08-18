@@ -23,10 +23,7 @@ import {
   type LocalReplicaEnrollmentCandidate,
   type VerifiedLocalReplicaEnrollment,
 } from "./durable-local-authority-cache"
-import {
-  ElectronReplicaSigningVault,
-  type ElectronSafeStoragePort,
-} from "./electron-replica-signing-vault"
+import { ElectronReplicaSigningVault } from "./electron-replica-signing-vault"
 
 const roots: string[] = []
 const protocolDigest = parseDigest("a".repeat(64))
@@ -99,7 +96,7 @@ describe("durable verified local authority cache", () => {
 
   test("new Project enrollment exposes no edit authority until key, ProjectIndex base, and cache pointer complete", async () => {
     const root = await temporaryRoot()
-    const vault = new ElectronReplicaSigningVault(path.join(root, "vault"), fakeSafeStorage())
+    const vault = new ElectronReplicaSigningVault(path.join(root, "keys"))
     const cache = new NodeDurableLocalReplicaAuthorityCache(path.join(root, "authority"), protocolDigest)
     const events: string[] = []
     let failProjectIndex = true
@@ -118,7 +115,7 @@ describe("durable verified local authority cache", () => {
       identity: { projectId, projectEpoch, replicaId }, vault, prepareEnrollment, projectIndex, cache,
     })).rejects.toThrow("injected")
     expect(await cache.resolveCurrent(request())).toBe("pending")
-    expect(await fs.readdir(path.join(root, "vault"))).toHaveLength(1)
+    expect(await fs.readdir(path.join(root, "keys"))).toHaveLength(1)
 
     failProjectIndex = false
     const completed = await enrollNewLocalProjectReplica({
@@ -134,7 +131,7 @@ describe("durable verified local authority cache", () => {
 
   test("a crash after ProjectIndex install but before pointer publication remains read-only and exact-retryable", async () => {
     const root = await temporaryRoot()
-    const vault = new ElectronReplicaSigningVault(path.join(root, "vault"), fakeSafeStorage())
+    const vault = new ElectronReplicaSigningVault(path.join(root, "keys"))
     const durable = new NodeDurableLocalReplicaAuthorityCache(path.join(root, "authority"), protocolDigest)
     let failPointer = true
     const cache = {
@@ -229,14 +226,4 @@ async function temporaryRoot(): Promise<string> {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "convax-local-authority-"))
   roots.push(root)
   return root
-}
-
-function fakeSafeStorage(): ElectronSafeStoragePort {
-  const secret = 0xa5
-  return {
-    isEncryptionAvailable: () => true,
-    getSelectedStorageBackend: () => "keychain",
-    encryptString(plainText) { return Buffer.from(new TextEncoder().encode(plainText).map((byte) => byte ^ secret)) },
-    decryptString(encrypted) { return new TextDecoder().decode(Uint8Array.from(encrypted, (byte) => byte ^ secret)) },
-  }
 }

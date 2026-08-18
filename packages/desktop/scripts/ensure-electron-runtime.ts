@@ -39,10 +39,8 @@ export function resolveMacElectronApplication(binary: string): string {
 
 /**
  * Electron's downloaded macOS bundle can carry only a linker signature, which does
- * not seal its resources. Keychain then cannot persist its Safe Storage trust and
- * may ask for the login password on every Project open. A complete deterministic
- * ad-hoc signature gives development builds one reusable code identity without
- * weakening the OS-backed vault or changing release signing.
+ * not seal its resources. A complete deterministic ad-hoc signature gives local
+ * development builds one reusable code identity without changing release signing.
  */
 export async function ensureMacElectronDevelopmentSignature(input: {
   readonly binary: string

@@ -12,7 +12,7 @@ import {
 } from "@convax/project/node"
 
 import { loadHistoricalTestAuthority } from "./collaboration-authority.test-support"
-import { ElectronReplicaSigningVault, type ElectronSafeStoragePort } from "./electron-replica-signing-vault"
+import { ElectronReplicaSigningVault } from "./electron-replica-signing-vault"
 import { NodeDurableLocalProjectOwnerAuthority } from "./local-project-owner-authority"
 import { LocalProjectResetAuthority } from "./local-project-reset-authority"
 import {
@@ -343,7 +343,7 @@ async function createFixture(options: { teamStatus?: "missing" | "rejected" } = 
   await fs.writeFile(path.join(projectRoot, "Notes", "keep.md"), "keep")
   const authority = await loadHistoricalTestAuthority()
   const projectId = parseProjectId("project_test")
-  const vault = new ElectronReplicaSigningVault(path.join(userData, "vault"), availableStorage)
+  const vault = new ElectronReplicaSigningVault(path.join(userData, "keys"))
   const owners = new NodeDurableLocalProjectOwnerAuthority({
     rootDirectory: path.join(userData, "local-project-owner"),
     authority,
@@ -369,10 +369,3 @@ async function createFixture(options: { teamStatus?: "missing" | "rejected" } = 
     resets: new LocalProjectResetAuthority({ authority, owners, teams }),
   }
 }
-
-const availableStorage: ElectronSafeStoragePort = Object.freeze({
-  isEncryptionAvailable: () => true,
-  getSelectedStorageBackend: () => "keychain",
-  encryptString: (value: string) => Buffer.from(value, "utf8"),
-  decryptString: (value: Buffer) => value.toString("utf8"),
-})

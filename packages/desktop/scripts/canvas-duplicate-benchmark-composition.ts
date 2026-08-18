@@ -36,7 +36,7 @@ import {
   createLocalProjectOwnerCurrentLocalReplicaAuthoritySource,
   createMainCollaborationProductionRuntime,
 } from "../src/main/collaboration-production-runtime"
-import { ElectronReplicaSigningVault, type ElectronSafeStoragePort } from "../src/main/electron-replica-signing-vault"
+import { ElectronReplicaSigningVault } from "../src/main/electron-replica-signing-vault"
 import { NodeDurableLocalProjectOwnerAuthority } from "../src/main/local-project-owner-authority"
 import { createLocalProjectOwnerCanvasGenesisAuthority } from "../src/main/local-project-owner-canvas-genesis"
 import { createMainCanvasOwnerRuntime } from "../src/main/main-canvas-collaboration-composition"
@@ -47,13 +47,6 @@ import {
   createBenchmarkCountingMaterializerRegistry,
   openBenchmarkNodePersistence,
 } from "./project-index-durable-benchmark"
-
-const safeStorage: ElectronSafeStoragePort = Object.freeze({
-  isEncryptionAvailable: () => true,
-  getSelectedStorageBackend: () => "keychain",
-  encryptString: (value) => Buffer.from(value, "utf8"),
-  decryptString: (value) => value.toString("utf8"),
-})
 
 export interface VerifiedCanvasBenchmarkComposition {
   readonly authority: ReturnType<typeof installCurrentProtocolAuthority>
@@ -89,7 +82,7 @@ export async function createVerifiedCanvasBenchmarkComposition(
   const projectRoot = path.join(root, "project")
   await fs.mkdir(path.join(projectRoot, ".convax"), { recursive: true })
   const projectId = parseProjectId("canvas-benchmark-project")
-  const vault = new ElectronReplicaSigningVault(path.join(root, "vault"), safeStorage)
+  const vault = new ElectronReplicaSigningVault(path.join(root, "keys"))
   let nextId = 10
   const id = () => parseId128(Buffer.alloc(16, nextId++).toString("base64url"))
   const durableOwner = new NodeDurableLocalProjectOwnerAuthority({

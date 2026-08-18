@@ -74,9 +74,9 @@ export interface ProjectTeamReplicaProvisioningResult {
 }
 
 /**
- * Main-only exact replica enrollment. A request-bound OS-vault key exists before
- * reservation, but the assigned replicaId is published only after the signed
- * receipt is verified. Team and offline-authority pointers are always last.
+ * Main-only exact replica enrollment. A request-bound user-managed key file exists
+ * before reservation, but the assigned replicaId is published only after the
+ * signed receipt is verified. Team and offline-authority pointers are always last.
  */
 export class DesktopProjectTeamReplicaProvisioner {
   constructor(private readonly options: {

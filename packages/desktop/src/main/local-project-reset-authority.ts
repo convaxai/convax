@@ -47,7 +47,7 @@ export class TeamProjectResetUnavailableError extends Error {
 
 /**
  * Desktop edge for the explicit unshared-local reset branch. It supplies only a
- * freshly prepared OS-vault principal and native composition; Project owns the
+ * freshly prepared user-managed principal and native composition; Project owns the
  * reset record codec, tree swap, and empty ProjectIndex schema.
  */
 export class LocalProjectResetAuthority implements ProjectResetAuthorityPort {

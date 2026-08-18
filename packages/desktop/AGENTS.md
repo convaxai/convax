@@ -64,9 +64,10 @@ contract and its routed references.
   depend on `node_modules`, and Main stays CommonJS so Electron Vite cannot inject
   its ESM compatibility shim into dependency-bundled source strings.
 - Main also composes the PeerJS data plane, its independently bound channels,
-  OS-vault identity keys, Project-scoped writer coordination, and typed ports to
-  collaboration, Project, Canvas, and control-plane owners. Peer or service arrival
-  order never becomes edit order.
+  user-managed private identity-key files, Project-scoped writer coordination, and
+  typed ports to collaboration, Project, Canvas, and control-plane owners. It never
+  calls a system credential vault. Peer or service arrival order never becomes edit
+  order.
 - Development runtime identity is Main-owned composition state. A bounded task id
   and label require a task-private userData profile; Main owns native/window
   branding and may project only the display identity to Renderer. Packaged runtime

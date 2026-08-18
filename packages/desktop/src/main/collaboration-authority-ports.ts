@@ -32,7 +32,7 @@ export interface CurrentLocalReplicaAuthorityEvidence {
   readonly signerAuthority: CausalSignerAuthority
   readonly dependencies: readonly CausalDependencyRef[]
   readonly validationArtifacts: ValidationArtifactSet
-  /** OS-vault-backed long-lived replica signer; never a PeerJS session key. */
+  /** User-managed long-lived replica signer; never a PeerJS session key. */
   readonly signer: ReplicaSignerPort
 }
 
@@ -107,7 +107,7 @@ export function createCurrentLocalReplicaAuthorityPort(input: {
         throw new Error("Current local replica authority evidence is bound to another request")
       }
       if (!resolved.signer || typeof resolved.signer.sign !== "function") {
-        throw new Error("Current local replica authority omitted the OS-vault signer")
+        throw new Error("Current local replica authority omitted the durable signer")
       }
       return Object.freeze({
         actorId,

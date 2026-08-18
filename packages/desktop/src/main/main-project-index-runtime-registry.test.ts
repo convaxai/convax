@@ -59,7 +59,10 @@ describe("existing ProjectIndex registration", () => {
           ownerCreated = true
           throw new Error("must not create owner")
         },
-        async resolveExact() {
+        async resolveCurrent() {
+          return "missing" as const
+        },
+        async resolveBindingExact() {
           return "missing" as const
         },
         async verifyCheckpointSignature() {
@@ -94,12 +97,7 @@ describe("existing ProjectIndex registration", () => {
     const projects = new NodeProjectManager({ registryFile: path.join(userData, "projects.json") })
     const projectId = parseProjectId((await projects.addProject(projectRoot)).id)
     await fs.rm(path.join(projectRoot, ".convax"), { force: true, recursive: true })
-    const vault = new ElectronReplicaSigningVault(path.join(userData, "vault"), {
-      isEncryptionAvailable: () => true,
-      getSelectedStorageBackend: () => "keychain",
-      encryptString: (value) => Buffer.from(value, "utf8"),
-      decryptString: (value) => value.toString("utf8"),
-    })
+    const vault = new ElectronReplicaSigningVault(path.join(userData, "keys"))
     const owners = new NodeDurableLocalProjectOwnerAuthority({
       rootDirectory: path.join(userData, "local-project-owner"),
       authority,
@@ -123,10 +121,9 @@ describe("existing ProjectIndex registration", () => {
       schemaDigest: PROJECT_INDEX_PROTOCOL_SCHEMA_ARTIFACT_DIGEST,
       uriProtocolDigest: authority.protocolSchemaBundle.core.uriProtocolDigest,
     })
-    const localOwner = await owners.resolveExact({
+    const localOwner = await owners.resolveCurrent({
       projectId,
       projectEpoch: manifest.projectIndexScope.projectEpoch,
-      initializationAuthorityDigest: manifest.initializationAuthorityDigest,
     })
     expect(localOwner).not.toBe("missing")
     expect(localOwner).not.toBe("rejected")

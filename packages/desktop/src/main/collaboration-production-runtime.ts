@@ -43,7 +43,7 @@ export interface OfflineReplicaSigningVault {
     readonly projectEpoch: DocumentScope["projectEpoch"]
     readonly replicaId: CurrentLocalReplicaAuthorityEvidence["signerAuthority"]["replicaId"]
     readonly expectedPublicKey: PublicKey
-  }): Promise<ReplicaSignerPort | "missing" | "unavailable" | "rejected">
+  }): Promise<ReplicaSignerPort | "missing" | "rejected">
 }
 
 export interface DurableVerifiedLocalAuthorityCacheEntry
@@ -60,8 +60,8 @@ export interface DurableVerifiedLocalAuthorityCache {
 
 /**
  * Offline edits still require a previously verified active-editor credential chain.
- * Only the signer is reopened from the OS vault; neither private key nor signer is
- * stored in Project collaboration metadata.
+ * Only the signer is reopened from the user's private Desktop key file; neither
+ * private key nor signer is stored in Project collaboration metadata.
  */
 export function createOfflineCurrentLocalReplicaAuthoritySource(input: {
   readonly cache: DurableVerifiedLocalAuthorityCache
@@ -77,7 +77,7 @@ export function createOfflineCurrentLocalReplicaAuthoritySource(input: {
         replicaId: cached.signerAuthority.replicaId,
         expectedPublicKey: cached.replicaSigningPublicKey,
       })
-      if (signer === "missing" || signer === "unavailable") return "pending"
+      if (signer === "missing") return "pending"
       if (signer === "rejected") return "rejected"
       return Object.freeze({ ...cached, signer })
     },
@@ -310,7 +310,7 @@ export function createProjectCollaborationMaterializerRegistry(): ProjectCollabo
 }
 
 /**
- * Small Main composition seam. Authority, owner semantics, OS-vault identity,
+ * Small Main composition seam. Authority, owner semantics, user-managed identity,
  * Project sole-writer durability and causal reconstruction remain independent.
  */
 export async function createMainCollaborationProductionRuntime<K extends DocumentOwnerKind>(input: {
