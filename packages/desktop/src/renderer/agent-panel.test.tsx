@@ -52,7 +52,7 @@ function deferred<T>() {
 }
 
 describe("Agent conversation activity", () => {
-  test("keeps an accessible activity status without visible OpenCode loading copy", () => {
+  test("keeps activity status screen-reader-only without a standalone loader", () => {
     const idle = renderToStaticMarkup(
       <AgentRuntimeStatus runtimeBusy={false} stopping={false} submitting={false} />,
     )
@@ -69,7 +69,10 @@ describe("Agent conversation activity", () => {
     expect(idle).not.toContain("Response in progress")
     expect(idle).not.toContain("Stopping response")
     expect(idle).not.toContain("<svg")
+    expect(idle).toContain('class="sr-only"')
     expect(running).toContain('aria-live="polite"')
+    expect(running).toContain('aria-atomic="true"')
+    expect(running).toContain('role="status"')
     expect(running).toContain('data-agent-runtime-status="running"')
     expect(running).toContain('class="sr-only"')
     expect(running).toContain("Response in progress")
@@ -79,6 +82,9 @@ describe("Agent conversation activity", () => {
     expect(stopping).toContain("Stopping response")
     expect(running).not.toContain("OpenCode is working")
     expect(submitting).not.toContain("OpenCode")
+    expect(running).not.toContain("<svg")
+    expect(submitting).not.toContain("<svg")
+    expect(stopping).not.toContain("<svg")
   })
 
   test("keeps streaming delivery visible without making the busy response its own live region", () => {

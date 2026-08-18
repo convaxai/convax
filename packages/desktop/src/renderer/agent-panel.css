@@ -213,11 +213,6 @@
   box-shadow: inset 0 0 0 1px color-mix(in oklab, var(--ui-interactive-selected-border) 30%, transparent);
 }
 
-.agent-runtime-status[data-agent-runtime-status="running"],
-.agent-runtime-status[data-agent-runtime-status="stopping"] {
-  color: var(--ui-text-secondary);
-}
-
 .agent-composer-frame {
   position: relative;
   isolation: isolate;

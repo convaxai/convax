@@ -2665,26 +2665,23 @@ export const AgentPanel = forwardRef<AgentPanelHandle, AgentPanelProps>(function
 export function AgentRuntimeStatus(props: { runtimeBusy: boolean; stopping: boolean; submitting: boolean }) {
   const active = props.runtimeBusy || props.stopping || props.submitting
   return (
-    <div
+    <span
+      aria-atomic="true"
       aria-live="polite"
-      className="agent-runtime-status flex h-7 shrink-0 items-center px-3 text-[11px] text-muted-foreground"
+      className="sr-only"
       data-agent-runtime-status={
         props.stopping ? "stopping" : props.runtimeBusy ? "running" : props.submitting ? "submitting" : "idle"
       }
+      role="status"
     >
-      {active ? (
-        <span className="flex items-center">
-          <LoaderCircle aria-hidden="true" className="size-3.5 animate-spin motion-reduce:animate-none" />
-          <span className="sr-only">
-            {props.stopping
-              ? "Stopping response"
-              : props.runtimeBusy
-                ? "Response in progress"
-                : "Submitting message"}
-          </span>
-        </span>
-      ) : null}
-    </div>
+      {active
+        ? props.stopping
+          ? "Stopping response"
+          : props.runtimeBusy
+            ? "Response in progress"
+            : "Submitting message"
+        : null}
+    </span>
   )
 }
 
