@@ -79,9 +79,9 @@ try {
   const pluginApiTarball = await pack(pluginApiRoot, tarballRoot)
   const pluginSdkTarball = await pack(pluginSdkRoot, tarballRoot)
   const kitTarball = await pack(packageRoot, tarballRoot)
-  await assertPackedDependency(kitTarball, "@convax/marketplace", "^0.2.1")
+  await assertPackedDependency(kitTarball, "@convax/marketplace", "^0.2.2")
   await assertPackedDependency(kitTarball, "@convax/plugin-api", "^3.1.0")
-  await assertPackedDependency(kitTarball, "@convax/plugin-sdk", "^0.4.0")
+  await assertPackedDependency(kitTarball, "@convax/plugin-sdk", "^0.5.0")
   await writeFile(
     join(consumerRoot, "package.json"),
     `${JSON.stringify(

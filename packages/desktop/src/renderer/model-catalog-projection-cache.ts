@@ -8,10 +8,10 @@ export interface ModelCatalogProjectionStorage {
 }
 
 export const agentModelCatalogStorageKey = "convax.desktop.agent-model-display.v1"
-export const generationModelCatalogStorageKey = "convax.desktop.generation-model-display.v1"
+export const generationModelCatalogStorageKey = "convax.desktop.generation-model-display.v2"
 
 const agentModelCatalogSchema = "convax.agent-model-display-cache/1"
-const generationModelCatalogSchema = "convax.generation-model-display-cache/1"
+const generationModelCatalogSchema = "convax.generation-model-display-cache/2"
 const maximumCacheBytes = 1024 * 1024
 const maximumProviders = 256
 const maximumModelsPerProvider = 2_048
@@ -138,7 +138,18 @@ function parseGenerationTool(value: unknown): GenerationToolSummary | null {
   if (
     !hasExactKeys(
       value,
-      ["acceptedInputs", "description", "id", "kind", "output", "pluginId", "pluginName", "title", "toolId"],
+      [
+        "acceptedInputs",
+        "description",
+        "id",
+        "kind",
+        "output",
+        "pluginId",
+        "pluginName",
+        "serviceId",
+        "title",
+        "toolId",
+      ],
       ["agentId", "delivery", "inputBinding", "modelName", "recovery"],
     )
   ) {
@@ -155,6 +166,8 @@ function parseGenerationTool(value: unknown): GenerationToolSummary | null {
     !isGenerationOutput(value.output) ||
     !isOpaqueId(value.pluginId, 128) ||
     !isSafeDisplayString(value.pluginName, 256) ||
+    !isOpaqueId(value.serviceId, 80) ||
+    !/^[a-z0-9]+(?:-[a-z0-9]+)*$/u.test(value.serviceId) ||
     !isSafeDisplayString(value.title, 256) ||
     !isOpaqueId(value.toolId) ||
     (value.agentId !== undefined && !isOpaqueId(value.agentId)) ||
@@ -173,6 +186,7 @@ function parseGenerationTool(value: unknown): GenerationToolSummary | null {
     output: value.output,
     pluginId: value.pluginId,
     pluginName: value.pluginName,
+    serviceId: value.serviceId,
     title: value.title,
     toolId: value.toolId,
     ...(value.agentId === undefined ? {} : { agentId: value.agentId }),

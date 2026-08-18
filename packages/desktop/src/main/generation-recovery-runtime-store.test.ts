@@ -50,6 +50,7 @@ const tool: GenerationToolSummary = {
   kind: "model",
   pluginId: "recovery-test",
   pluginName: "Recovery Test",
+  serviceId: "recovery-test",
   output: "image",
   recovery: "long-running-operation",
   title: "Generate",
@@ -122,6 +123,26 @@ describe("GenerationRecoveryRuntimeStore", () => {
 
       await store.remove(input.executionBindingDigest)
       await expect(store.open(input.executionBindingDigest)).rejects.toThrow()
+    } finally {
+      await fs.rm(directory, { force: true, recursive: true })
+    }
+  })
+
+  test("repins a pre-ServiceRef v8 record after normalizing its missing service id", async () => {
+    const directory = await fs.mkdtemp(path.join(os.tmpdir(), "convax-recovery-runtime-v8-repin-test-"))
+    try {
+      const input = fixture()
+      const root = path.join(directory, "store", "runtime-v3")
+      const store = new GenerationRecoveryRuntimeStore(root)
+      await store.pin(input)
+      const recordPath = path.join(root, input.executionBindingDigest, "record.json")
+      const legacy = JSON.parse(await fs.readFile(recordPath, "utf8")) as Record<string, any>
+      delete legacy.tool.serviceId
+      await fs.chmod(recordPath, 0o600)
+      await fs.writeFile(recordPath, `${JSON.stringify(legacy)}\n`)
+
+      expect(await store.pin(input)).toEqual({ ...input, schema: "convax.generation-lro-runtime/3" })
+      expect((await store.open(input.executionBindingDigest)).tool.serviceId).toBe(plugin.id)
     } finally {
       await fs.rm(directory, { force: true, recursive: true })
     }

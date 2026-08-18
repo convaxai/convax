@@ -2,6 +2,7 @@ import { Button, Select, SelectContent, SelectItem, SelectTrigger, SelectValue, 
 import { ArrowLeft, Cloud, Languages, Palette, PawPrint, Settings2, Sparkles } from "lucide-react"
 import { useEffect, useMemo, useState } from "react"
 import type { WebPluginClient, WebPluginManifest, WebPluginServiceAction } from "../plugin-contracts"
+import type { PluginServiceTarget } from "../plugin-service-contracts"
 import type { DesktopSkillClient } from "../skill-management-contracts"
 import { appMessage, type AppLanguagePreference, type AppLocale } from "./app-language"
 import { AppearanceSettings, type AppearanceSaveState } from "./appearance-settings"
@@ -39,8 +40,8 @@ export interface SettingsViewProps {
   onClose: () => void
   onLanguageChange: (preference: AppLanguagePreference) => void
   onRefreshServices: () => void
-  onServiceAction: (pluginId: string, action: WebPluginServiceAction) => void
-  onServiceCheckout?: (pluginId: string, planKey: string) => void
+  onServiceAction: (target: PluginServiceTarget, action: WebPluginServiceAction) => void
+  onServiceCheckout?: (target: PluginServiceTarget, planKey: string) => void
   onUsePluginOnCanvas?: (plugin: WebPluginManifest) => void
   onUsePluginInAgent?: (plugin: WebPluginManifest) => void
   petClient: PetSettingsHostClient

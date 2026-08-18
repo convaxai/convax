@@ -447,7 +447,7 @@ function WebPluginCanvasCommandSurfaces(
   const commandContribution = useMemo(() => {
     const toolbar = props.plugin.contributes.canvas.toolbar ?? []
     if (toolbar.some((item) => "title" in item)) {
-      throw new Error("convax.plugin/8 Canvas toolbar must reference canonical UI commands")
+      throw new Error("Plugin Canvas toolbar must reference canonical UI commands")
     }
     return {
       commands: props.plugin.contributes.canvas.commands ?? [],

@@ -172,7 +172,8 @@ schema and reducer, and Desktop packages and loads that one descriptor.
 - Version-suffixed identifiers still present in this repository are legacy names of
   that one current implementation. Renaming them is mechanical cleanup and never
   admits a second protocol, decoder, kernel, or reducer.
-- Independent contracts such as `convax.plugin/8`, `convax.package/2`, the
+- Independent contracts such as `convax.plugin/8` and `convax.plugin/9`,
+  `convax.package/2`, the
   `@convax/plugin-api` Catalog SemVer, Marketplace Registry v2, and
   `desktopProtocolVersion` are separate release lines. This rule neither renumbers
   them nor lets them become collaboration decoders.
@@ -259,7 +260,7 @@ selector or runtime fallback.
 | `@convax/collaboration`     | One current protocol descriptor/digest, one envelope+JCS codec, one causal frame/frontier model, one `replicaDoc`/isolated `candidateDoc` kernel, checkpoint/floor primitives, journal ports, and session undo coordination | Project/Canvas schema, PeerJS, membership/auth policy, Electron, filesystem, native I/O, or a second decoder/kernel |
 | `@convax/workbench`         | Window-scoped serializable Input, Selection, Surface and layout-part state; guarded open/close/reveal/resize transitions                                                                                                    | Domain data, catalogs, filesystem, React/DOM, Electron, localStorage                                                |
 | `@convax/plugin-api`        | Headless Plugin Host API catalog, API SemVer/history, availability contracts, generated validators/types/client metadata, and deterministic human/Skill reference generation inputs                                         | Desktop state, Plugin identity policy, concrete handlers, filesystem/network adapters                               |
-| `@convax/plugin-sdk`        | Headless `convax.plugin/8` manifest/contribution and localization ABI, Plugin-to-Plugin export/import contracts, bounded-value schema integration, SemVer matching, and deterministic Plugin/Skill reference inputs         | ActiveSet selection, runtime binding, leases, grants, execution, IPC, I/O, concrete Plugins                         |
+| `@convax/plugin-sdk`        | Headless v8/v9 manifest/contribution and localization ABIs, Plugin-to-Plugin export/import contracts, bounded-value integration, SemVer matching, and deterministic Plugin/Skill references                                 | ActiveSet selection, runtime binding, leases, grants, execution, IPC, I/O, concrete Plugins                         |
 | `@convax/plugin-ui`         | Browser-safe semantic tokens and minimal interaction foundations for sandboxed Plugin documents                                                                                                                             | React, Desktop appearance state, Host transport, or concrete Plugin composition                                     |
 | `@convax/agent-runtime`     | Generic OpenCode adapter, sessions, resources, tool-provider bridge, protected-path enforcement                                                                                                                             | Convax Project/Canvas/UI policy or imports from other Convax packages                                               |
 | `@convax/marketplace`       | Marketplace refs, public schemas, canonical source identity, strict validation, bounded Plugin-category display taxonomy, Catalog aggregation and source-conflict rules                                                     | Filesystem/network adapters, Electron/UI, concrete packages, installation or execution                              |
@@ -384,8 +385,11 @@ user directory.
   modality-icon plus `生成失败` surface. Selecting that card preserves ordinary
   selection and dragging but never restores its prompt or exposes upload, retry, or
   failure-detail actions; portable failure metadata remains non-UI state.
-- `convax.plugin/8`, `convax.package/2`, and `convax.plugin-capability/3` are the only
-  admitted runtime formats. Additive Host APIs evolve through the independent
+- `convax.plugin/8`, `convax.plugin/9`, `convax.package/2`, and
+  `convax.plugin-capability/3` are the only admitted runtime formats. The v8
+  manifest remains a closed, accepted singleton-Service ABI; it is never rewritten
+  or reinterpreted as v9. V9 keeps one Plugin artifact but may declare multiple
+  service-scoped runtime profiles. Additive Host APIs evolve through the independent
   `@convax/plugin-api` SemVer Catalog, not another manifest or transport version.
 - A Plugin installation is one content-addressed complete closure selected through
   one global ActiveSet CAS. Runtime principals and leases bind exact revisions,

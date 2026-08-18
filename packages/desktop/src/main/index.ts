@@ -1504,10 +1504,12 @@ function startApplication() {
       isPluginEnabled: isMarketplacePluginEnabled,
       pluginRuntimeState: marketplacePluginRuntimeState,
       plugins: pluginInstallations,
+      profileStateDirectory: join(pluginRuntimeSession.dataDirectory, "plugin-service-runtime-profiles"),
       recoveryRuntimeDirectory: join(pluginRuntimeSession.dataDirectory, "generation-sidecars", "runtime-v3"),
       recoveryStateDirectory: join(pluginRuntimeSession.dataDirectory, "generation-sidecars", "operation-v1"),
     })
     await generationRuntime.initialize()
+    await generationRuntime.reconcileProfileState()
     await recordPackagedSmokeStartup("generation-runtime-ready")
     const pluginCapabilityBroker = new PluginCapabilityBrokerMainService({
       installations: pluginInstallations,
@@ -1622,7 +1624,10 @@ function startApplication() {
           const providers = await generationRuntime.connectLlmProviders()
           const availability = await Promise.all(
             providers.map(async (provider) => ({
-              available: await availableGenerationTools.isPluginAvailable(provider.pluginId),
+              available:
+                provider.serviceTarget === null
+                  ? true
+                  : await availableGenerationTools.isServiceAvailable(provider.serviceTarget),
               provider,
             })),
           )
@@ -2048,6 +2053,7 @@ function startApplication() {
       if (pluginIds.length > 0) {
         scheduleGenerationCatalogRefresh(reason)
         for (const pluginId of pluginIds) await reconcileToolPluginExecutionStateForPlugin(pluginId)
+        await generationRuntime.reconcileProfileState()
         publishPluginServiceChange()
       }
     }
@@ -2062,7 +2068,8 @@ function startApplication() {
         }
         if (
           mode === "automatic-product-lock" &&
-          (plugin.contributes.service !== undefined ||
+          (("service" in plugin.contributes && plugin.contributes.service !== undefined) ||
+            ("services" in plugin.contributes && (plugin.contributes.services?.length ?? 0) > 0) ||
             (plugin.contributes.capabilities?.exports.length ?? 0) > 0 ||
             (plugin.contributes.capabilities?.imports.optional.length ?? 0) > 0 ||
             (plugin.contributes.capabilities?.imports.required.length ?? 0) > 0)
@@ -2086,6 +2093,7 @@ function startApplication() {
         availableGenerationTools.invalidate()
         generationRuntime.disposePlugin(id)
         await pluginServices.discardPlugin(id)
+        await generationRuntime.reconcileProfileState()
         scheduleGenerationCatalogRefresh("a Plugin runtime disable")
       },
       enablePlugin: async () => {
@@ -2763,34 +2771,34 @@ function startApplication() {
     )
     const disposePluginServiceIpc = registerPluginServiceIpc(
       {
-        authorize: (pluginId, signal) => {
+        authorize: (target, signal) => {
           pluginRuntimeSession.assertMutable()
-          return pluginServices.authorize(pluginId, signal)
+          return pluginServices.authorize(target, signal)
         },
-        cancelAuthorization: (pluginId, signal) => {
+        cancelAuthorization: (target, signal) => {
           pluginRuntimeSession.assertMutable()
-          return pluginServices.cancelAuthorization(pluginId, signal)
+          return pluginServices.cancelAuthorization(target, signal)
         },
-        checkout: (pluginId, planKey, signal) => {
+        checkout: ({ planKey, ...target }, signal) => {
           pluginRuntimeSession.assertMutable()
-          return pluginServices.checkout(pluginId, planKey, signal)
+          return pluginServices.checkout(target, planKey, signal)
         },
-        getStatus: (pluginId, signal) => {
+        getStatus: (target, signal) => {
           pluginRuntimeSession.assertMutable()
-          return pluginServices.getStatus(pluginId, signal)
+          return pluginServices.getStatus(target, signal)
         },
-        getUsageHistory: (pluginId, signal) => {
+        getUsageHistory: (target, signal) => {
           pluginRuntimeSession.assertMutable()
-          return pluginServices.getUsageHistory(pluginId, signal)
+          return pluginServices.getUsageHistory(target, signal)
         },
         listServices: () => pluginServices.listServices(),
-        reauthorize: (pluginId, signal) => {
+        reauthorize: (target, signal) => {
           pluginRuntimeSession.assertMutable()
-          return pluginServices.reauthorize(pluginId, signal)
+          return pluginServices.reauthorize(target, signal)
         },
-        signOut: (pluginId, signal) => {
+        signOut: (target, signal) => {
           pluginRuntimeSession.assertMutable()
-          return pluginServices.signOut(pluginId, signal)
+          return pluginServices.signOut(target, signal)
         },
       },
       {
@@ -2894,6 +2902,8 @@ function startApplication() {
           generationRuntime.disposePlugin(pluginId)
           skillManager.notifyInventoryChanged()
           await agentRuntime.refreshConfiguration()
+          await reconcileToolPluginExecutionStateForPlugin(pluginId)
+          await generationRuntime.reconcileProfileState()
           scheduleGenerationCatalogRefresh("an installed Plugin change")
           publishPluginServiceChange()
         },
@@ -2902,7 +2912,11 @@ function startApplication() {
           const current = (await pluginInstallations.list()).some((plugin) => plugin.id === pluginId)
           if (!current) return false
           await pluginSnapshotInstaller.uninstall(pluginId)
+          availableGenerationTools.invalidate()
+          generationRuntime.disposePlugin(pluginId)
+          await pluginServices.discardPlugin(pluginId)
           await reconcileToolPluginExecutionStateForPlugin(pluginId)
+          await generationRuntime.reconcileProfileState()
           await pets.refresh()
           return true
         },

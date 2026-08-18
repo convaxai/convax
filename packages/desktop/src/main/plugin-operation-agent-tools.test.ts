@@ -27,6 +27,7 @@ function operationTool(input: Partial<GenerationToolSummary> = {}): GenerationTo
     title: "Transform media",
     toolId: "transform.media",
     ...input,
+    serviceId: input.serviceId ?? input.pluginId ?? "media-operations",
   }
 }
 
@@ -436,12 +437,9 @@ describe("Plugin operation Agent tools", () => {
         reportEntered()
         signal?.addEventListener("abort", () => reject(signal.reason), { once: true })
       })
-    const pending = provider(service).callTool(
-      scope,
-      "plugin_media_operations_transform_media",
-      validInput(),
-      { signal: cancellation.signal },
-    )
+    const pending = provider(service).callTool(scope, "plugin_media_operations_transform_media", validInput(), {
+      signal: cancellation.signal,
+    })
     await entered
     cancellation.abort(new DOMException("Stopped", "AbortError"))
 

@@ -8,7 +8,7 @@ import {
   listInstalledPluginMaterializationActions,
 } from "./plugin-materialization-selection-action"
 
-function plugin() {
+function plugin(schema: "convax.plugin/8" | "convax.plugin/9" = "convax.plugin/8") {
   return {
     ...parseWebPluginManifest({
       capabilities: ["canvas.connectedMedia.stream"],
@@ -35,7 +35,7 @@ function plugin() {
       },
       id: "timeline",
       name: "Timeline",
-      schema: "convax.plugin/8",
+      schema,
       version: "1.0.0",
     }),
     activeRevision: 1,
@@ -45,7 +45,7 @@ function plugin() {
 }
 
 describe("Plugin materialization selection action", () => {
-  test("projects only installed v8 own-renderer actions and requires one managed Project video", () => {
+  test("projects installed v8/v9 own-renderer actions and requires one managed Project video", () => {
     const actions = listInstalledPluginMaterializationActions([plugin()])
     expect(actions).toEqual([
       expect.objectContaining({
@@ -54,6 +54,7 @@ describe("Plugin materialization selection action", () => {
         pluginVersion: "1.0.0",
       }),
     ])
+    expect(listInstalledPluginMaterializationActions([plugin("convax.plugin/9")])).toEqual(actions)
     const video = {
       data: {
         kind: "video",

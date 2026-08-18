@@ -3,13 +3,14 @@ import { createHash } from "node:crypto"
 import {
   parsePluginServiceUsageHistory,
   parsePluginServiceStatus,
+  pluginServiceTargetKey,
   pluginServiceUsageSchema,
   type PluginServiceStatus,
   type PluginServiceSummary,
+  type PluginServiceTarget,
   type PluginServiceUsageHistory,
 } from "../plugin-service-contracts"
 import type { WebPluginServiceAction } from "../plugin-contracts"
-import type { GenerationPluginRuntime } from "./generation-plugin-runtime"
 import { parsePluginServiceCheckoutResult, type PluginServiceCheckoutNavigation } from "./plugin-service-checkout"
 import {
   parsePluginServiceBrowserAuthorizationRequest,
@@ -39,17 +40,19 @@ interface ActivePluginServiceAuthorization {
   controller: AbortController
   finished: Promise<void>
   finish(): void
+  target: PluginServiceTarget
 }
 
 interface ActivePluginServiceControl {
   controller: AbortController
   finished: Promise<void>
   finish(): void
+  target: PluginServiceTarget
 }
 
 export interface PluginServiceToolRuntime {
   callService(
-    pluginId: string,
+    target: PluginServiceTarget,
     call: "status" | "usage" | WebPluginServiceAction,
     signal?: AbortSignal,
     input?: { readonly planKey: string },
@@ -59,7 +62,7 @@ export interface PluginServiceToolRuntime {
 
 export interface PluginServiceBrowserAuthorizationHost {
   authorize(
-    pluginId: string,
+    target: PluginServiceTarget,
     request: ReturnType<typeof parsePluginServiceBrowserAuthorizationRequest>,
     options: {
       action: "authorize" | "reauthorize"
@@ -69,9 +72,9 @@ export interface PluginServiceBrowserAuthorizationHost {
       signal?: AbortSignal
     },
   ): Promise<PluginServiceBrowserAuthorizationCompletion>
-  clearPlugin?(pluginId: string): Promise<void>
-  commitPlugin?(pluginId: string): Promise<void>
-  disposePlugin(pluginId: string): Promise<void>
+  clearPlugin?(target: PluginServiceTarget): Promise<void>
+  commitPlugin?(target: PluginServiceTarget): Promise<void>
+  disposePlugin(target: PluginServiceTarget): Promise<void>
 }
 
 function summaryFingerprint(summary: PluginServiceSummary) {
@@ -79,17 +82,27 @@ function summaryFingerprint(summary: PluginServiceSummary) {
     actions: [...summary.actions],
     capabilities: [...summary.capabilities],
     description: summary.description,
+    llmProviderIds: [...summary.llmProviderIds],
     models: summary.models.map((model) => ({ ...model })),
     pluginId: summary.pluginId,
     pluginName: summary.pluginName,
+    serviceId: summary.serviceId,
     version: summary.version,
   })
+}
+
+function serviceTarget(summary: PluginServiceSummary): PluginServiceTarget {
+  return { pluginId: summary.pluginId, serviceId: summary.serviceId }
+}
+
+function serviceLabel(target: PluginServiceTarget) {
+  return `${target.pluginId}/${target.serviceId}`
 }
 
 function authorizationIdentity(result: PluginServiceToolCallResult, summary: PluginServiceSummary) {
   if (result.authorizationIdentity !== undefined) {
     if (!/^[a-f0-9]{64}$/.test(result.authorizationIdentity)) {
-      throw new Error(`Plugin service returned an invalid authorization identity: ${summary.pluginId}`)
+      throw new Error(`Plugin service returned an invalid authorization identity: ${serviceLabel(summary)}`)
     }
     return result.authorizationIdentity
   }
@@ -99,9 +112,9 @@ function authorizationIdentity(result: PluginServiceToolCallResult, summary: Plu
   return createHash("sha256").update(summaryFingerprint(summary)).digest("hex")
 }
 
-function requireSnapshotDigest(value: unknown, pluginId: string) {
+function requireSnapshotDigest(value: unknown, target: PluginServiceTarget) {
   if (typeof value !== "string" || !/^[a-f0-9]{64}$/.test(value)) {
-    throw new Error(`Plugin service is not bound to an immutable snapshot: ${pluginId}`)
+    throw new Error(`Plugin service is not bound to an immutable snapshot: ${serviceLabel(target)}`)
   }
   return value
 }
@@ -125,7 +138,7 @@ export class PluginServiceHost {
   #disposed = false
 
   constructor(
-    private readonly runtime: PluginServiceToolRuntime | GenerationPluginRuntime,
+    private readonly runtime: PluginServiceToolRuntime,
     private readonly browserAuthorization?:
       | PluginServiceBrowserAuthorizationBroker
       | PluginServiceBrowserAuthorizationHost,
@@ -139,14 +152,14 @@ export class PluginServiceHost {
     return this.runtime.listServices()
   }
 
-  async getStatus(pluginId: string, signal?: AbortSignal) {
-    return this.#call(pluginId, "status", signal)
+  async getStatus(target: PluginServiceTarget, signal?: AbortSignal) {
+    return this.#call(target, "status", signal)
   }
 
-  async getUsageHistory(pluginId: string, signal?: AbortSignal): Promise<PluginServiceUsageHistory> {
-    const before = await this.#installed(pluginId)
+  async getUsageHistory(target: PluginServiceTarget, signal?: AbortSignal): Promise<PluginServiceUsageHistory> {
+    const before = await this.#installed(target)
     try {
-      const result = await this.runtime.callService(pluginId, "usage", signal)
+      const result = await this.runtime.callService(target, "usage", signal)
       if (result.isError || !result.structuredContent) throw new Error("Plugin service usage history is unavailable")
       await this.#assertCurrent(before)
       return parsePluginServiceUsageHistory(result.structuredContent)
@@ -157,28 +170,28 @@ export class PluginServiceHost {
     }
   }
 
-  async authorize(pluginId: string, signal?: AbortSignal) {
-    return this.#withServiceMutationNotification(() => this.#callAuthorization(pluginId, "authorize", signal))
+  async authorize(target: PluginServiceTarget, signal?: AbortSignal) {
+    return this.#withServiceMutationNotification(() => this.#callAuthorization(target, "authorize", signal))
   }
 
-  async reauthorize(pluginId: string, signal?: AbortSignal) {
-    return this.#withServiceMutationNotification(() => this.#callAuthorization(pluginId, "reauthorize", signal))
+  async reauthorize(target: PluginServiceTarget, signal?: AbortSignal) {
+    return this.#withServiceMutationNotification(() => this.#callAuthorization(target, "reauthorize", signal))
   }
 
-  async cancelAuthorization(pluginId: string, signal?: AbortSignal) {
+  async cancelAuthorization(target: PluginServiceTarget, signal?: AbortSignal) {
     return this.#withServiceMutationNotification(() =>
-      this.#withExclusiveControl(pluginId, signal, async (controlSignal) => {
-        await this.#discardPlugin(pluginId)
-        return this.#call(pluginId, "authorization.cancel", controlSignal)
+      this.#withExclusiveControl(target, signal, async (controlSignal) => {
+        await this.#discardService(target)
+        return this.#call(target, "authorization.cancel", controlSignal)
       }),
     )
   }
 
-  async signOut(pluginId: string, signal?: AbortSignal) {
+  async signOut(target: PluginServiceTarget, signal?: AbortSignal) {
     return this.#withServiceMutationNotification(() =>
-      this.#withExclusiveControl(pluginId, signal, async (controlSignal) => {
-        await this.#discardPlugin(pluginId)
-        return this.#call(pluginId, "sign_out", controlSignal)
+      this.#withExclusiveControl(target, signal, async (controlSignal) => {
+        await this.#discardService(target)
+        return this.#call(target, "sign_out", controlSignal)
       }),
     )
   }
@@ -203,43 +216,59 @@ export class PluginServiceHost {
     }
   }
 
-  async checkout(pluginId: string, planKey: string, signal?: AbortSignal) {
+  async checkout(target: PluginServiceTarget, planKey: string, signal?: AbortSignal) {
     return this.#withServiceMutationNotification(() =>
-      this.#withExclusiveControl(pluginId, signal, async (controlSignal) => {
+      this.#withExclusiveControl(target, signal, async (controlSignal) => {
         if (!this.checkoutNavigation) throw new Error("Plugin service Checkout navigation is unavailable")
-        const before = await this.#installed(pluginId)
+        const before = await this.#installed(target)
         if (!before.actions.includes("checkout"))
-          throw new Error(`Plugin service Checkout is not declared: ${pluginId}`)
-        const result = await this.runtime.callService(pluginId, "checkout", controlSignal, { planKey })
+          throw new Error(`Plugin service Checkout is not declared: ${serviceLabel(target)}`)
+        const result = await this.runtime.callService(target, "checkout", controlSignal, { planKey })
         if (result.isError || !result.structuredContent) {
-          throw new Error(`Plugin service Checkout failed: ${pluginId}`)
+          throw new Error(`Plugin service Checkout failed: ${serviceLabel(target)}`)
         }
         await this.#assertCurrent(before)
         let checkout: ReturnType<typeof parsePluginServiceCheckoutResult>
         try {
           checkout = parsePluginServiceCheckoutResult(result.structuredContent)
         } catch {
-          throw new Error(`Plugin service returned an invalid Checkout result: ${pluginId}`)
+          throw new Error(`Plugin service returned an invalid Checkout result: ${serviceLabel(target)}`)
         }
         await this.checkoutNavigation.open(checkout.checkoutUrl)
         await this.#assertCurrent(before)
-        return this.#call(pluginId, "status", controlSignal)
+        return this.#call(target, "status", controlSignal)
       }),
     )
   }
 
   /** Explicit Plugin lifecycle changes must not hand old Cookies to new bytes. */
   async discardPlugin(pluginId: string) {
-    return this.#withExclusiveControl(pluginId, undefined, () => this.#discardPlugin(pluginId))
+    const listed = (await this.runtime.listServices())
+      .filter((service) => service.pluginId === pluginId)
+      .map(serviceTarget)
+    const active = [...this.#authorizations.values()]
+      .map(({ target }) => target)
+      .filter((target) => target.pluginId === pluginId)
+    const controlling = [...this.#activeControls]
+      .map(({ target }) => target)
+      .filter((target) => target.pluginId === pluginId)
+    const targets = new Map(
+      [...listed, ...active, ...controlling].map((target) => [pluginServiceTargetKey(target), target]),
+    )
+    await Promise.all(
+      [...targets.values()].map((target) =>
+        this.#withExclusiveControl(target, undefined, () => this.#discardService(target)),
+      ),
+    )
   }
 
-  async #discardPlugin(pluginId: string) {
-    await this.disposePlugin(pluginId)
-    await this.browserAuthorization?.clearPlugin?.(pluginId)
+  async #discardService(target: PluginServiceTarget) {
+    await this.disposePlugin(target)
+    await this.browserAuthorization?.clearPlugin?.(target)
   }
 
   async #withExclusiveControl<T>(
-    pluginId: string,
+    target: PluginServiceTarget,
     callerSignal: AbortSignal | undefined,
     operation: (signal: AbortSignal) => Promise<T>,
   ) {
@@ -250,17 +279,18 @@ export class PluginServiceHost {
     const finished = new Promise<void>((resolve) => {
       finish = resolve
     })
-    const active: ActivePluginServiceControl = { controller, finish, finished }
+    const active: ActivePluginServiceControl = { controller, finish, finished, target }
     this.#activeControls.add(active)
     const onCallerAbort = () => controller.abort(abortError("Plugin service control action was canceled"))
     callerSignal?.addEventListener("abort", onCallerAbort, { once: true })
-    const preceding = this.#controlActions.get(pluginId) ?? Promise.resolve()
+    const targetKey = pluginServiceTargetKey(target)
+    const preceding = this.#controlActions.get(targetKey) ?? Promise.resolve()
     let release!: () => void
     const gate = new Promise<void>((resolve) => {
       release = resolve
     })
     const tail = preceding.catch(() => undefined).then(() => gate)
-    this.#controlActions.set(pluginId, tail)
+    this.#controlActions.set(targetKey, tail)
     await preceding.catch(() => undefined)
     try {
       if (controller.signal.aborted) throw abortError("Plugin service control action was canceled")
@@ -268,20 +298,20 @@ export class PluginServiceHost {
     } finally {
       callerSignal?.removeEventListener("abort", onCallerAbort)
       release()
-      if (this.#controlActions.get(pluginId) === tail) this.#controlActions.delete(pluginId)
+      if (this.#controlActions.get(targetKey) === tail) this.#controlActions.delete(targetKey)
       this.#activeControls.delete(active)
       finish()
     }
   }
 
-  async disposePlugin(pluginId: string) {
-    const active = this.#authorizations.get(pluginId)
+  async disposePlugin(target: PluginServiceTarget) {
+    const active = this.#authorizations.get(pluginServiceTargetKey(target))
     if (active) {
       active.controller.abort(abortError("Plugin service authorization was canceled"))
       await active.finished
     }
-    await this.browserAuthorization?.disposePlugin(pluginId)
-    await this.externalAuthorization?.disposePlugin(pluginId)
+    await this.browserAuthorization?.disposePlugin(target)
+    await this.externalAuthorization?.disposePlugin(target)
   }
 
   async dispose() {
@@ -290,95 +320,96 @@ export class PluginServiceHost {
     for (const control of this.#activeControls) {
       control.controller.abort(abortError("Plugin service host is disposed"))
     }
-    const pluginIds = [...this.#authorizations.keys()]
-    await Promise.all(pluginIds.map((pluginId) => this.disposePlugin(pluginId)))
+    const targets = [...this.#authorizations.values()].map(({ target }) => target)
+    await Promise.all(targets.map((target) => this.disposePlugin(target)))
     await Promise.all([...this.#activeControls].map(({ finished }) => finished))
   }
 
   async #callAuthorization(
-    pluginId: string,
+    target: PluginServiceTarget,
     call: "authorize" | "reauthorize",
     signal?: AbortSignal,
   ): Promise<PluginServiceStatus> {
     if (this.#disposed) throw new Error("Plugin service host is disposed")
-    if (this.#controlActions.has(pluginId)) {
-      throw new Error(`Plugin service control action is active: ${pluginId}`)
+    const targetKey = pluginServiceTargetKey(target)
+    if (this.#controlActions.has(targetKey)) {
+      throw new Error(`Plugin service control action is active: ${serviceLabel(target)}`)
     }
-    if (this.#authorizations.has(pluginId))
-      throw new Error(`Plugin service authorization is already active: ${pluginId}`)
+    if (this.#authorizations.has(targetKey))
+      throw new Error(`Plugin service authorization is already active: ${serviceLabel(target)}`)
     if (signal?.aborted) throw abortError("Plugin service authorization was canceled")
     const controller = new AbortController()
     let finish!: () => void
     const finished = new Promise<void>((resolve) => {
       finish = resolve
     })
-    const active: ActivePluginServiceAuthorization = { controller, finish, finished }
-    this.#authorizations.set(pluginId, active)
+    const active: ActivePluginServiceAuthorization = { controller, finish, finished, target }
+    this.#authorizations.set(targetKey, active)
     const onCallerAbort = () => controller.abort(abortError("Plugin service authorization was canceled"))
     signal?.addEventListener("abort", onCallerAbort, { once: true })
     try {
-      return await this.#runAuthorization(pluginId, call, controller.signal)
+      return await this.#runAuthorization(target, call, controller.signal)
     } finally {
       signal?.removeEventListener("abort", onCallerAbort)
-      if (this.#authorizations.get(pluginId) === active) this.#authorizations.delete(pluginId)
+      if (this.#authorizations.get(targetKey) === active) this.#authorizations.delete(targetKey)
       finish()
     }
   }
 
   async #runAuthorization(
-    pluginId: string,
+    target: PluginServiceTarget,
     call: "authorize" | "reauthorize",
     signal: AbortSignal,
   ): Promise<PluginServiceStatus> {
-    const before = await this.#installed(pluginId)
+    const before = await this.#installed(target)
     try {
-      if (call === "reauthorize") await this.browserAuthorization?.clearPlugin?.(pluginId)
-      const result = await this.runtime.callService(pluginId, call, signal)
+      if (call === "reauthorize") await this.browserAuthorization?.clearPlugin?.(target)
+      const result = await this.runtime.callService(target, call, signal)
       await this.#assertCurrent(before)
       if (result.isError || !result.structuredContent) {
-        throw new Error(`Plugin service action failed: ${pluginId}`)
+        throw new Error(`Plugin service action failed: ${serviceLabel(target)}`)
       }
       if (
         result.structuredContent.schema !== pluginServiceBrowserAuthorizationRequestSchema &&
         result.structuredContent.schema !== pluginServiceExternalAuthorizationRequestSchema
       ) {
-        return this.#parseStatus(pluginId, result.structuredContent)
+        return this.#parseStatus(target, result.structuredContent)
       }
       if (!result.completeAuthorization) {
-        throw new Error(`Plugin service authorization completion is unavailable: ${pluginId}`)
+        throw new Error(`Plugin service authorization completion is unavailable: ${serviceLabel(target)}`)
       }
 
       let completion: PluginServiceBrowserAuthorizationCompletion | PluginServiceExternalAuthorizationCompletion
       let commitBrowserCheckpoint = false
       if (result.structuredContent.schema === pluginServiceBrowserAuthorizationRequestSchema) {
         if (!this.browserAuthorization) {
-          throw new Error(`Plugin service browser authorization is unavailable: ${pluginId}`)
+          throw new Error(`Plugin service browser authorization is unavailable: ${serviceLabel(target)}`)
         }
         let request: ReturnType<typeof parsePluginServiceBrowserAuthorizationRequest>
         try {
           request = parsePluginServiceBrowserAuthorizationRequest(result.structuredContent)
         } catch {
-          throw new Error(`Plugin service returned an invalid browser authorization request: ${pluginId}`)
+          throw new Error(`Plugin service returned an invalid browser authorization request: ${serviceLabel(target)}`)
         }
-        completion = await this.browserAuthorization.authorize(pluginId, request, {
+        completion = await this.browserAuthorization.authorize(target, request, {
           action: call,
           isCurrent: async () => this.#isCurrent(before),
           serviceIdentity: authorizationIdentity(result, before),
-          snapshotDigest: requireSnapshotDigest(result.snapshotDigest, pluginId),
+          snapshotDigest: requireSnapshotDigest(result.snapshotDigest, target),
           signal,
         })
         commitBrowserCheckpoint = true
       } else {
         if (!this.externalAuthorization) {
-          throw new Error(`Plugin service external authorization is unavailable: ${pluginId}`)
+          throw new Error(`Plugin service external authorization is unavailable: ${serviceLabel(target)}`)
         }
         let request: ReturnType<typeof parsePluginServiceExternalAuthorizationRequest>
         try {
           request = parsePluginServiceExternalAuthorizationRequest(result.structuredContent)
         } catch {
-          throw new Error(`Plugin service returned an invalid external authorization request: ${pluginId}`)
+          throw new Error(`Plugin service returned an invalid external authorization request: ${serviceLabel(target)}`)
         }
-        completion = await this.#openExternalAuthorization(pluginId, request, before, signal)
+        completion = await this.#openExternalAuthorization(target, request, before, signal)
       }
       // completeAuthorization is an in-process one-shot closure bound by the
       // runtime to the exact manifest, executable snapshot and MCP client that
@@ -386,13 +417,13 @@ export class PluginServiceHost {
       const completed = await result.completeAuthorization(completion, signal)
       await this.#assertCurrent(before)
       if (completed.isError || !completed.structuredContent) {
-        throw new Error(`Plugin service authorization completion failed: ${pluginId}`)
+        throw new Error(`Plugin service authorization completion failed: ${serviceLabel(target)}`)
       }
-      const status = this.#parseStatus(pluginId, completed.structuredContent)
+      const status = this.#parseStatus(target, completed.structuredContent)
       if (!status.credential.configured) {
-        throw new Error(`Plugin service authorization did not persist a credential: ${pluginId}`)
+        throw new Error(`Plugin service authorization did not persist a credential: ${serviceLabel(target)}`)
       }
-      if (commitBrowserCheckpoint) await this.browserAuthorization?.commitPlugin?.(pluginId)
+      if (commitBrowserCheckpoint) await this.browserAuthorization?.commitPlugin?.(target)
       if (result.structuredContent.schema === pluginServiceExternalAuthorizationRequestSchema) {
         this.#notifyExternalAuthorizationComplete()
       }
@@ -404,7 +435,7 @@ export class PluginServiceHost {
   }
 
   async #openExternalAuthorization(
-    pluginId: string,
+    target: PluginServiceTarget,
     request: ReturnType<typeof parsePluginServiceExternalAuthorizationRequest>,
     before: PluginServiceSummary,
     signal: AbortSignal,
@@ -419,9 +450,9 @@ export class PluginServiceHost {
     timeout.unref?.()
     try {
       if (!(await this.#isCurrent(before))) {
-        throw new Error(`Plugin service changed before external authorization opened: ${pluginId}`)
+        throw new Error(`Plugin service changed before external authorization opened: ${serviceLabel(target)}`)
       }
-      return await this.externalAuthorization!.authorize(pluginId, request, { signal: controller.signal })
+      return await this.externalAuthorization!.authorize(target, request, { signal: controller.signal })
     } finally {
       clearTimeout(timeout)
       signal.removeEventListener("abort", forwardAbort)
@@ -440,7 +471,7 @@ export class PluginServiceHost {
       // Never send cleanup to a replacement Plugin. GenerationPluginRuntime
       // repeats the same fingerprint check immediately before the fixed call.
       if (!(await this.#isCurrent(before))) return
-      await this.runtime.callService(before.pluginId, "authorization.cancel", controller.signal)
+      await this.runtime.callService(serviceTarget(before), "authorization.cancel", controller.signal)
     } catch {
       // Cleanup is best effort and must never replace the original failure.
     } finally {
@@ -459,41 +490,45 @@ export class PluginServiceHost {
   }
 
   async #call(
-    pluginId: string,
+    target: PluginServiceTarget,
     call: "status" | WebPluginServiceAction,
     signal?: AbortSignal,
   ): Promise<PluginServiceStatus> {
-    const before = await this.#installed(pluginId)
-    const result = await this.runtime.callService(pluginId, call, signal)
+    const before = await this.#installed(target)
+    const result = await this.runtime.callService(target, call, signal)
     if (result.isError || !result.structuredContent) {
-      throw new Error(`Plugin service ${call === "status" ? "status" : "action"} failed: ${pluginId}`)
+      throw new Error(`Plugin service ${call === "status" ? "status" : "action"} failed: ${serviceLabel(target)}`)
     }
     await this.#assertCurrent(before)
-    return this.#parseStatus(pluginId, result.structuredContent)
+    return this.#parseStatus(target, result.structuredContent)
   }
 
-  async #installed(pluginId: string) {
-    const installed = (await this.runtime.listServices()).find((service) => service.pluginId === pluginId)
-    if (!installed) throw new Error(`Plugin service is not installed: ${pluginId}`)
+  async #installed(target: PluginServiceTarget) {
+    const installed = (await this.runtime.listServices()).find(
+      (service) => service.pluginId === target.pluginId && service.serviceId === target.serviceId,
+    )
+    if (!installed) throw new Error(`Plugin service is not installed: ${serviceLabel(target)}`)
     return installed
   }
 
   async #isCurrent(before: PluginServiceSummary) {
-    const after = (await this.runtime.listServices()).find((service) => service.pluginId === before.pluginId)
+    const after = (await this.runtime.listServices()).find(
+      (service) => service.pluginId === before.pluginId && service.serviceId === before.serviceId,
+    )
     return Boolean(after && summaryFingerprint(after) === summaryFingerprint(before))
   }
 
   async #assertCurrent(before: PluginServiceSummary) {
     if (!(await this.#isCurrent(before))) {
-      throw new Error(`Plugin service changed while the request was running: ${before.pluginId}`)
+      throw new Error(`Plugin service changed while the request was running: ${serviceLabel(before)}`)
     }
   }
 
-  #parseStatus(pluginId: string, value: Record<string, unknown>) {
+  #parseStatus(target: PluginServiceTarget, value: Record<string, unknown>) {
     try {
       return parsePluginServiceStatus(value)
     } catch {
-      throw new Error(`Plugin service returned an invalid bounded status: ${pluginId}`)
+      throw new Error(`Plugin service returned an invalid bounded status: ${serviceLabel(target)}`)
     }
   }
 }

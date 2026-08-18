@@ -775,7 +775,7 @@ try {
         "utf8",
       ),
     ) as { plugins?: Array<{ pluginId?: string; snapshotDigest?: string }>; schema?: string }
-    if (activeSet.schema !== "convax.active-plugin-set-snapshot/1") {
+    if (activeSet.schema !== "convax.active-plugin-set-snapshot/2") {
       throw new Error(`Packaged Plugin ActiveSet is invalid: ${JSON.stringify(activeSet)}`)
     }
     for (const expected of expectedOfficialDefaultPlugins) {

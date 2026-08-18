@@ -3,7 +3,9 @@ import {
   type PluginServiceClient,
   type PluginServiceStatus,
   type PluginServiceSummary,
+  type PluginServiceTarget,
   type PluginServiceUsageHistory,
+  pluginServiceTargetKey,
 } from "../plugin-service-contracts"
 import type { WebPluginServiceAction } from "../plugin-contracts"
 import {
@@ -21,7 +23,7 @@ export interface PluginServiceViewEntry extends PluginServiceSummary {
 }
 
 export interface PluginServicesSnapshot {
-  action?: { action: WebPluginServiceAction; pluginId: string }
+  actions?: readonly { action: WebPluginServiceAction; target: PluginServiceTarget }[]
   error?: string
   loading: boolean
   services: readonly PluginServiceViewEntry[]
@@ -32,11 +34,17 @@ function summaryFingerprint(summary: PluginServiceSummary) {
     actions: [...summary.actions],
     capabilities: [...summary.capabilities],
     description: summary.description,
+    llmProviderIds: [...summary.llmProviderIds],
     models: summary.models.map((model) => ({ ...model })),
     pluginId: summary.pluginId,
     pluginName: summary.pluginName,
+    serviceId: summary.serviceId,
     version: summary.version,
   })
+}
+
+function serviceTarget(service: PluginServiceSummary): PluginServiceTarget {
+  return { pluginId: service.pluginId, serviceId: service.serviceId }
 }
 
 function errorMessage(error: unknown) {
@@ -44,14 +52,19 @@ function errorMessage(error: unknown) {
 }
 
 export class PluginServicesController {
+  readonly #activeActions = new Map<
+    string,
+    { action: WebPluginServiceAction; epoch: number; target: PluginServiceTarget }
+  >()
   readonly #listeners = new Set<() => void>()
   readonly #storage: PluginServiceProjectionStorage | undefined
-  #actionEpoch = 0
   #disposed = false
   #generation = 0
+  #nextActionEpoch = 0
   #refreshQueued = false
   #refreshRequest?: Promise<void>
   #snapshot: PluginServicesSnapshot
+  readonly #targetEpochs = new Map<string, number>()
   #unsubscribe?: () => void
 
   constructor(
@@ -67,6 +80,7 @@ export class PluginServicesController {
           ...service,
           actions: [...service.actions],
           capabilities: [...service.capabilities],
+          llmProviderIds: [...service.llmProviderIds],
           loading: service.status === undefined,
           models: service.models.map((model) => ({ ...model })),
         })) ?? [],
@@ -90,7 +104,7 @@ export class PluginServicesController {
 
   async refresh() {
     if (this.#disposed) return
-    if (this.#refreshRequest || this.#snapshot.action) {
+    if (this.#refreshRequest || this.#activeActions.size > 0) {
       this.#refreshQueued = true
     } else {
       this.#startRefresh()
@@ -104,7 +118,6 @@ export class PluginServicesController {
 
   async #runRefresh() {
     const generation = ++this.#generation
-    const actionEpoch = ++this.#actionEpoch
     this.#setSnapshot({ loading: true, services: this.#snapshot.services })
     let services: readonly PluginServiceSummary[]
     try {
@@ -115,14 +128,17 @@ export class PluginServicesController {
       return
     }
     if (this.#disposed || generation !== this.#generation) return
-    const previousByPluginId = new Map(this.#snapshot.services.map((service) => [service.pluginId, service]))
+    const previousByTarget = new Map(
+      this.#snapshot.services.map((service) => [pluginServiceTargetKey(serviceTarget(service)), service]),
+    )
     const entries = services.map((service) => {
-      const previous = previousByPluginId.get(service.pluginId)
+      const previous = previousByTarget.get(pluginServiceTargetKey(serviceTarget(service)))
       const unchanged = previous && summaryFingerprint(previous) === summaryFingerprint(service) ? previous : undefined
       return {
         ...service,
         actions: [...service.actions],
         capabilities: [...service.capabilities],
+        llmProviderIds: [...service.llmProviderIds],
         loading: unchanged?.status === undefined,
         models: service.models.map((model) => ({ ...model })),
         ...(unchanged?.status === undefined ? {} : { status: unchanged.status }),
@@ -131,28 +147,33 @@ export class PluginServicesController {
     })
     this.#setSnapshot({ loading: false, services: entries })
     this.#writeProjection()
-    await Promise.all(entries.map((entry) => this.#loadStatus(entry, generation, actionEpoch)))
+    await Promise.all(
+      entries.map((entry) =>
+        this.#loadStatus(entry, generation, this.#targetEpochs.get(pluginServiceTargetKey(serviceTarget(entry))) ?? 0),
+      ),
+    )
   }
 
-  async perform(pluginId: string, action: WebPluginServiceAction) {
+  async perform(target: PluginServiceTarget, action: WebPluginServiceAction) {
     if (this.#disposed) return
     if (action === "checkout") throw new Error("Plugin service Checkout requires a Plan")
-    const activeAction = this.#snapshot.action
+    const activeAction = this.#activeActions.get(pluginServiceTargetKey(target))
+    const targetKey = pluginServiceTargetKey(target)
     const supersedesAuthorization =
       action === "authorization.cancel" &&
-      activeAction?.pluginId === pluginId &&
+      activeAction !== undefined &&
       (activeAction.action === "authorize" || activeAction.action === "reauthorize")
-    if (activeAction?.pluginId === pluginId && !supersedesAuthorization) {
+    if (activeAction && !supersedesAuthorization) {
       throw new Error("Plugin service action is already active")
     }
-    const entry = this.#snapshot.services.find((service) => service.pluginId === pluginId)
+    const entry = this.#snapshot.services.find(
+      (service) => pluginServiceTargetKey(serviceTarget(service)) === targetKey,
+    )
     if (!entry || !entry.actions.includes(action)) throw new Error("Plugin service action is no longer available")
     const generation = this.#generation
     const fingerprint = summaryFingerprint(entry)
-    const actionEpoch = ++this.#actionEpoch
-    this.#setSnapshot({ ...this.#snapshot, action: { action, pluginId } })
+    const actionEpoch = this.#beginAction(target, action)
     try {
-      const target = { pluginId }
       const status =
         action === "authorize"
           ? await this.client.authorize(target)
@@ -163,7 +184,7 @@ export class PluginServicesController {
               : await this.client.signOut(target)
       if (this.#isCurrent(entry, fingerprint, generation, actionEpoch)) {
         const clearsUsage = action === "authorize" || action === "reauthorize" || action === "sign_out"
-        this.#replace(pluginId, (current) => ({
+        this.#replace(target, (current) => ({
           ...current,
           error: undefined,
           loading: false,
@@ -175,21 +196,24 @@ export class PluginServicesController {
       await this.#refreshUsageHistory(entry, fingerprint, generation, actionEpoch)
     } catch (error) {
       if (this.#isCurrent(entry, fingerprint, generation, actionEpoch)) {
-        this.#replace(pluginId, (current) => ({ ...current, error: errorMessage(error), loading: false }))
+        this.#replace(target, (current) => ({ ...current, error: errorMessage(error), loading: false }))
       }
     } finally {
-      if (!this.#disposed && actionEpoch === this.#actionEpoch) {
-        const { action: _action, ...snapshot } = this.#snapshot
-        this.#setSnapshot(snapshot)
+      if (this.#finishAction(target, actionEpoch)) {
         this.#startQueuedRefresh()
       }
     }
   }
 
-  async checkout(pluginId: string, planKey: string) {
+  async checkout(target: PluginServiceTarget, planKey: string) {
     if (this.#disposed) return
-    if (this.#snapshot.action?.pluginId === pluginId) throw new Error("Plugin service action is already active")
-    const entry = this.#snapshot.services.find((service) => service.pluginId === pluginId)
+    const targetKey = pluginServiceTargetKey(target)
+    if (this.#activeActions.has(targetKey)) {
+      throw new Error("Plugin service action is already active")
+    }
+    const entry = this.#snapshot.services.find(
+      (service) => pluginServiceTargetKey(serviceTarget(service)) === targetKey,
+    )
     if (!entry || !entry.actions.includes("checkout")) {
       throw new Error("Plugin service Checkout is no longer available")
     }
@@ -199,23 +223,20 @@ export class PluginServicesController {
     }
     const generation = this.#generation
     const fingerprint = summaryFingerprint(entry)
-    const actionEpoch = ++this.#actionEpoch
-    this.#setSnapshot({ ...this.#snapshot, action: { action: "checkout", pluginId } })
+    const actionEpoch = this.#beginAction(target, "checkout")
     try {
-      const status = await this.client.checkout({ planKey, pluginId })
+      const status = await this.client.checkout({ ...target, planKey })
       if (this.#isCurrent(entry, fingerprint, generation, actionEpoch)) {
-        this.#replace(pluginId, (current) => ({ ...current, error: undefined, loading: false, status }))
+        this.#replace(target, (current) => ({ ...current, error: undefined, loading: false, status }))
         this.#writeProjection()
       }
       await this.#refreshUsageHistory(entry, fingerprint, generation, actionEpoch)
     } catch (error) {
       if (this.#isCurrent(entry, fingerprint, generation, actionEpoch)) {
-        this.#replace(pluginId, (current) => ({ ...current, error: errorMessage(error), loading: false }))
+        this.#replace(target, (current) => ({ ...current, error: errorMessage(error), loading: false }))
       }
     } finally {
-      if (!this.#disposed && actionEpoch === this.#actionEpoch) {
-        const { action: _action, ...snapshot } = this.#snapshot
-        this.#setSnapshot(snapshot)
+      if (this.#finishAction(target, actionEpoch)) {
         this.#startQueuedRefresh()
       }
     }
@@ -225,7 +246,8 @@ export class PluginServicesController {
     if (this.#disposed) return
     this.#disposed = true
     this.#generation += 1
-    this.#actionEpoch += 1
+    this.#activeActions.clear()
+    this.#targetEpochs.clear()
     this.#refreshQueued = false
     this.#refreshRequest = undefined
     this.#unsubscribe?.()
@@ -233,13 +255,14 @@ export class PluginServicesController {
     this.#listeners.clear()
   }
 
-  async #loadStatus(entry: PluginServiceViewEntry, generation: number, actionEpoch: number) {
+  async #loadStatus(entry: PluginServiceViewEntry, generation: number, targetEpoch: number) {
     const fingerprint = summaryFingerprint(entry)
+    const target = serviceTarget(entry)
     const status = this.client
-      .getStatus({ pluginId: entry.pluginId })
+      .getStatus(target)
       .then((nextStatus) => {
-        if (!this.#isCurrent(entry, fingerprint, generation, actionEpoch)) return
-        this.#replace(entry.pluginId, (current) => ({
+        if (!this.#isCurrent(entry, fingerprint, generation, targetEpoch)) return
+        this.#replace(target, (current) => ({
           ...current,
           error: undefined,
           loading: false,
@@ -248,15 +271,15 @@ export class PluginServicesController {
         this.#writeProjection()
       })
       .catch((error: unknown) => {
-        if (!this.#isCurrent(entry, fingerprint, generation, actionEpoch)) return
-        this.#replace(entry.pluginId, (current) => ({ ...current, error: errorMessage(error), loading: false }))
+        if (!this.#isCurrent(entry, fingerprint, generation, targetEpoch)) return
+        this.#replace(target, (current) => ({ ...current, error: errorMessage(error), loading: false }))
       })
-    const usage = this.#refreshUsageHistory(entry, fingerprint, generation, actionEpoch)
+    const usage = this.#refreshUsageHistory(entry, fingerprint, generation, targetEpoch)
     await Promise.all([status, usage])
   }
 
   #startRefresh() {
-    if (this.#disposed || this.#refreshRequest || this.#snapshot.action) return
+    if (this.#disposed || this.#refreshRequest || this.#activeActions.size > 0) return
     const request = this.#runRefresh()
     this.#refreshRequest = request
     void request.finally(() => {
@@ -267,14 +290,14 @@ export class PluginServicesController {
   }
 
   #startQueuedRefresh() {
-    if (!this.#refreshQueued || this.#disposed || this.#refreshRequest || this.#snapshot.action) return
+    if (!this.#refreshQueued || this.#disposed || this.#refreshRequest || this.#activeActions.size > 0) return
     this.#refreshQueued = false
     this.#startRefresh()
   }
 
-  async #usageHistory(pluginId: string): Promise<PluginServiceUsageHistory> {
+  async #usageHistory(target: PluginServiceTarget): Promise<PluginServiceUsageHistory> {
     return (
-      (await this.client.getUsageHistory?.({ pluginId })) ?? {
+      (await this.client.getUsageHistory?.(target)) ?? {
         availability: "unavailable",
         schema: pluginServiceUsageSchema,
       }
@@ -285,12 +308,13 @@ export class PluginServicesController {
     entry: PluginServiceSummary,
     fingerprint: string,
     generation: number,
-    actionEpoch?: number,
+    targetEpoch: number,
   ) {
     try {
-      const usageHistory = await this.#usageHistory(entry.pluginId)
-      if (!this.#isCurrent(entry, fingerprint, generation, actionEpoch)) return
-      this.#replace(entry.pluginId, (current) => ({ ...current, usageHistory }))
+      const target = serviceTarget(entry)
+      const usageHistory = await this.#usageHistory(target)
+      if (!this.#isCurrent(entry, fingerprint, generation, targetEpoch)) return
+      this.#replace(target, (current) => ({ ...current, usageHistory }))
       this.#writeProjection()
     } catch {
       // Usage history is optional. Keep the last complete projection visible
@@ -298,23 +322,55 @@ export class PluginServicesController {
     }
   }
 
-  #isCurrent(entry: PluginServiceSummary, fingerprint: string, generation: number, actionEpoch?: number) {
+  #isCurrent(entry: PluginServiceSummary, fingerprint: string, generation: number, targetEpoch: number) {
     if (this.#disposed || generation !== this.#generation) return false
-    if (actionEpoch !== undefined && actionEpoch !== this.#actionEpoch) return false
-    const current = this.#snapshot.services.find((service) => service.pluginId === entry.pluginId)
+    const targetKey = pluginServiceTargetKey(serviceTarget(entry))
+    if ((this.#targetEpochs.get(targetKey) ?? 0) !== targetEpoch) return false
+    const current = this.#snapshot.services.find(
+      (service) => pluginServiceTargetKey(serviceTarget(service)) === targetKey,
+    )
     return Boolean(current && summaryFingerprint(current) === fingerprint)
   }
 
-  #replace(pluginId: string, update: (entry: PluginServiceViewEntry) => PluginServiceViewEntry) {
+  #replace(target: PluginServiceTarget, update: (entry: PluginServiceViewEntry) => PluginServiceViewEntry) {
+    const targetKey = pluginServiceTargetKey(target)
     this.#setSnapshot({
       ...this.#snapshot,
-      services: this.#snapshot.services.map((entry) => (entry.pluginId === pluginId ? update(entry) : entry)),
+      services: this.#snapshot.services.map((entry) =>
+        pluginServiceTargetKey(serviceTarget(entry)) === targetKey ? update(entry) : entry,
+      ),
     })
   }
 
   #setSnapshot(snapshot: PluginServicesSnapshot) {
-    this.#snapshot = snapshot
+    const { actions: _actions, ...rest } = snapshot
+    this.#snapshot = {
+      ...rest,
+      ...(this.#activeActions.size > 0
+        ? {
+            actions: [...this.#activeActions.values()].map(({ action, target }) => ({ action, target })),
+          }
+        : {}),
+    }
     for (const listener of this.#listeners) listener()
+  }
+
+  #beginAction(target: PluginServiceTarget, action: WebPluginServiceAction) {
+    const targetKey = pluginServiceTargetKey(target)
+    const epoch = ++this.#nextActionEpoch
+    this.#targetEpochs.set(targetKey, epoch)
+    this.#activeActions.set(targetKey, { action, epoch, target })
+    this.#setSnapshot(this.#snapshot)
+    return epoch
+  }
+
+  #finishAction(target: PluginServiceTarget, epoch: number) {
+    if (this.#disposed) return false
+    const targetKey = pluginServiceTargetKey(target)
+    if (this.#activeActions.get(targetKey)?.epoch !== epoch) return false
+    this.#activeActions.delete(targetKey)
+    this.#setSnapshot(this.#snapshot)
+    return true
   }
 
   #writeProjection() {

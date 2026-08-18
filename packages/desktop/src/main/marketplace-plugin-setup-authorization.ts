@@ -6,10 +6,7 @@ export type MarketplacePluginSetupMode = "automatic-product-lock" | "explicit"
 
 export interface MarketplacePluginSetupAuthorizationDependencies {
   authorizeHook(plugin: InstalledWebPluginSummary): Promise<string | null>
-  authorizeTool(
-    plugin: InstalledWebPluginSummary,
-    options: { requireManaged?: true },
-  ): Promise<string | null>
+  authorizeTool(plugin: InstalledWebPluginSummary, options: { requireManaged?: true }): Promise<string | null>
 }
 
 /**
@@ -26,7 +23,10 @@ export async function authorizeMarketplacePluginSetup(
     if (plugin.hooks !== undefined) {
       throw new Error("Automatic product-lock setup cannot authorize a Plugin Hook")
     }
-    if (plugin.contributes.service !== undefined) {
+    if (
+      ("service" in plugin.contributes && plugin.contributes.service !== undefined) ||
+      ("services" in plugin.contributes && (plugin.contributes.services?.length ?? 0) > 0)
+    ) {
       throw new Error("Automatic product-lock setup cannot authorize a Plugin Service")
     }
     if (plugin.capabilities.length !== 0) {
@@ -37,9 +37,6 @@ export async function authorizeMarketplacePluginSetup(
     return sha256Hex(canonicalJson({ hook: null, tool }))
   }
 
-  const [tool, hook] = await Promise.all([
-    dependencies.authorizeTool(plugin, {}),
-    dependencies.authorizeHook(plugin),
-  ])
+  const [tool, hook] = await Promise.all([dependencies.authorizeTool(plugin, {}), dependencies.authorizeHook(plugin)])
   return tool || hook ? sha256Hex(canonicalJson({ hook, tool })) : null
 }

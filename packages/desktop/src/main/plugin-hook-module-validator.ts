@@ -51,7 +51,7 @@ function inspectHookModuleDependencies(program: Program) {
   return { commonJsReference, dynamicImport, staticImports }
 }
 
-/** Validates the only executable Hook shape admitted into a v8 snapshot. */
+/** Validates the only executable Hook shape admitted into a released Plugin snapshot. */
 export function assertSelfContainedHookModule(bytes: Uint8Array, label: string) {
   let source: string
   try {

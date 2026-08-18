@@ -201,7 +201,20 @@ contract and its routed references.
   through the global ActiveSet CAS. Plugin-owned Skills and Hooks resolve from the
   leased closure; never copy them into standalone namespaces or recreate legacy
   ownership/authorization journals.
-- Bind `convax.plugin/8` contributions and `hostApi` declarations independently.
+- Bind `convax.plugin/8` or `convax.plugin/9` contributions and `hostApi`
+  declarations independently. V8 remains the closed singleton-Service contract and
+  keeps its Plugin-level routing identity. For v9, route each Service by the exact
+  `{pluginId, serviceId}` from the installed manifest, append only its validated
+  static args to the shared base runtime args, and key process lifecycle,
+  authorization, recovery, status, usage, model projection, and cancellation by
+  that profile. One verified companion artifact may back every profile, but each
+  profile owns a separate process and private runtime state. A Service does not
+  imply generation or LLM; both are independently optional. Bind nested persistent
+  state to a private per-install Plugin incarnation that survives unrelated
+  ActiveSet changes, is published atomically in the current ActiveSet reference,
+  rotates on every explicit install/update publication, and lets an owner-pinned
+  LRO retain only its old profile binding until final release. Preserve legacy
+  ActiveSet `/1` bytes for v8 reads; only an explicit later CAS writes `/2`.
   Plugin-to-Plugin imports/exports resolve through the typed Host broker and exact
   leased caller/provider snapshots, never direct calls or a service locator.
 - Renderer owns the application-language preference. Mirror only its validated
@@ -232,8 +245,10 @@ contract and its routed references.
   cache data; never accept it as Marketplace, installation, grant, or ActiveSet
   authority.
 - Derive Plugin Marketplace categories only from the exact validated manifest:
-  `service`, image/video generation outputs, and owned Skills. Carry only that
-  bounded display enum through the source representative and Renderer cache.
+  `service` from the v8 singleton or non-empty v9 Services, image/video from
+  top-level or service-scoped generation outputs, and `skill` from owned Skills.
+  Carry only that bounded display enum through the source representative and
+  Renderer cache.
   Renderer uses `service`, `video`, and `image` to filter Plugin cards, but the
   `skill` control selects first-class Skill cards rather than Plugins with owned
   Skills. List cards do not render category chips. Bounded text search composes with

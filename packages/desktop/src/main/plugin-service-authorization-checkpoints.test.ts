@@ -34,10 +34,12 @@ async function failureOf(operation: Promise<unknown>) {
 function binding(
   overrides: Partial<PluginServiceAuthorizationCheckpointBinding> = {},
 ): PluginServiceAuthorizationCheckpointBinding {
+  const pluginId = overrides.pluginId ?? "account-tools"
   return {
     cookieNames: ["session_id", "session_id_secure"],
     cookieOrigin: "https://accounts.example.com",
-    pluginId: "account-tools",
+    pluginId,
+    serviceId: overrides.serviceId ?? pluginId,
     serviceIdentity,
     snapshotDigest,
     ...overrides,
@@ -47,10 +49,11 @@ function binding(
 function checkpoint(
   overrides: Partial<PluginServiceAuthorizationCheckpoint> = {},
 ): PluginServiceAuthorizationCheckpoint {
+  const checkpointBinding = binding(overrides)
   return {
     action: "authorize",
     capturedAt: fixedNow,
-    ...binding(),
+    ...checkpointBinding,
     cookies: [
       { name: "session_id_secure", value: "secure-cookie-value" },
       { name: "session_id", value: "session-cookie-value" },
@@ -72,20 +75,29 @@ describe("Plugin service authorization checkpoint store", () => {
 
     const stored = await store.write(checkpoint())
     const restored = await store.read(binding())
-    const summary = await store.inspect({ pluginId: "account-tools", serviceIdentity, snapshotDigest })
+    const summary = await store.inspect({
+      pluginId: "account-tools",
+      serviceId: "account-tools",
+      serviceIdentity,
+      snapshotDigest,
+    })
 
     expect(restored).toEqual(stored)
     expect(summary).toEqual({
       action: "authorize",
       capturedAt: fixedNow,
       pluginId: "account-tools",
+      serviceId: "account-tools",
       serviceIdentity,
       snapshotDigest,
     })
     expect(JSON.stringify(summary)).not.toContain("cookie-value")
     expect(restored?.cookieNames).toEqual(["session_id", "session_id_secure"])
     expect(restored?.cookies.map(({ name }) => name)).toEqual(["session_id", "session_id_secure"])
-    const [rootInfo, fileInfo] = await Promise.all([fs.lstat(root), fs.lstat(path.join(root, "account-tools.json"))])
+    const [rootInfo, fileInfo] = await Promise.all([
+      fs.lstat(root),
+      fs.lstat(path.join(root, "account-tools--account-tools.json")),
+    ])
     if (process.platform !== "win32") {
       expect(rootInfo.mode & 0o777).toBe(0o700)
       expect(fileInfo.mode & 0o777).toBe(0o600)
@@ -138,6 +150,7 @@ describe("Plugin service authorization checkpoint store", () => {
         await failureOf(
           store.inspect({
             pluginId: "account-tools",
+            serviceId: "account-tools",
             serviceIdentity: "b".repeat(64),
             snapshotDigest,
           }),
@@ -166,9 +179,9 @@ describe("Plugin service authorization checkpoint store", () => {
     ])
     now = fixedNow + 20_000
     expect(await store.read(binding())).toBeNull()
-    expect(await fs.lstat(path.join(root, "account-tools.json")).catch((error: unknown) => error)).toMatchObject({
-      code: "ENOENT",
-    })
+    expect(
+      await fs.lstat(path.join(root, "account-tools--account-tools.json")).catch((error: unknown) => error),
+    ).toMatchObject({ code: "ENOENT" })
   })
 
   test("bounds crash recovery even for browser-session Cookies without an expiry", async () => {
@@ -181,7 +194,9 @@ describe("Plugin service authorization checkpoint store", () => {
     expect(await store.read(binding())).not.toBeNull()
     now += 1
     expect(await store.read(binding())).toBeNull()
-    await expect(fs.lstat(path.join(root, "account-tools.json"))).rejects.toMatchObject({ code: "ENOENT" })
+    await expect(fs.lstat(path.join(root, "account-tools--account-tools.json"))).rejects.toMatchObject({
+      code: "ENOENT",
+    })
   })
 
   test("fails closed on permissive files and symlinks without following or overwriting them", async () => {
@@ -189,7 +204,7 @@ describe("Plugin service authorization checkpoint store", () => {
     const root = path.join(outer, "checkpoints")
     const store = new PluginServiceAuthorizationCheckpointStore(root, { now: () => fixedNow })
     await store.write(checkpoint())
-    const target = path.join(root, "account-tools.json")
+    const target = path.join(root, "account-tools--account-tools.json")
     if (process.platform !== "win32") {
       await fs.chmod(target, 0o644)
       expect((await failureOf(store.read(binding()))).message).toContain("invalid or inaccessible")
@@ -229,25 +244,28 @@ describe("Plugin service authorization checkpoint store", () => {
     await fs.writeFile(path.join(root, ".checkpoint-orphan.tmp"), "orphan", { mode: 0o600 })
 
     const retained = await store.reconcile([
-      { pluginId: "account-tools", serviceIdentity, snapshotDigest },
+      { pluginId: "account-tools", serviceId: "account-tools", serviceIdentity, snapshotDigest },
       {
         pluginId: "changed-tools",
+        serviceId: "changed-tools",
         serviceIdentity: "d".repeat(64),
         snapshotDigest,
       },
       {
         pluginId: "corrupt-tools",
+        serviceId: "corrupt-tools",
         serviceIdentity: "e".repeat(64),
         snapshotDigest,
       },
     ])
 
-    expect(await fs.readdir(root)).toEqual(["account-tools.json"])
+    expect(await fs.readdir(root)).toEqual(["account-tools--account-tools.json"])
     expect(retained).toEqual([
       {
         action: "authorize",
         capturedAt: fixedNow,
         pluginId: "account-tools",
+        serviceId: "account-tools",
         serviceIdentity,
         snapshotDigest,
       },
@@ -268,7 +286,7 @@ describe("Plugin service authorization checkpoint store", () => {
     )
 
     expect((await store.sweep(["account-tools"])).map(({ pluginId }) => pluginId)).toEqual(["account-tools"])
-    expect(await fs.readdir(root)).toEqual(["account-tools.json"])
+    expect(await fs.readdir(root)).toEqual(["account-tools--account-tools.json"])
 
     now = fixedNow + 15 * 60_000
     expect(await store.sweep(["account-tools"])).toEqual([])
@@ -284,6 +302,51 @@ describe("Plugin service authorization checkpoint store", () => {
     expect(await store.read(binding())).not.toBeNull()
     await expect(store.read(binding({ serviceIdentity: "b".repeat(64) }))).rejects.toThrow("invalid or inaccessible")
     expect(await store.read(binding())).not.toBeNull()
+  })
+
+  test("isolates checkpoints for sibling services contributed by one Plugin", async () => {
+    const root = path.join(await temporaryRoot(), "checkpoints")
+    const store = new PluginServiceAuthorizationCheckpointStore(root, { now: () => fixedNow })
+    const image = checkpoint({
+      serviceId: "image-generation",
+      cookies: [{ name: "session_id", value: "image-cookie" }],
+    })
+    const video = checkpoint({
+      serviceId: "video-generation",
+      cookies: [{ name: "session_id", value: "video-cookie" }],
+    })
+
+    await store.write(image)
+    await store.write(video)
+    expect(await store.read(binding({ serviceId: "image-generation" }))).toEqual(image)
+    expect(await store.read(binding({ serviceId: "video-generation" }))).toEqual(video)
+
+    await store.remove({ pluginId: "account-tools", serviceId: "image-generation" })
+    expect(await store.read(binding({ serviceId: "image-generation" }))).toBeNull()
+    expect(await store.read(binding({ serviceId: "video-generation" }))).toEqual(video)
+    expect(await fs.readdir(root)).toEqual(["account-tools--video-generation.json"])
+  })
+
+  test("reads and cleans a legacy v2 checkpoint only for the v8-compatible service target", async () => {
+    const root = path.join(await temporaryRoot(), "checkpoints")
+    await fs.mkdir(root, { mode: 0o700 })
+    const { serviceId: _serviceId, ...legacy } = checkpoint()
+    await fs.writeFile(
+      path.join(root, "account-tools.json"),
+      `${JSON.stringify({ ...legacy, schema: "convax.plugin-service-authorization-checkpoint/2" })}\n`,
+      { mode: 0o600 },
+    )
+    const store = new PluginServiceAuthorizationCheckpointStore(root, { now: () => fixedNow })
+
+    expect(await store.read(binding())).toMatchObject({
+      pluginId: "account-tools",
+      schema: pluginServiceAuthorizationCheckpointSchema,
+      serviceId: "account-tools",
+    })
+    expect(await store.read(binding({ serviceId: "image-generation" }))).toBeNull()
+
+    await store.remove({ pluginId: "account-tools", serviceId: "account-tools" })
+    await expect(fs.lstat(path.join(root, "account-tools.json"))).rejects.toMatchObject({ code: "ENOENT" })
   })
 
   test("serializes capture and explicit removal so sign-out cannot be undone by an earlier write", async () => {
@@ -310,7 +373,7 @@ describe("Plugin service authorization checkpoint store", () => {
       observePublish = resolve
     })
     const rename = spyOn(fs, "rename").mockImplementation(async (source, target) => {
-      if (String(source).includes(".checkpoint-other-tools-")) {
+      if (String(source).includes(".checkpoint-other-tools--other-tools-")) {
         observePublish()
         await publishGate
       }

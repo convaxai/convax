@@ -4,7 +4,7 @@ import { createCanvasDocument } from "@convax/canvas/core"
 import { parseWebPluginManifest } from "../plugin-contracts"
 import { PluginMaterializationService } from "./plugin-materialization-service"
 
-function materializationPlugin(version = "1.0.0") {
+function materializationPlugin(version = "1.0.0", schema: "convax.plugin/8" | "convax.plugin/9" = "convax.plugin/8") {
   return parseWebPluginManifest({
     capabilities: ["canvas.connectedInputs.read", "canvas.node.read", "canvas.node.write"],
     contributes: {
@@ -30,7 +30,7 @@ function materializationPlugin(version = "1.0.0") {
     },
     id: "timeline-surface",
     name: "Timeline Surface",
-    schema: "convax.plugin/8",
+    schema,
     version,
   })
 }
@@ -44,7 +44,7 @@ describe("PluginMaterializationService", () => {
   })
 
   test("derives its own renderer under one snapshot lease and sends one business command", async () => {
-    const plugin = materializationPlugin()
+    const plugin = materializationPlugin("1.0.0", "convax.plugin/9")
     const execute = mock(async (request: Parameters<PluginMaterializationService["materialize"]>[0] | any) => {
       const node = request.envelope.command.node
       return commandResult("canvas-1", [node.id], "materialize-1")

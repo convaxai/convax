@@ -27,6 +27,37 @@ function executableManifest(id: string, version = "1.0.0") {
   }
 }
 
+function multiServiceManifest(id: string, version = "1.0.0") {
+  return {
+    capabilities: [],
+    contributes: {
+      services: [
+        {
+          actions: ["authorize"],
+          description: "First account",
+          id: "first-account",
+          name: "First Account",
+          runtime: { args: ["--provider=first"] },
+        },
+        {
+          actions: [],
+          description: "Second account without LLM",
+          id: "second-account",
+          name: "Second Account",
+          runtime: { args: ["--provider=second"] },
+        },
+      ],
+    },
+    description: "test",
+    hostApi: { major: 3, optional: [], required: [] },
+    id,
+    name: id,
+    runtime: { args: ["serve"], command: `${id}-tool`, type: "mcp-stdio" },
+    schema: "convax.plugin/9",
+    version,
+  }
+}
+
 async function fixture() {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "convax-plugin-snapshot-installer-"))
   roots.push(root)
@@ -59,6 +90,35 @@ describe("PluginSnapshotInstaller", () => {
     const executable = await handle.resolveCompanion()
     if (!executable) throw new Error("Expected active companion")
     expect(await fs.readFile(executable)).toEqual(companion)
+    handle.release()
+  })
+
+  test("activates one immutable companion closure for a v9 Plugin with independent Services and no LLM", async () => {
+    const { installer, runtime } = await fixture()
+    const manifest = multiServiceManifest("media-router")
+    const companion = Buffer.from("shared native companion")
+
+    const plugin = await installer.install({
+      artifact: { sha256: digest("v9 archive"), size: 120 },
+      authorizeExecution: true,
+      companion: { bytes: companion, command: "media-router-tool", target: "darwin-arm64-v1" },
+      files: { "manifest.json": JSON.stringify(manifest) },
+      sourceIdentity: digest("v9 official source"),
+    })
+
+    expect(plugin).toMatchObject({
+      contributes: {
+        services: [{ id: "first-account" }, { actions: [], id: "second-account" }],
+      },
+      id: "media-router",
+      schema: "convax.plugin/9",
+    })
+    expect(plugin.contributes.services?.every((service) => service.llm === undefined)).toBeTrue()
+    const active = await runtime.readActive()
+    expect(active.plugins).toHaveLength(1)
+    const handle = await runtime.acquireActivePlugin("media-router")
+    expect(handle.descriptor.companion).toMatchObject({ target: "darwin-arm64-v1" })
+    expect(await fs.readFile((await handle.resolveCompanion())!)).toEqual(companion)
     handle.release()
   })
 

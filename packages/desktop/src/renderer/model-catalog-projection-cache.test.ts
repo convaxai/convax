@@ -41,6 +41,7 @@ const generationTools: readonly GenerationToolSummary[] = [
     output: "image",
     pluginId: "convax-account",
     pluginName: "Convax",
+    serviceId: "convax-account",
     title: "Nano Banana",
     toolId: "generate",
   },
@@ -87,12 +88,39 @@ describe("model catalog display projection cache", () => {
       generationModelCatalogStorageKey,
       JSON.stringify({
         projection: [{ ...generationTools[0], description: "https://credential.example/token" }],
-        schema: "convax.generation-model-display-cache/1",
+        schema: "convax.generation-model-display-cache/2",
       }),
     )
 
     expect(readAgentModelCatalogProjection(storage)).toBeNull()
     expect(readGenerationModelCatalogProjection(storage)).toBeNull()
+  })
+
+  test("rejects the pre-ServiceRef generation cache", () => {
+    const storage = memoryStorage()
+    storage.values.set(
+      generationModelCatalogStorageKey,
+      JSON.stringify({ projection: generationTools, schema: "convax.generation-model-display-cache/1" }),
+    )
+    expect(readGenerationModelCatalogProjection(storage)).toBeNull()
+  })
+
+  test("round-trips sibling generation Services and rejects an invalid Service id", () => {
+    const storage = memoryStorage()
+    const sibling = {
+      ...generationTools[0],
+      id: "convax-account/video/generate",
+      serviceId: "video-generation",
+    }
+    expect(writeGenerationModelCatalogProjection(storage, [...generationTools, sibling])).toBe(true)
+    expect(readGenerationModelCatalogProjection(storage)?.map(({ serviceId }) => serviceId)).toEqual([
+      "convax-account",
+      "video-generation",
+    ])
+    expect(
+      writeGenerationModelCatalogProjection(storage, [{ ...generationTools[0], serviceId: "Video Generation" }]),
+    ).toBe(true)
+    expect(readGenerationModelCatalogProjection(storage)).toEqual([])
   })
 
   test("ignores corrupt and oversized local storage without throwing", () => {

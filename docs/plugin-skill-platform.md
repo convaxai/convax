@@ -38,12 +38,13 @@ snapshot identity. A concrete Plugin id, vendor, model, field name, or catalog
 source never changes Host semantics.
 
 Marketplace presentation may derive four bounded Plugin categories from that same
-validated contribution set: `service` from `contributes.service`, `video` and
-`image` from generation tool outputs, and `skill` from owned Skills. These values
-are Host-derived display metadata, not a manifest/Registry authoring field, grant,
-runtime-readiness claim, or installation decision. Catalog aggregation keeps them
-on the same representative source as the displayed Plugin metadata, and Renderer
-filtering is local presentation only.
+validated contribution set: `service` from the v8 singleton
+`contributes.service` or a non-empty v9 `contributes.services`, `video` and `image`
+from top-level or service-scoped generation tool outputs, and `skill` from owned
+Skills. These values are Host-derived display metadata, not a manifest/Registry
+authoring field, grant, runtime-readiness claim, or installation decision. Catalog
+aggregation keeps them on the same representative source as the displayed Plugin
+metadata, and Renderer filtering is local presentation only.
 
 Marketplace details remain a Host-owned presentation of the same source-qualified
 representative as the card. The Renderer identifies only the capability kind and id;
@@ -70,14 +71,50 @@ cannot express a use case, the task must create a structured capability request 
 
 ## Current contracts
 
-Only these breaking-cutover contracts are admitted:
+Only these released contracts are admitted:
 
-| Boundary                          | Contract                     | Owner                    |
-| --------------------------------- | ---------------------------- | ------------------------ |
-| Plugin manifest and contributions | `convax.plugin/8`            | `@convax/plugin-sdk`     |
-| Marketplace package envelope      | `convax.package/2`           | `@convax/marketplace`    |
-| Web/capability transport          | `convax.plugin-capability/3` | Desktop protocol adapter |
-| Host API catalog                  | independent SemVer catalog   | `@convax/plugin-api`     |
+| Boundary                          | Contract                                | Owner                    |
+| --------------------------------- | --------------------------------------- | ------------------------ |
+| Plugin manifest and contributions | `convax.plugin/8` and `convax.plugin/9` | `@convax/plugin-sdk`     |
+| Marketplace package envelope      | `convax.package/2`                      | `@convax/marketplace`    |
+| Web/capability transport          | `convax.plugin-capability/3`            | Desktop protocol adapter |
+| Host API catalog                  | independent SemVer catalog              | `@convax/plugin-api`     |
+
+V8 remains a closed, accepted contract. Its optional singleton
+`contributes.service`, Plugin-level runtime, generation and LLM semantics are
+unchanged, and the Host neither rewrites its bytes nor projects it through v9. V9
+keeps the same non-Service contribution plane and one top-level immutable runtime
+artifact, but replaces that singleton field with an optional array of 1–16 Service
+profiles. Each profile has a Plugin-local `serviceId`, display metadata, possibly
+empty actions, optional generation, optional LLM and optional static runtime args.
+A Service is valid without generation or LLM; those capabilities are independent.
+Its `serviceId` must differ from the owning Plugin id, which remains reserved for
+the top-level runtime projection.
+The presence of `services` counts as executable, so v9 requires the top-level
+runtime exactly when any Service, top-level generation or LLM, or capability export
+is present; a runtime with no executable contribution remains invalid.
+
+The one top-level runtime command identifies the verified companion artifact. For
+a v9 Service, Main starts a separate process with effective argv equal to the base
+runtime args followed by that Service's args; the combined list is bounded to 64.
+Process lifecycle, credentials and private sidecar state, authorization checkpoints,
+status/usage, generation models, recovery and cancellation are isolated by the
+exact `{pluginId, serviceId}` profile. Artifact reuse therefore never means process
+or state reuse. Service-local tool and model ids are scoped to that profile: the
+same local id may appear in another Service, while Host-facing generation tool ids
+include Plugin and Service identity. The v8 Host-facing ids remain unchanged.
+Main also binds nested profile persistence to a private per-install Plugin
+incarnation carried by the Plugin's current ActiveSet `/2` reference. The global CAS
+therefore publishes or removes it atomically: unrelated Plugin changes preserve it,
+every explicit install/update publication replaces it, and an exact-byte reinstall
+receives a fresh incarnation. Legacy ActiveSet `/1` bytes remain readable for v8 and
+upgrade only on the next explicit CAS. A pinned LRO keeps only its old profile
+binding until recovery ownership ends, never authority for a new install.
+
+V9 top-level generation, LLM and capability exports still use the base runtime.
+Agent/Canvas tool references continue to resolve only top-level generation and gain
+no Service selector in this release. This manifest addition does not add a Host API
+Catalog id, grant, Web transport version or caller-selected runtime route.
 
 The Host API catalog evolves independently of the manifest and transport. A Plugin
 declares required and optional APIs. Required APIs block activation when the Host
@@ -99,14 +136,16 @@ Both are checked against append-only compatibility history in CI.
 Registration and authority are orthogonal.
 
 ```text
-convax.plugin/8
+convax.plugin/8 | convax.plugin/9
   ├─ i18n
   │   ├─ defaultLocale
   │   └─ messages[locale][key]
   ├─ contributes
   │   ├─ skills
   │   ├─ agent.mcp / agent.tools
-  │   ├─ generation / companion tools
+  │   ├─ generation / companion tools (top-level)
+  │   ├─ service? (v8 singleton)
+  │   ├─ services[1..16]? (v9 Service profiles)
   │   ├─ canvas renderer / node
   │   └─ node toolbar / host-rendered selection-action menus
   ├─ hostApi
@@ -150,12 +189,13 @@ New calls resolve only the current ActiveSet. Work already in flight retains a
 lease on its exact immutable snapshots. Durable long-running Host owners may hold
 a bounded persistent pin; a pin preserves bytes but grants no execution authority.
 Unsupported legacy state is rejected without silently rewriting or deleting it.
-LLM contributions are validated identically at authoring, installation, startup,
-and execution: `provider.protocol` must explicitly be `openai` or `openrouter`.
-The Host does not retain an older LLM manifest parser, infer a protocol, or adapt a
-retired model-catalog tool. An installed snapshot that does not satisfy the current
-manifest remains invalid and non-executable; Host never parses it as migration or
-in-place update input.
+When an LLM contribution is present, it is validated identically at authoring,
+installation, startup, and execution: `provider.protocol` must explicitly be
+`openai` or `openrouter`. A Service contribution itself does not require LLM. The
+Host does not retain a retired LLM parser, infer a protocol, or adapt a retired
+model-catalog tool. An installed snapshot that satisfies neither the closed v8 nor
+the closed v9 manifest remains invalid and non-executable; Host never parses it as
+migration or in-place update input.
 
 Packaged Marketplace content is governed by
 `convax.marketplace-product-lock/3`. Its policy and resolved state each contain one

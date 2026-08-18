@@ -26,6 +26,7 @@ const baseService: Omit<PluginServiceCatalogEntry, "status"> = {
   pluginId: "account-tools",
   serviceId: "plugin:account-tools",
   state: "connected",
+  target: { pluginId: "account-tools", serviceId: "account-tools" },
   version: "1.0.0",
 }
 
@@ -286,7 +287,7 @@ describe("Plugin Services host UI", () => {
         root?.render(
           <PluginServicesSurface
             locale="en"
-            onAction={(_pluginId, action) => actions.push(action)}
+            onAction={(_target, action) => actions.push(action)}
             onRefresh={noop}
             snapshot={{
               loading: false,
@@ -335,7 +336,7 @@ describe("Plugin Services host UI", () => {
         onAction={noop}
         onRefresh={noop}
         snapshot={{
-          action: { action: "authorize", pluginId: "account-tools" },
+          actions: [{ action: "authorize", target: baseService.target }],
           loading: false,
           services: [
             {

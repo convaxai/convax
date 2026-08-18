@@ -391,6 +391,7 @@ async function immutableInventory(root: string, label: string, maximumFiles = ma
 class ActivePluginRuntimeHandleImpl implements ActivePluginRuntimeHandle {
   readonly descriptor: InstalledPluginSnapshot["descriptor"]
   readonly identity: ActivePluginRuntimeIdentity
+  readonly installationActivationId?: PluginSnapshotDigest
   readonly plugin: InstalledWebPluginSummary
   readonly #closureRoot: string
   readonly #lease: PluginSnapshotLease
@@ -402,10 +403,12 @@ class ActivePluginRuntimeHandleImpl implements ActivePluginRuntimeHandle {
     identity: ActivePluginRuntimeIdentity,
     plugin: InstalledWebPluginSummary,
     lease: PluginSnapshotLease,
+    installationActivationId?: PluginSnapshotDigest,
   ) {
     this.#closureRoot = closureRoot
     this.descriptor = descriptor
     this.identity = identity
+    this.installationActivationId = installationActivationId
     this.plugin = plugin
     this.#lease = lease
   }
@@ -541,6 +544,7 @@ export class PluginInstallationClosureStore {
     identity: ActivePluginRuntimeIdentity,
     plugin: InstalledWebPluginSummary,
     lease: PluginSnapshotLease,
+    installationActivationId?: PluginSnapshotDigest,
   ): ActivePluginRuntimeHandle {
     return new ActivePluginRuntimeHandleImpl(
       this.#closureRoot(snapshot.digest),
@@ -548,6 +552,7 @@ export class PluginInstallationClosureStore {
       identity,
       plugin,
       lease,
+      installationActivationId,
     )
   }
 

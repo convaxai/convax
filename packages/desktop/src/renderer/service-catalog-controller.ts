@@ -5,10 +5,12 @@ import type {
   PluginServiceClient,
   PluginServiceState,
   PluginServiceStatus,
+  PluginServiceTarget,
   PluginServiceUsageHistory,
   ServiceCapability,
   ServiceModelSummary,
 } from "../plugin-service-contracts"
+import { pluginServiceTargetKey } from "../plugin-service-contracts"
 import type { WebPluginServiceAction } from "../plugin-contracts"
 import {
   PluginServicesController,
@@ -53,6 +55,7 @@ export interface PluginServiceCatalogEntry extends ServiceCatalogEntryBase {
   kind: "plugin"
   pluginId: string
   status?: PluginServiceStatus
+  target: PluginServiceTarget
   usageHistory?: PluginServiceUsageHistory
   version: string
 }
@@ -71,7 +74,7 @@ export interface ServiceCatalogAgentModelState {
 }
 
 export interface ServiceCatalogSnapshot {
-  action?: { action: WebPluginServiceAction; pluginId: string }
+  actions?: readonly { action: WebPluginServiceAction; target: PluginServiceTarget }[]
   agentModels?: ServiceCatalogAgentModelState
   error?: string
   loading: boolean
@@ -103,17 +106,19 @@ export function serviceCatalogAgentModelsForScope(
  */
 export function serviceGenerationAvailabilityVersion(
   snapshot: ServiceCatalogSnapshot,
-  generationPluginIds: readonly string[],
+  generationServices: readonly PluginServiceTarget[],
 ) {
-  const included = new Set(generationPluginIds)
+  const included = new Set(generationServices.map(pluginServiceTargetKey))
   return JSON.stringify(
     snapshot.services
       .flatMap((service) =>
-        service.kind === "plugin" && included.has(service.pluginId)
-          ? [{ pluginId: service.pluginId, state: service.state }]
+        service.kind === "plugin" && included.has(pluginServiceTargetKey(service.target))
+          ? [{ ...service.target, state: service.state }]
           : [],
       )
-      .sort((left, right) => left.pluginId.localeCompare(right.pluginId)),
+      .sort(
+        (left, right) => left.pluginId.localeCompare(right.pluginId) || left.serviceId.localeCompare(right.serviceId),
+      ),
   )
 }
 
@@ -135,8 +140,10 @@ function pluginBilling(service: PluginServiceViewEntry): ServiceBilling {
     : { kind: "unknown" }
 }
 
-function pluginProviderPrefix(pluginId: string) {
-  return `plugin-${pluginId}-`
+function pluginCatalogServiceId(target: PluginServiceTarget) {
+  return target.serviceId === target.pluginId
+    ? `plugin:${target.pluginId}`
+    : `plugin:${target.pluginId}/${target.serviceId}`
 }
 
 function pluginEntry(
@@ -145,12 +152,14 @@ function pluginEntry(
   generationTools: readonly GenerationToolSummary[] = [],
   stableState?: PluginServiceState,
 ): PluginServiceCatalogEntry {
+  const target = { pluginId: service.pluginId, serviceId: service.serviceId }
+  const llmProviderIds = new Set(service.llmProviderIds)
   const connectedLlmProviders =
-    catalog?.providers.filter(
-      (provider) => provider.connected && provider.providerId.startsWith(pluginProviderPrefix(service.pluginId)),
-    ) ?? []
+    catalog?.providers.filter((provider) => provider.connected && llmProviderIds.has(provider.providerId)) ?? []
   const dynamicGenerationModels = generationTools
-    .filter((tool) => tool.kind === "model" && tool.pluginId === service.pluginId)
+    .filter(
+      (tool) => tool.kind === "model" && tool.pluginId === service.pluginId && tool.serviceId === service.serviceId,
+    )
     .map((tool) => ({
       capability: tool.output,
       id: tool.id,
@@ -189,9 +198,10 @@ function pluginEntry(
     models,
     name: service.pluginName,
     pluginId: service.pluginId,
-    serviceId: `plugin:${service.pluginId}`,
+    serviceId: pluginCatalogServiceId(target),
     state: service.status?.state ?? stableState ?? "unknown",
     status: service.status,
+    target,
     usageHistory: service.usageHistory,
     version: service.version,
   }
@@ -322,13 +332,13 @@ export class ServiceCatalogController {
 
   readonly refreshAgentModels = () => this.#refreshModelsIncludingQueued()
 
-  async perform(pluginId: string, action: WebPluginServiceAction) {
-    await this.#plugins.perform(pluginId, action)
+  async perform(target: PluginServiceTarget, action: WebPluginServiceAction) {
+    await this.#plugins.perform(target, action)
     await this.#refreshModelsIncludingQueued().catch(() => undefined)
   }
 
-  async checkout(pluginId: string, planKey: string) {
-    return this.#plugins.checkout(pluginId, planKey)
+  async checkout(target: PluginServiceTarget, planKey: string) {
+    return this.#plugins.checkout(target, planKey)
   }
 
   dispose() {
@@ -433,7 +443,7 @@ export class ServiceCatalogController {
 
   #compose(): ServiceCatalogSnapshot {
     return {
-      action: this.#pluginSnapshot.action,
+      ...(this.#pluginSnapshot.actions === undefined ? {} : { actions: this.#pluginSnapshot.actions }),
       agentModels: {
         catalog: this.#agentCatalog,
         error: this.#agentError,
@@ -449,7 +459,7 @@ export class ServiceCatalogController {
             service,
             this.#agentCatalog,
             this.#generationSnapshot?.tools,
-            this.#stablePluginStates.get(service.pluginId),
+            this.#stablePluginStates.get(pluginServiceTargetKey(service)),
           ),
         ),
       ],
@@ -458,14 +468,14 @@ export class ServiceCatalogController {
 
   #rememberStablePluginStates() {
     if (!this.#pluginSnapshot.loading) {
-      const presentPluginIds = new Set(this.#pluginSnapshot.services.map((service) => service.pluginId))
-      for (const pluginId of this.#stablePluginStates.keys()) {
-        if (!presentPluginIds.has(pluginId)) this.#stablePluginStates.delete(pluginId)
+      const presentServices = new Set(this.#pluginSnapshot.services.map(pluginServiceTargetKey))
+      for (const targetKey of this.#stablePluginStates.keys()) {
+        if (!presentServices.has(targetKey)) this.#stablePluginStates.delete(targetKey)
       }
     }
     for (const service of this.#pluginSnapshot.services) {
       if (!service.loading && service.status) {
-        this.#stablePluginStates.set(service.pluginId, service.status.state)
+        this.#stablePluginStates.set(pluginServiceTargetKey(service), service.status.state)
       }
     }
   }

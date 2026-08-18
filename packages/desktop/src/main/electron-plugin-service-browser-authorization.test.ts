@@ -169,7 +169,7 @@ const request = {
 
 function beginAuthorization(signal?: AbortSignal) {
   const broker = createElectronPluginServiceBrowserAuthorizationBroker()
-  const pending = broker.authorize("account-tools", request, {
+  const pending = broker.authorize({ pluginId: "account-tools", serviceId: "account-tools" }, request, {
     action: "authorize",
     isCurrent: async () => true,
     serviceIdentity: "a".repeat(64),

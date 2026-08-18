@@ -6,6 +6,7 @@ import {
   type PluginServiceAuthorizationCheckpointBinding,
   type PluginServiceAuthorizationCheckpointStore,
 } from "./plugin-service-authorization-checkpoints"
+import { pluginServiceTargetKey, type PluginServiceTarget } from "../plugin-service-contracts"
 
 export const pluginServiceBrowserAuthorizationRequestSchema = "convax.plugin-service-browser-authorization/1" as const
 export const pluginServiceBrowserAuthorizationCompletionSchema =
@@ -48,7 +49,7 @@ export interface PluginServiceBrowserAuthorizationSession {
 }
 
 export type PluginServiceBrowserAuthorizationSessionFactory = (
-  pluginId: string,
+  target: PluginServiceTarget,
   request: PluginServiceBrowserAuthorizationRequest,
 ) => Promise<PluginServiceBrowserAuthorizationSession> | PluginServiceBrowserAuthorizationSession
 
@@ -201,7 +202,7 @@ export class PluginServiceBrowserAuthorizationBroker {
   ) {}
 
   async authorize(
-    pluginId: string,
+    target: PluginServiceTarget,
     request: PluginServiceBrowserAuthorizationRequest,
     options: {
       action: PluginServiceAuthorizationAction
@@ -212,7 +213,8 @@ export class PluginServiceBrowserAuthorizationBroker {
     },
   ): Promise<PluginServiceBrowserAuthorizationCompletion> {
     if (this.#disposed) throw new Error("Plugin service browser authorization is disposed")
-    if (this.#active.has(pluginId)) throw new Error("Plugin service browser authorization is already active")
+    const targetKey = pluginServiceTargetKey(target)
+    if (this.#active.has(targetKey)) throw new Error("Plugin service browser authorization is already active")
     if (options.signal?.aborted) throw abortError("Plugin service browser authorization was canceled")
 
     const controller = new AbortController()
@@ -221,7 +223,7 @@ export class PluginServiceBrowserAuthorizationBroker {
       finish = resolve
     })
     const active: ActiveAuthorization = { controller, finish, finished }
-    this.#active.set(pluginId, active)
+    this.#active.set(targetKey, active)
     const onCallerAbort = () => controller.abort(abortError("Plugin service browser authorization was canceled"))
     options.signal?.addEventListener("abort", onCallerAbort, { once: true })
     const timeout = setTimeout(
@@ -235,7 +237,7 @@ export class PluginServiceBrowserAuthorizationBroker {
       const checkpointBinding: PluginServiceAuthorizationCheckpointBinding = {
         cookieNames: request.cookieNames,
         cookieOrigin: request.cookieOrigin,
-        pluginId,
+        ...target,
         serviceIdentity: options.serviceIdentity,
         snapshotDigest: options.snapshotDigest,
       }
@@ -248,7 +250,7 @@ export class PluginServiceBrowserAuthorizationBroker {
           // boundary. Transient I/O failures stay recoverable and fail closed
           // instead of turning a momentary disk error into another login.
           if (!isInvalidPluginServiceAuthorizationCheckpoint(error)) throw error
-          await this.checkpoints.remove(pluginId)
+          await this.checkpoints.remove(target)
         }
       }
       if (checkpoint) {
@@ -261,7 +263,7 @@ export class PluginServiceBrowserAuthorizationBroker {
         }
       }
 
-      browserSession = await this.createSession(pluginId, request)
+      browserSession = await this.createSession(target, request)
       if (controller.signal.aborted) throw abortError("Plugin service browser authorization was canceled")
       await browserSession.waitForConfirmation(controller.signal)
       if (controller.signal.aborted) throw abortError("Plugin service browser authorization was canceled")
@@ -317,26 +319,26 @@ export class PluginServiceBrowserAuthorizationBroker {
       } catch {
         // The non-persistent partition is abandoned even if Electron cleanup fails.
       }
-      if (this.#active.get(pluginId) === active) this.#active.delete(pluginId)
+      if (this.#active.get(targetKey) === active) this.#active.delete(targetKey)
       finish()
     }
   }
 
-  async disposePlugin(pluginId: string) {
-    const active = this.#active.get(pluginId)
+  async disposePlugin(target: PluginServiceTarget) {
+    const active = this.#active.get(pluginServiceTargetKey(target))
     if (!active) return
     active.controller.abort(abortError("Plugin service browser authorization was canceled"))
     await active.finished
   }
 
   /** Removes a captured handoff only after the sidecar made it authoritative. */
-  commitPlugin(pluginId: string) {
-    return this.checkpoints?.remove(pluginId) ?? Promise.resolve()
+  commitPlugin(target: PluginServiceTarget) {
+    return this.checkpoints?.remove(target) ?? Promise.resolve()
   }
 
   /** Explicit cancel/sign-out/update discards any recoverable Cookie handoff. */
-  clearPlugin(pluginId: string) {
-    return this.checkpoints?.remove(pluginId) ?? Promise.resolve()
+  clearPlugin(target: PluginServiceTarget) {
+    return this.checkpoints?.remove(target) ?? Promise.resolve()
   }
 
   async dispose() {

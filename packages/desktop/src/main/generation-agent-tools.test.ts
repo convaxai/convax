@@ -18,6 +18,7 @@ function generationTool(input: Partial<GenerationToolSummary> = {}): GenerationT
     title: "Do not leak this implementation title",
     toolId: "generate.image",
     ...input,
+    serviceId: input.serviceId ?? input.pluginId ?? "image-tools",
   }
 }
 
@@ -164,14 +165,7 @@ describe("generation Agent tool", () => {
     expect(schema.properties.references.description).toContain("text references are never accepted")
     expect(schema.properties.references.description).toContain("first_frame may be used alone")
     expect(schema.properties.references.description).toContain("first_frame plus last_frame")
-    expect(schema.required).toEqual([
-      "anchor",
-      "canvasId",
-      "commandId",
-      "prompt",
-      "promptContextNodeIds",
-      "references",
-    ])
+    expect(schema.required).toEqual(["anchor", "canvasId", "commandId", "prompt", "promptContextNodeIds", "references"])
   })
 
   test("injects the authoritative Agent scope and actor and propagates cancellation context", async () => {

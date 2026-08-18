@@ -7,7 +7,10 @@ import path from "node:path"
 
 import { planPluginCapabilityTopology } from "./plugin-capability-binding-plan"
 import {
+  activePluginPointerSchema,
+  activePluginSetSnapshotSchema,
   ActivePluginSetRevisionConflictError,
+  legacyActivePluginSetSnapshotSchema,
   PluginInstallationSnapshotStore,
   PluginInstallationSnapshotStoreError,
   pluginSnapshotCanonicalDigest,
@@ -33,7 +36,13 @@ function fileIdentity(relativePath: string, contents: string) {
 function activeSet(plugins: readonly { readonly pluginId: string; readonly snapshotDigest: string }[]) {
   const topology = planPluginCapabilityTopology([])
   if (!topology.ok) throw new Error("Empty Plugin capability topology must be valid")
-  return { capabilityTopology: topology.topology, plugins }
+  return {
+    capabilityTopology: topology.topology,
+    plugins: plugins.map((plugin) => ({
+      activationId: digest(`${plugin.pluginId}:${plugin.snapshotDigest}:activation`),
+      ...plugin,
+    })),
+  }
 }
 
 function snapshotInput(
@@ -208,6 +217,14 @@ describe("PluginInstallationSnapshotStore", () => {
         ownedSkills: [{ files: [fileIdentity("README.md", "missing")], name: "missing-skill-file" }],
       }),
     ).rejects.toThrow("SKILL.md")
+    const topology = planPluginCapabilityTopology([])
+    if (!topology.ok) throw new Error("Empty Plugin capability topology must be valid")
+    await expect(
+      store.compareAndSwapActiveSet(0, {
+        capabilityTopology: topology.topology,
+        plugins: [{ pluginId: "alpha", snapshotDigest: setupRequired.digest }],
+      } as never),
+    ).rejects.toThrow("reference")
   })
 
   test("publishes one global pointer with CAS and stable Plugin ordering", async () => {
@@ -236,6 +253,60 @@ describe("PluginInstallationSnapshotStore", () => {
     )
     expect(second.revision).toBe(2)
     expect((await store.readActive()).activeSet?.digest).toBe(second.activeSet?.digest)
+  })
+
+  test("reopens byte-exact v1 ActiveSets and upgrades only through the next explicit CAS", async () => {
+    const { root, store } = await fixture()
+    const alpha = await store.putInstalledSnapshot(snapshotInput("alpha"))
+    const topology = planPluginCapabilityTopology([])
+    if (!topology.ok) throw new Error("Empty Plugin capability topology must be valid")
+    const legacyDescriptor = {
+      capabilityTopology: topology.topology,
+      plugins: [{ pluginId: "alpha", snapshotDigest: alpha.digest }],
+      schema: legacyActivePluginSetSnapshotSchema,
+    }
+    const legacyDigest = pluginSnapshotCanonicalDigest(legacyDescriptor)
+    const legacyBytes = `${pluginSnapshotCanonicalJson(legacyDescriptor)}\n`
+    await fs.writeFile(path.join(root, "active-sets", `${legacyDigest}.json`), legacyBytes, { mode: 0o400 })
+    await fs.writeFile(
+      path.join(root, "active-pointer.json"),
+      `${pluginSnapshotCanonicalJson({
+        activeSetDigest: legacyDigest,
+        revision: 1,
+        schema: activePluginPointerSchema,
+      })}\n`,
+      { mode: 0o600 },
+    )
+
+    const reopened = new PluginInstallationSnapshotStore(root)
+    const legacy = await reopened.readActive()
+    expect(legacy).toMatchObject({
+      activeSet: { descriptor: legacyDescriptor, digest: legacyDigest },
+      revision: 1,
+    })
+    expect(await fs.readFile(path.join(root, "active-sets", `${legacyDigest}.json`), "utf8")).toBe(legacyBytes)
+    await expect(
+      reopened.compareAndSwapActiveSet(0, activeSet([{ pluginId: "alpha", snapshotDigest: alpha.digest }])),
+    ).rejects.toBeInstanceOf(ActivePluginSetRevisionConflictError)
+
+    const pinIdentity = {
+      activeRevision: 1,
+      activeSetDigest: legacyDigest,
+      pluginId: "alpha",
+      snapshotDigest: alpha.digest,
+    }
+    await reopened.pinActivePluginForOwner("generation-binding:legacy", pinIdentity)
+    const pinned = await reopened.acquireOwnerPinLease("generation-binding:legacy", pinIdentity)
+    expect(pinned.activationId).toBeUndefined()
+    pinned.lease.release()
+
+    const current = await reopened.compareAndSwapActiveSet(
+      1,
+      activeSet([{ pluginId: "alpha", snapshotDigest: alpha.digest }]),
+    )
+    expect(current.activeSet?.descriptor.schema).toBe(activePluginSetSnapshotSchema)
+    expect(current.activeSet?.descriptor.plugins[0]).toHaveProperty("activationId")
+    expect(await fs.readFile(path.join(root, "active-sets", `${legacyDigest}.json`), "utf8")).toBe(legacyBytes)
   })
 
   test("refuses to point at a missing or Plugin-id-mismatched snapshot", async () => {
@@ -381,7 +452,9 @@ describe("PluginInstallationSnapshotStore", () => {
 
     const reopened = await new PluginInstallationSnapshotStore(root).readActive()
     expect(reopened.revision).toBe(2)
-    expect(reopened.activeSet?.descriptor.plugins).toEqual([{ pluginId: "bravo", snapshotDigest: bravo.digest }])
+    expect(reopened.activeSet?.descriptor.plugins).toEqual(
+      activeSet([{ pluginId: "bravo", snapshotDigest: bravo.digest }]).plugins,
+    )
   })
 
   test("leases, active references, and owner pins are independent conservative GC roots", async () => {
@@ -524,9 +597,9 @@ describe("PluginInstallationSnapshotStore", () => {
     await expect(store.readInstalledSnapshot(collectable.digest)).rejects.toBeInstanceOf(
       PluginInstallationSnapshotStoreError,
     )
-    expect((await store.readActive()).activeSet?.descriptor.plugins).toEqual([
-      { pluginId: "active", snapshotDigest: active.digest },
-    ])
+    expect((await store.readActive()).activeSet?.descriptor.plugins).toEqual(
+      activeSet([{ pluginId: "active", snapshotDigest: active.digest }]).plugins,
+    )
   })
 
   test("never collects a snapshot while a retained historical ActiveSet still references it", async () => {

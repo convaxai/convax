@@ -15,7 +15,7 @@ import {
   type PortablePluginLocalizedText,
 } from "@convax/plugin-sdk"
 import type { GenerationCanvasRequest } from "../generation-contracts"
-import type { InstalledWebPluginSummary } from "../plugin-contracts"
+import { isSupportedWebPluginManifestSchema, type InstalledWebPluginSummary } from "../plugin-contracts"
 
 export type MediaOperationEditor = "confirmation" | "crop-region" | "immediate" | "time-point" | "time-range"
 
@@ -89,7 +89,9 @@ export function listInstalledMediaOperationActions(
   admittedToolIds?: ReadonlySet<string>,
 ): readonly MediaOperationAction[] {
   return installedPlugins.flatMap((plugin) => {
-    if (plugin.schema !== "convax.plugin/8" || !plugin.hostApi || plugin.runtime?.type !== "mcp-stdio") return []
+    if (!isSupportedWebPluginManifestSchema(plugin.schema) || !plugin.hostApi || plugin.runtime?.type !== "mcp-stdio") {
+      return []
+    }
     const generationTools = plugin.contributes.generation?.tools ?? []
     const actions = plugin.contributes.canvas?.selectionActions ?? []
     return actions.flatMap((action) => {

@@ -1,6 +1,8 @@
-# Convax v8 插件体系分析
+# Convax 插件体系分析
 
-本文只描述当前破坏性切换后的 v8 架构，不是历史兼容说明。规范性边界以
+本文描述当前并存的 `convax.plugin/8` 与 `convax.plugin/9` 架构。v8 保持既有
+单 Service ABI；v9 在同一不可变 companion 上增加多个隔离的 Service profile。
+规范性边界以
 [`architecture.md`](architecture.md)、根目录 `AGENTS.md`、`@convax/plugin-api`
 和 `@convax/plugin-sdk` 的源码与生成产物为准。配套模型见
 [`diagrams/plugin-system.c4`](diagrams/plugin-system.c4)。
@@ -12,11 +14,12 @@ Convax 是一个由声明式贡献驱动、由 Desktop Main 统一授权和编�
 Agent Tool、已验证 Tool、Hook、Canvas node renderer、command、menu、toolbar
 和 host-rendered action，也可以调用 Catalog 中明确声明的 Host API。
 
-当前只有三份运行契约：
+当前运行契约为：
 
 | 契约                         | 唯一所有者           | 责任                                                                |
 | ---------------------------- | -------------------- | ------------------------------------------------------------------- |
 | `convax.plugin/8`            | `@convax/plugin-sdk` | Manifest、贡献、Plugin-to-Plugin export/import、版本范围和值 schema |
+| `convax.plugin/9`            | `@convax/plugin-sdk` | 多 Service profile、共享 companion 及 v9 Manifest 贡献              |
 | `convax.plugin-host/8`       | Desktop Host         | 沙箱 iframe 的固定 MessagePort ABI                                  |
 | `convax.plugin-capability/3` | Desktop Host         | transport 到 Main 的 exact-principal 调用协议                       |
 
@@ -68,7 +71,7 @@ partial success，不能伪装成完整回滚。
 
 安装先验证并发布一个 content-addressed complete closure。闭包包含：
 
-- v8 Plugin package；
+- v8 或 v9 Plugin package；
 - Plugin-owned Skills；
 - 已授权 Hook 的精确私有快照；
 - managed companion 的精确字节和授权绑定；
@@ -108,9 +111,12 @@ operation、immediate consumer、provider 和 historical ActiveSet lease。租�
 ### 2.5 可执行集成只有一个边界
 
 Tool、generation、service 和 generic operation 复用同一 verified sidecar owner。
+v9 的每个 Service 由 `{pluginId, serviceId}` 精确寻址，使用 manifest base args 加
+Service args 启动独立进程，并隔离授权、缓存、取消、长期任务恢复和私有状态。Service
+可以只提供状态或动作；generation 和 LLM 都是各自可选的贡献。
 只有安装时验证并授权的 managed companion 可以启动：
 
-- 命令必须与 v8 Manifest runtime 完全一致；
+- 命令和有效参数必须与对应 Manifest runtime profile 完全一致；
 - Host 从私有 immutable snapshot 启动并重新 fingerprint；
 - 参数不是 shell command；
 - 输入输出在 Host 分配的有界 staging 中；
@@ -205,7 +211,7 @@ boundary/conformance 检查中，防止“文档建议”退化为自觉约定�
 
 | View                      | 说明                                                |
 | ------------------------- | --------------------------------------------------- |
-| `index`                   | 当前 v8 平台总览                                    |
+| `index`                   | 当前 Plugin 平台总览                                |
 | `runtime_contracts`       | 三份 ABI、Catalog 和生成 reference                  |
 | `contribution_planes`     | Skill/MCP/Agent/Tool/UI 贡献如何接入                |
 | `authority_and_execution` | Main Host router、领域服务和 verified sidecar       |

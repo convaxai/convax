@@ -592,12 +592,12 @@ function parseRegistryPackage(value: unknown): RegistryPackage {
     if (manifest.id !== id || manifest.version !== version) {
       throw new TypeError("Plugin manifest identity must match its Registry entry")
     }
-    const historicalSchema =
-      typeof manifest.schema === "string" && /^convax\.plugin\/[1-7]$/.test(manifest.schema)
-    if (manifest.schema !== "convax.plugin/8" && !historicalSchema) {
+    const historicalSchema = typeof manifest.schema === "string" && /^convax\.plugin\/[1-7]$/.test(manifest.schema)
+    const currentSchema = manifest.schema === "convax.plugin/8" || manifest.schema === "convax.plugin/9"
+    if (!currentSchema && !historicalSchema) {
       throw new TypeError("Plugin manifest schema is unsupported")
     }
-    if (!historicalSchema) {
+    if (currentSchema) {
       const hostApi = record(manifest.hostApi, "Plugin manifest hostApi")
       strictKeys(
         hostApi,

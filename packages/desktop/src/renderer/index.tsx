@@ -60,6 +60,7 @@ import {
   type ActiveInstalledWebPluginSummary,
   type WebPluginManifest,
 } from "../plugin-contracts"
+import { pluginServiceTargetKey } from "../plugin-service-contracts"
 import { AgentPanel, type AgentPanelHandle } from "./agent-panel"
 import { AgentDrawerTrigger } from "./agent-drawer-header"
 import { AgentGenerationPreferenceProvider } from "./agent-generation-preference"
@@ -506,24 +507,41 @@ function App() {
     serviceCatalogController.getSnapshot,
   )
   const agentModelCatalog = serviceCatalogAgentModelsForScope(serviceCatalogSnapshot, activeProjectId)
-  const generationPlugins = installedPlugins.flatMap((plugin) =>
-    plugin.contributes.generation
+  const generationPlugins = installedPlugins.flatMap((plugin) => [
+    ...(plugin.contributes.generation
       ? [
           {
             id: plugin.id,
             generation: plugin.contributes.generation,
             runtime: plugin.runtime,
+            serviceId: plugin.id,
             version: plugin.version,
           },
         ]
-      : [],
-  )
+      : []),
+    ...("services" in plugin.contributes
+      ? (plugin.contributes.services ?? []).flatMap((service) =>
+          service.generation
+            ? [
+                {
+                  id: plugin.id,
+                  generation: service.generation,
+                  runtime: plugin.runtime,
+                  serviceId: service.id,
+                  serviceRuntime: service.runtime,
+                  version: plugin.version,
+                },
+              ]
+            : [],
+        )
+      : []),
+  ])
   const generationToolCatalogVersion = JSON.stringify([
     modelCatalogEpoch,
     generationPlugins,
     serviceGenerationAvailabilityVersion(
       serviceCatalogSnapshot,
-      generationPlugins.map((plugin) => plugin.id),
+      generationPlugins.map((plugin) => ({ pluginId: plugin.id, serviceId: plugin.serviceId })),
     ),
   ])
   generationToolCatalogVersionRef.current = generationToolCatalogVersion
@@ -1056,7 +1074,7 @@ function App() {
           id: tool.id,
           ...(tool.modelName ? { modelName: tool.modelName } : {}),
           output: tool.output,
-          serviceId: tool.pluginId,
+          serviceId: pluginServiceTargetKey({ pluginId: tool.pluginId, serviceId: tool.serviceId }),
           serviceName: tool.pluginName,
           title: tool.title,
         }))
@@ -1084,7 +1102,7 @@ function App() {
           id: tool.id,
           ...(tool.modelName ? { modelName: tool.modelName } : {}),
           output: tool.output,
-          serviceId: tool.pluginId,
+          serviceId: pluginServiceTargetKey({ pluginId: tool.pluginId, serviceId: tool.serviceId }),
           serviceName: tool.pluginName,
           title: tool.title,
         }))
@@ -2656,8 +2674,8 @@ function App() {
                 onClose={() => setDesktopSurface(closeDesktopSettings)}
                 onLanguageChange={changeLanguage}
                 onRefreshServices={() => void serviceCatalogController.refresh()}
-                onServiceAction={(pluginId, action) => void serviceCatalogController.perform(pluginId, action)}
-                onServiceCheckout={(pluginId, planKey) => void serviceCatalogController.checkout(pluginId, planKey)}
+                onServiceAction={(target, action) => void serviceCatalogController.perform(target, action)}
+                onServiceCheckout={(target, planKey) => void serviceCatalogController.checkout(target, planKey)}
                 onUsePluginOnCanvas={usePluginOnCanvas}
                 onUsePluginInAgent={usePluginInAgent}
                 petClient={window.convax.pets}

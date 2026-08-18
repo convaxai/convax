@@ -43,6 +43,9 @@ const connected: PluginServiceStatus = {
   usage: { availability: "unavailable" },
 }
 
+const creativeTarget = { pluginId: "creative-service", serviceId: "creative-service" }
+const unrelatedTarget = { pluginId: "unrelated-service", serviceId: "unrelated-service" }
+
 function pluginClient(): PluginServiceClient {
   return {
     authorize: mock(async () => connected),
@@ -55,12 +58,14 @@ function pluginClient(): PluginServiceClient {
           actions: ["reauthorize", "sign_out"],
           capabilities: ["image", "video"],
           description: "Creative generation",
+          llmProviderIds: [],
           models: [
             { capability: "image", id: "seedream", name: "Seedream" },
             { capability: "video", id: "seedance", name: "Seedance" },
           ],
           pluginId: "creative-service",
           pluginName: "Creative Service",
+          serviceId: "creative-service",
           version: "1.0.0",
         },
       ],
@@ -83,6 +88,7 @@ describe("ServiceCatalogController", () => {
       output: "image",
       pluginId: "creative-service",
       pluginName: "Creative Service",
+      serviceId: "creative-service",
       title: name,
       toolId: "generate.image",
     })
@@ -201,14 +207,14 @@ describe("ServiceCatalogController", () => {
       services: ready.services.map((service) => (service.kind === "plugin" ? { ...service, loading: true } : service)),
     }
 
-    expect(serviceGenerationAvailabilityVersion(loading, ["creative-service"])).toBe(
-      serviceGenerationAvailabilityVersion(ready, ["creative-service"]),
+    expect(serviceGenerationAvailabilityVersion(loading, [creativeTarget])).toBe(
+      serviceGenerationAvailabilityVersion(ready, [creativeTarget]),
     )
-    expect(serviceGenerationAvailabilityVersion(loading, ["unrelated-service"])).toBe(
-      serviceGenerationAvailabilityVersion(ready, ["unrelated-service"]),
+    expect(serviceGenerationAvailabilityVersion(loading, [unrelatedTarget])).toBe(
+      serviceGenerationAvailabilityVersion(ready, [unrelatedTarget]),
     )
-    expect(serviceGenerationAvailabilityVersion({ ...ready, loading: true }, ["unrelated-service"])).toBe(
-      serviceGenerationAvailabilityVersion(ready, ["unrelated-service"]),
+    expect(serviceGenerationAvailabilityVersion({ ...ready, loading: true }, [unrelatedTarget])).toBe(
+      serviceGenerationAvailabilityVersion(ready, [unrelatedTarget]),
     )
     for (const state of ["disconnected", "attention"] as const) {
       const settled = {
@@ -217,10 +223,38 @@ describe("ServiceCatalogController", () => {
           service.kind === "plugin" ? { ...service, loading: false, state } : service,
         ),
       }
-      expect(serviceGenerationAvailabilityVersion(settled, ["creative-service"])).not.toBe(
-        serviceGenerationAvailabilityVersion(ready, ["creative-service"]),
+      expect(serviceGenerationAvailabilityVersion(settled, [creativeTarget])).not.toBe(
+        serviceGenerationAvailabilityVersion(ready, [creativeTarget]),
       )
     }
+    const siblingTarget = { pluginId: "creative-service", serviceId: "video-generation" }
+    const pluginService = ready.services.find((service) => service.kind === "plugin")
+    if (!pluginService) throw new Error("Missing Plugin service")
+    const withSibling = {
+      ...ready,
+      services: [
+        ...ready.services,
+        {
+          ...pluginService,
+          serviceId: "plugin:creative-service/video-generation",
+          target: siblingTarget,
+        },
+      ],
+    }
+    const changedSibling = {
+      ...withSibling,
+      services: withSibling.services.map((service) =>
+        service.kind === "plugin" && service.target.serviceId === siblingTarget.serviceId
+          ? { ...service, state: "disconnected" as const }
+          : service,
+      ),
+    }
+    expect(serviceGenerationAvailabilityVersion(changedSibling, [creativeTarget])).toBe(
+      serviceGenerationAvailabilityVersion(withSibling, [creativeTarget]),
+    )
+    expect(serviceGenerationAvailabilityVersion(changedSibling, [siblingTarget])).not.toBe(
+      serviceGenerationAvailabilityVersion(withSibling, [siblingTarget]),
+    )
     controller.dispose()
   })
 
@@ -233,7 +267,7 @@ describe("ServiceCatalogController", () => {
     controller.setScopeId("project-a")
     controller.start()
     await controller.refresh()
-    const readyVersion = serviceGenerationAvailabilityVersion(controller.getSnapshot(), ["creative-service"])
+    const readyVersion = serviceGenerationAvailabilityVersion(controller.getSnapshot(), [creativeTarget])
     const pendingList = deferred<readonly PluginServiceSummary[]>()
     const pendingStatus = deferred<PluginServiceStatus>()
     client.listServices = mock(() => pendingList.promise)
@@ -242,7 +276,7 @@ describe("ServiceCatalogController", () => {
     const refresh = controller.refresh()
     await Promise.resolve()
     expect(controller.getSnapshot().loading).toBe(true)
-    expect(serviceGenerationAvailabilityVersion(controller.getSnapshot(), ["creative-service"])).toBe(readyVersion)
+    expect(serviceGenerationAvailabilityVersion(controller.getSnapshot(), [creativeTarget])).toBe(readyVersion)
 
     pendingList.resolve(summaries)
     await Promise.resolve()
@@ -251,7 +285,7 @@ describe("ServiceCatalogController", () => {
       loading: false,
       state: "connected",
     })
-    expect(serviceGenerationAvailabilityVersion(controller.getSnapshot(), ["creative-service"])).toBe(readyVersion)
+    expect(serviceGenerationAvailabilityVersion(controller.getSnapshot(), [creativeTarget])).toBe(readyVersion)
 
     pendingStatus.resolve({ ...connected, state: "disconnected" })
     await refresh
@@ -259,7 +293,7 @@ describe("ServiceCatalogController", () => {
       loading: false,
       state: "disconnected",
     })
-    expect(serviceGenerationAvailabilityVersion(controller.getSnapshot(), ["creative-service"])).not.toBe(readyVersion)
+    expect(serviceGenerationAvailabilityVersion(controller.getSnapshot(), [creativeTarget])).not.toBe(readyVersion)
     controller.dispose()
   })
 
@@ -590,9 +624,11 @@ describe("ServiceCatalogController", () => {
             actions: ["reauthorize", "sign_out"],
             capabilities: ["llm"],
             description: "OpenRouter through Convax",
+            llmProviderIds: ["plugin-nexus-service-openrouter"],
             models: [{ capability: "llm", id: "fallback", name: "Fallback" }],
             pluginId: "nexus-service",
             pluginName: "Convax",
+            serviceId: "nexus-service",
             version: "0.2.0",
           },
         ],
@@ -644,6 +680,105 @@ describe("ServiceCatalogController", () => {
       ],
       name: "Convax",
     })
+    controller.dispose()
+  })
+
+  test("joins sibling generation and LLM models by exact ServiceRef and provider ids", async () => {
+    const summaries: readonly PluginServiceSummary[] = [
+      {
+        actions: [],
+        capabilities: ["llm", "image"],
+        description: "小云雀",
+        llmProviderIds: ["plugin-shortdrama-xiaoyunque-openrouter"],
+        models: [],
+        pluginId: "shortdrama",
+        pluginName: "小云雀",
+        serviceId: "xiaoyunque",
+        version: "0.2.0",
+      },
+      {
+        actions: [],
+        capabilities: ["llm", "image"],
+        description: "LibTV",
+        llmProviderIds: ["plugin-shortdrama-libtv-openrouter"],
+        models: [],
+        pluginId: "shortdrama",
+        pluginName: "LibTV",
+        serviceId: "libtv",
+        version: "0.2.0",
+      },
+    ]
+    const generationTools: readonly GenerationToolSummary[] = summaries.map((summary) => ({
+      acceptedInputs: ["text"],
+      description: `${summary.pluginName} image`,
+      id: `${summary.pluginId}/${summary.serviceId}/image`,
+      kind: "model",
+      modelName: `${summary.pluginName} Image`,
+      output: "image",
+      pluginId: summary.pluginId,
+      pluginName: summary.pluginName,
+      serviceId: summary.serviceId,
+      title: `${summary.pluginName} Image`,
+      toolId: "image",
+    }))
+    const controller = new ServiceCatalogController(
+      { ...pluginClient(), listServices: mock(async () => summaries) },
+      {
+        listModels: mock(async () => ({
+          providers: [
+            {
+              connected: true,
+              models: [{ default: false, modelId: "xyq-chat", modelName: "小云雀 Chat" }],
+              providerId: "plugin-shortdrama-xiaoyunque-openrouter",
+              providerName: "小云雀",
+            },
+            {
+              connected: true,
+              models: [{ default: false, modelId: "libtv-chat", modelName: "LibTV Chat" }],
+              providerId: "plugin-shortdrama-libtv-openrouter",
+              providerName: "LibTV",
+            },
+            {
+              connected: true,
+              models: [{ default: false, modelId: "shadow", modelName: "Must not prefix-match" }],
+              providerId: "plugin-shortdrama-xiaoyunque-openrouter-shadow",
+              providerName: "Unbound",
+            },
+          ],
+        })),
+      },
+      {
+        generationCatalog: {
+          getSnapshot: () => ({ loading: false, ready: true, refreshing: false, tools: generationTools }),
+          refresh: mock(async () => generationTools),
+          subscribe: mock(() => () => undefined),
+        },
+      },
+    )
+    controller.setScopeId("project-a")
+    controller.start()
+    await controller.refresh()
+
+    const [, xiaoyunque, libtv] = controller.getSnapshot().services
+    expect(xiaoyunque).toMatchObject({
+      models: [
+        { capability: "llm", default: false, id: "xyq-chat", name: "小云雀 Chat" },
+        { capability: "image", id: "shortdrama/xiaoyunque/image", name: "小云雀 Image" },
+      ],
+      serviceId: "plugin:shortdrama/xiaoyunque",
+      target: { pluginId: "shortdrama", serviceId: "xiaoyunque" },
+    })
+    expect(libtv).toMatchObject({
+      models: [
+        { capability: "llm", default: false, id: "libtv-chat", name: "LibTV Chat" },
+        { capability: "image", id: "shortdrama/libtv/image", name: "LibTV Image" },
+      ],
+      serviceId: "plugin:shortdrama/libtv",
+      target: { pluginId: "shortdrama", serviceId: "libtv" },
+    })
+    expect(controller.getSnapshot().services.flatMap(({ models }) => models.map(({ name }) => name))).not.toContain(
+      "Must not prefix-match",
+    )
     controller.dispose()
   })
 

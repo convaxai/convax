@@ -19,6 +19,7 @@ import { Window } from "happy-dom"
 import { act } from "react"
 import { createRoot, type Root } from "react-dom/client"
 import { renderToStaticMarkup } from "react-dom/server"
+import { pluginServiceTargetKey } from "../plugin-service-contracts"
 import {
   CanvasCardConversationPanel,
   CanvasCardGenerationCatalogRequestTracker,
@@ -158,6 +159,20 @@ describe("Canvas card generation output", () => {
     expect(grouped.map(({ id, name, models }) => ({ id, name, models: models.map(({ tool }) => tool.id) }))).toEqual([
       { id: "first", models: ["first/image", "first/image-2"], name: "First Service" },
       { id: "second", models: ["second/image"], name: "Second Service" },
+    ])
+  })
+
+  test("keeps equal local Service ids from different Plugins in separate groups", () => {
+    const firstService = pluginServiceTargetKey({ pluginId: "first-plugin", serviceId: "shared-service" })
+    const secondService = pluginServiceTargetKey({ pluginId: "second-plugin", serviceId: "shared-service" })
+    const grouped = groupCanvasCardGenerationToolsByService([
+      tool({ id: "first/image", serviceId: firstService, serviceName: "First Service" }),
+      tool({ id: "second/image", serviceId: secondService, serviceName: "Second Service" }),
+    ])
+
+    expect(grouped.map(({ id, models }) => ({ id, models: models.map(({ tool }) => tool.id) }))).toEqual([
+      { id: firstService, models: ["first/image"] },
+      { id: secondService, models: ["second/image"] },
     ])
   })
 

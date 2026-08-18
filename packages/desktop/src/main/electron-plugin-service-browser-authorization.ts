@@ -4,6 +4,7 @@ import { join } from "node:path"
 import { BrowserWindow, session } from "electron"
 
 import { pluginServiceBrowserAuthorizationVisualReadyChannel } from "../plugin-service-browser-authorization-bridge"
+import type { PluginServiceTarget } from "../plugin-service-contracts"
 import {
   PluginServiceBrowserAuthorizationBroker,
   type PluginServiceBrowserAuthorizationRequest,
@@ -87,7 +88,7 @@ const authorizationLoadingPage = `data:text/html;charset=UTF-8,${encodeURICompon
 </html>`)}\n`
 
 export async function createElectronAuthorizationSession(
-  _pluginId: string,
+  _target: PluginServiceTarget,
   request: PluginServiceBrowserAuthorizationRequest,
 ): Promise<PluginServiceBrowserAuthorizationSession> {
   // A partition without the persist: prefix is in-memory and cannot reuse the

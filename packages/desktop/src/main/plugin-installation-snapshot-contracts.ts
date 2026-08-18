@@ -4,7 +4,8 @@ import { requireWebPluginId, requireWebPluginRelativePath } from "../plugin-cont
 import { pluginCapabilityTopologySchema, type PluginCapabilityTopology } from "./plugin-capability-binding-plan"
 
 export const installedPluginSnapshotSchema = "convax.installed-plugin-snapshot/1" as const
-export const activePluginSetSnapshotSchema = "convax.active-plugin-set-snapshot/1" as const
+export const legacyActivePluginSetSnapshotSchema = "convax.active-plugin-set-snapshot/1" as const
+export const activePluginSetSnapshotSchema = "convax.active-plugin-set-snapshot/2" as const
 export const activePluginPointerSchema = "convax.active-plugin-pointer/1" as const
 export const pluginSnapshotOwnerPinsSchema = "convax.plugin-snapshot-owner-pins/1" as const
 
@@ -90,6 +91,13 @@ export interface InstalledPluginSnapshot {
 }
 
 export interface ActivePluginSnapshotReference {
+  /** Random per-install incarnation carried atomically by the ActiveSet CAS. */
+  readonly activationId: PluginSnapshotDigest
+  readonly pluginId: string
+  readonly snapshotDigest: PluginSnapshotDigest
+}
+
+export interface LegacyActivePluginSnapshotReference {
   readonly pluginId: string
   readonly snapshotDigest: PluginSnapshotDigest
 }
@@ -100,8 +108,14 @@ export interface ActivePluginSetSnapshotDescriptor {
   readonly schema: typeof activePluginSetSnapshotSchema
 }
 
+export interface LegacyActivePluginSetSnapshotDescriptor {
+  readonly capabilityTopology: PluginCapabilityTopology
+  readonly plugins: readonly LegacyActivePluginSnapshotReference[]
+  readonly schema: typeof legacyActivePluginSetSnapshotSchema
+}
+
 export interface ActivePluginSetSnapshot {
-  readonly descriptor: ActivePluginSetSnapshotDescriptor
+  readonly descriptor: ActivePluginSetSnapshotDescriptor | LegacyActivePluginSetSnapshotDescriptor
   readonly digest: PluginSnapshotDigest
 }
 
@@ -131,8 +145,14 @@ export interface PluginSnapshotLease {
 }
 
 export interface PluginSnapshotOwnerPinLease {
+  readonly activationId?: PluginSnapshotDigest
   readonly lease: PluginSnapshotLease
   readonly pin: PluginSnapshotOwnerPin
+}
+
+export interface PluginSnapshotReferenceLease {
+  readonly activationId?: PluginSnapshotDigest
+  readonly lease: PluginSnapshotLease
 }
 
 export interface PluginSnapshotGarbageCollectionEligibility {
@@ -477,13 +497,17 @@ export function normalizeInstalledDescriptor(value: unknown, persisted: boolean)
   }
 }
 
-function normalizeActiveReferences(value: unknown) {
+function normalizeActiveReferences(value: unknown, legacy: boolean) {
   if (!Array.isArray(value) || value.length > maximumActivePlugins) {
     throw snapshotError(`Active Plugin set must contain at most ${maximumActivePlugins} Plugins`)
   }
-  const plugins = value.map((raw, index): ActivePluginSnapshotReference => {
+  const plugins = value.map((raw, index): ActivePluginSnapshotReference | LegacyActivePluginSnapshotReference => {
     const input = strictRecord(raw, `Active Plugin reference ${index + 1}`)
-    requireExactKeys(input, ["pluginId", "snapshotDigest"], `Active Plugin reference ${index + 1}`)
+    requireExactKeys(
+      input,
+      legacy ? ["pluginId", "snapshotDigest"] : ["activationId", "pluginId", "snapshotDigest"],
+      `Active Plugin reference ${index + 1}`,
+    )
     let pluginId: string
     try {
       pluginId = requireWebPluginId(input.pluginId)
@@ -491,6 +515,11 @@ function normalizeActiveReferences(value: unknown) {
       throw snapshotError(`Active Plugin reference ${index + 1} has an invalid Plugin id`, error)
     }
     return {
+      ...(legacy
+        ? {}
+        : {
+            activationId: requireDigest(input.activationId, `Active Plugin reference ${index + 1} activation id`),
+          }),
       pluginId,
       snapshotDigest: requireDigest(input.snapshotDigest, `Active Plugin reference ${index + 1} digest`),
     }
@@ -502,19 +531,40 @@ function normalizeActiveReferences(value: unknown) {
   return plugins
 }
 
-export function normalizeActiveSetDescriptor(value: unknown, persisted: boolean): ActivePluginSetSnapshotDescriptor {
+export function normalizeActiveSetDescriptor(value: unknown, persisted: false): ActivePluginSetSnapshotDescriptor
+export function normalizeActiveSetDescriptor(
+  value: unknown,
+  persisted: true,
+): ActivePluginSetSnapshotDescriptor | LegacyActivePluginSetSnapshotDescriptor
+export function normalizeActiveSetDescriptor(
+  value: unknown,
+  persisted: boolean,
+): ActivePluginSetSnapshotDescriptor | LegacyActivePluginSetSnapshotDescriptor {
   const input = strictRecord(value, "Active Plugin set snapshot")
   requireExactKeys(
     input,
     persisted ? ["capabilityTopology", "plugins", "schema"] : ["capabilityTopology", "plugins"],
     "Active Plugin set snapshot",
   )
-  if (persisted && input.schema !== activePluginSetSnapshotSchema) {
+  if (
+    persisted &&
+    input.schema !== activePluginSetSnapshotSchema &&
+    input.schema !== legacyActivePluginSetSnapshotSchema
+  ) {
     throw snapshotError("Active Plugin set snapshot schema is unsupported")
   }
+  const legacy = persisted && input.schema === legacyActivePluginSetSnapshotSchema
+  const capabilityTopology = normalizeCapabilityTopology(input.capabilityTopology)
+  if (legacy) {
+    return {
+      capabilityTopology,
+      plugins: normalizeActiveReferences(input.plugins, true) as LegacyActivePluginSnapshotReference[],
+      schema: legacyActivePluginSetSnapshotSchema,
+    }
+  }
   return {
-    capabilityTopology: normalizeCapabilityTopology(input.capabilityTopology),
-    plugins: normalizeActiveReferences(input.plugins),
+    capabilityTopology,
+    plugins: normalizeActiveReferences(input.plugins, false) as ActivePluginSnapshotReference[],
     schema: activePluginSetSnapshotSchema,
   }
 }

@@ -218,7 +218,14 @@ substitute.
 
 ## Required `convax-plugins` migration contract
 
-Before a `convax.plugin/8` bundle is published, `convax-plugins` must independently:
+Publishing `convax.plugin/9` does not retire or reinterpret
+`convax.plugin/8`. A v8 bundle continues to use the closed singleton-Service
+contract; a v9 bundle must lock an SDK release that exports the v9 parser and types.
+The manifest choice alone does not require a new Plugin API Catalog release or Web
+transport version.
+
+Before a `convax.plugin/8` or `convax.plugin/9` bundle is published,
+`convax-plugins` must independently:
 
 1. install from a committed frozen lockfile without lifecycle scripts and reject
    Git/file/workspace dependency sources for `@convax/plugin-sdk` and

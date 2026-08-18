@@ -167,7 +167,7 @@ test("quarantining a real legacy ActiveSet leaves its pointer, descriptors, and 
     if (!topology.ok) throw new Error("Expected an empty Plugin capability topology")
     const published = await snapshotStore.compareAndSwapActiveSet(0, {
       capabilityTopology: topology.topology,
-      plugins: [{ pluginId: "legacy", snapshotDigest: snapshot.digest }],
+      plugins: [{ activationId: sha256("legacy activation"), pluginId: "legacy", snapshotDigest: snapshot.digest }],
     })
     if (!published.activeSet) throw new Error("Expected a published legacy ActiveSet")
 

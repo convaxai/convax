@@ -174,6 +174,45 @@ describe("@convax/marketplace strict contracts", () => {
       schema: "convax.plugin/8",
       hostApi: { major: 3, required: [], optional: [] },
     })
+    const currentV9Packages = registry.packages.map((entry) =>
+      "manifest" in entry
+        ? {
+            ...entry,
+            manifest: {
+              ...entry.manifest,
+              schema: "convax.plugin/9",
+            },
+          }
+        : entry,
+    )
+    expect(
+      parseRegistryV2({
+        ...registry,
+        revision: sha256Hex(canonicalJson(currentV9Packages)),
+        packages: currentV9Packages,
+      }).packages[0]?.manifest,
+    ).toMatchObject({
+      schema: "convax.plugin/9",
+      hostApi: { major: 3, required: [], optional: [] },
+    })
+    const retiredV9HostApiPackages = currentV9Packages.map((entry) =>
+      "manifest" in entry
+        ? {
+            ...entry,
+            manifest: {
+              ...entry.manifest,
+              hostApi: { major: 2, required: [], optional: [] },
+            },
+          }
+        : entry,
+    )
+    expect(() =>
+      parseRegistryV2({
+        ...registry,
+        revision: sha256Hex(canonicalJson(retiredV9HostApiPackages)),
+        packages: retiredV9HostApiPackages,
+      }),
+    ).toThrow("major must be 3")
     const futureMinorPackages = registry.packages.map((entry) =>
       "manifest" in entry
         ? {

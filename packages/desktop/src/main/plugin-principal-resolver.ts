@@ -9,7 +9,7 @@ import type {
   PluginPrincipal,
   ResolvedPluginPrincipal,
 } from "../plugin-capability-contracts"
-import { pluginManifestSchemaV8, type InstalledPlugin } from "../plugin-api"
+import { isSupportedPluginManifestSchema, type InstalledPlugin } from "../plugin-api"
 import type { PluginPrincipalResolver } from "./plugin-canvas-capability-service"
 
 export interface InstalledPluginCapabilityIdentity {
@@ -53,7 +53,7 @@ function requiredHostApiFailure(
   plugin: InstalledPlugin,
   runtime: PluginCapabilityRuntimeKind,
 ): { id: string; reason: string } | undefined {
-  if (plugin.schema !== pluginManifestSchemaV8) return undefined
+  if (!isSupportedPluginManifestSchema(plugin.schema)) return undefined
   for (const id of plugin.hostApi.required) {
     const availability = evaluatePluginApiAvailability(id, plugin.hostApi, {
       audience: runtimeAudience(runtime),
@@ -82,11 +82,11 @@ export class InstalledPluginPrincipalResolver implements PluginPrincipalResolver
       throw new Error(`Plugin capability runtime is unsupported: ${String(runtime)}`)
     }
     const identity = await this.plugins.resolveCapabilityIdentity(pluginId)
-    if (!identity || identity.plugin.schema !== pluginManifestSchemaV8) {
+    if (!identity || !isSupportedPluginManifestSchema(identity.plugin.schema)) {
       throw new Error(`Plugin does not expose the capability API: ${pluginId}`)
     }
     if (!hasActiveSnapshotIdentity(identity)) {
-      throw new Error(`Plugin v8 identity is not bound to an active immutable snapshot: ${pluginId}`)
+      throw new Error(`Plugin identity is not bound to an active immutable snapshot: ${pluginId}`)
     }
     if (expected && JSON.stringify(identity.plugin) !== JSON.stringify(expected)) {
       throw new Error(`Plugin changed before its capability principal was issued: ${pluginId}`)
@@ -99,9 +99,7 @@ export class InstalledPluginPrincipalResolver implements PluginPrincipalResolver
     }
     const hostApiFailure = requiredHostApiFailure(identity.plugin, runtime)
     if (hostApiFailure) {
-      throw new Error(
-        `Plugin requires unavailable Host API ${hostApiFailure.id}: ${hostApiFailure.reason}`,
-      )
+      throw new Error(`Plugin requires unavailable Host API ${hostApiFailure.id}: ${hostApiFailure.reason}`)
     }
     return Object.freeze({
       activeRevision: identity.activeRevision,
@@ -118,7 +116,7 @@ export class InstalledPluginPrincipalResolver implements PluginPrincipalResolver
     const identity = await this.plugins.resolveCapabilityIdentity(principal.pluginId)
     if (
       !identity ||
-      identity.plugin.schema !== pluginManifestSchemaV8 ||
+      !isSupportedPluginManifestSchema(identity.plugin.schema) ||
       !hasActiveSnapshotIdentity(identity) ||
       identity.plugin.id !== principal.pluginId ||
       identity.plugin.version !== principal.pluginVersion ||

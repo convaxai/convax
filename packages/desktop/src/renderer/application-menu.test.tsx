@@ -31,6 +31,7 @@ const services: ServiceCatalogSnapshot = {
       pluginId: "xiaoyunque-generation",
       serviceId: "plugin:xiaoyunque-generation",
       state: "disconnected",
+      target: { pluginId: "xiaoyunque-generation", serviceId: "xiaoyunque-generation" },
       version: "1.0.0",
     },
   ],

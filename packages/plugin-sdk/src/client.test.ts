@@ -411,6 +411,29 @@ describe("createPluginHostClient", () => {
     ).toThrow("requires an entry and required host.context.get")
   })
 
+  test("accepts a convax.plugin/9 Web manifest on the unchanged host/8 transport", () => {
+    const port = new FakePort()
+    const client = createPluginHostClient({
+      manifest: {
+        capabilities: ["canvas.node.read"],
+        contributes: { canvas: { renderer: { create: true } } },
+        description: "V9 Web Plugin",
+        entry: "web/index.html",
+        hostApi: { major: 3, optional: [], required: ["host.context.get"] },
+        id: "v9-web-plugin",
+        name: "V9 Web Plugin",
+        schema: "convax.plugin/9",
+        version: "1.0.0",
+      },
+      port,
+      requestIdPrefix: "v9-web",
+    })
+
+    expect(client.closed).toBeFalse()
+    client.close()
+    expect(port.sent[0]).toEqual({ protocol: pluginHostProtocolV8, type: "disconnect" })
+  })
+
   test("keeps Catalog Host calls orthogonal to P2P availability and invoke envelopes", async () => {
     const port = new FakePort()
     const client = createPluginHostClient({ manifest, port, requestIdPrefix: "test" })

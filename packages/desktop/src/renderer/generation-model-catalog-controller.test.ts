@@ -49,6 +49,7 @@ function tool(id: string, output: GenerationOutputModality = "image"): Generatio
     output,
     pluginId: "creative-service",
     pluginName: "Creative Service",
+    serviceId: "creative-service",
     title: id,
     toolId: "generate",
   }
