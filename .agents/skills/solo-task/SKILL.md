@@ -44,7 +44,8 @@ python3 .agents/skills/solo-task/scripts/prepare_worktree.py \
 
 The helper must:
 
-- fetch `origin` and resolve its default branch instead of assuming `main` or `master`;
+- resolve the default branch from `origin`'s current advertisement instead of trusting a cached `origin/HEAD` or assuming `main` or `master`;
+- fetch that exact `origin` branch before creating anything, resolve its fetched tip to an immutable commit, and create the worktree from that commit;
 - create a unique branch and worktree without switching the invoking checkout;
 - place the default worktree outside the repository under its parent's `.worktrees/<repo>` directory;
 - refuse existing branches and paths rather than taking them over;
@@ -52,7 +53,7 @@ The helper must:
 - exclude Git metadata, dependency trees, nested worktrees, and build caches;
 - record a private session manifest under the new worktree's Git administrative directory;
 - roll back the just-created branch and worktree when environment copying or manifest creation fails;
-- print bounded JSON containing the session id, branch, base, path, label, and copied environment filenames.
+- print bounded JSON containing the session id, branch, base ref, base commit, path, label, and copied environment filenames.
 
 After creation, run every read, edit, build, test, Git, and launch command with the returned worktree as its working directory. Do not return to the invoking checkout for task changes.
 

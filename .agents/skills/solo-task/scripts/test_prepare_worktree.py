@@ -50,6 +50,23 @@ def main() -> int:
         git(source, "remote", "add", "origin", str(remote))
         git(source, "push", "-u", "origin", "main")
         git(source, "remote", "set-head", "origin", "main")
+
+        # Keep the source checkout stale and give it a misleading cached
+        # origin/HEAD. Preparation must trust the default branch advertised by
+        # the remote, fetch that exact branch, and use its newly fetched tip.
+        git(source, "branch", "legacy")
+        git(source, "push", "origin", "legacy")
+        git(source, "remote", "set-head", "origin", "legacy")
+        updater = root / "updater"
+        git(root, "clone", str(remote), str(updater))
+        git(updater, "config", "user.name", "Solo Task Updater")
+        git(updater, "config", "user.email", "solo-task-updater@example.invalid")
+        (updater / "remote-latest.txt").write_text("latest\n", encoding="utf-8")
+        git(updater, "add", "remote-latest.txt")
+        git(updater, "commit", "-m", "remote latest")
+        remote_latest = run("git", "rev-parse", "HEAD", cwd=updater).stdout.strip()
+        git(updater, "push", "origin", "main")
+
         (source / ".env.local").write_text("SECRET=not-printed\n", encoding="utf-8")
         nested = source / "apps" / "demo"
         nested.mkdir(parents=True)
@@ -84,6 +101,9 @@ def main() -> int:
         assert output["base"] == "origin/main"
         assert output["branch"] == "feat/example-feature-abc123"
         assert output["copiedEnvFiles"] == [".env.local", "apps/demo/.env.test"]
+        assert output["baseCommit"] == remote_latest
+        assert run("git", "rev-parse", "HEAD", cwd=target).stdout.strip() == remote_latest
+        assert (target / "remote-latest.txt").read_text(encoding="utf-8") == "latest\n"
         assert (target / ".env.local").read_text(encoding="utf-8") == "SECRET=not-printed\n"
         assert (target / "apps" / "demo" / ".env.test").read_text(encoding="utf-8") == "NESTED=true\n"
         assert not (target / "node_modules").exists()
