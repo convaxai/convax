@@ -1,7 +1,8 @@
 # Convax × AuthX × Nexus 集成契约
 
 状态：当前目标架构与跨仓实施契约。AuthX、Nexus 和 Convax 的本地改动必须遵守本文；本次管理员绑定
-流程尚未发布到生产，生产启用必须在 Nexus 数据库迁移和两端发布完成后重新验收。
+流程与 Application identity cutover 尚未发布到生产，生产启用必须在 AuthX、Nexus 和 Convax plugin
+同窗口发布后重新验收。本文中的确定性 Project ID 只是 bootstrap target，不证明远端资源已经存在。
 
 本文取代旧的 `convax-default` 自动产品模板、AuthX 后台自动创建 Nexus Application、Nexus Hosted
 Auth、Hosted Product Session、Data Token 和第二份 Nexus Token 方案。
@@ -33,6 +34,30 @@ Auth、Hosted Product Session、Data Token 和第二份 Nexus Token 方案。
 `authx_integration_id` 是跨服务唯一键。它永久映射同一个 Nexus Application。Workspace、Plan、
 Provider、TTL 与 Checkout policy 在首次绑定后不可变；需要迁移产品配置时必须走独立、显式、可审计的
 Nexus 管理流程，而不是重放 Enable。
+
+### Application identity 与租户边界
+
+Convax Application 保留现有 AuthX Project
+`project_OKnlkG5kU1lNrOqJs0GFTu4JM2SwNkHz`，其
+`ProjectApplicationPolicy.tenantModel = NONE`。Nexus Console 使用独立的 planned Project
+`project_8CTrOpIkozdhK7EkndKbR210ZU1NUYvW`，其
+`tenantModel = BOUND_ORGANIZATION`。两个 Project 必须始终不同，不能重新共用 pairwise subject
+命名空间。
+
+Convax 的最终用户准入只依赖该 Project 的 ACTIVE `ProjectUser`，不要求用户是 Convax 开发者
+Organization 的 `Member`，也不读取 `Project.ownerTenantId` 或浏览器 Session 的
+`activeTenantId`。`ownerTenantId` 只表示 Project 配置与账单管理权，永不进入最终用户 token。
+
+Convax Access Token 必须同时缺少：
+
+- `organization_id`
+- `tenant_id`
+- `selected_team_id`
+
+verified companion 在保留 issuer、audience、Project、Application、OAuth client、environment、
+token use、subject、session 与生命周期全部现有 pin 的同时，对上述任一 tenant claim fail-closed。
+Nexus Console 的 Session Token 则必须按 `BOUND_ORGANIZATION` 携带真实用户租户的 `org_id`；该值来自
+ACTIVE Application binding 与 ACTIVE Organization Member，不能取 Project owner Organization。
 
 ## 3. Enable 控制流
 
@@ -148,7 +173,7 @@ token_use      = access
 
 Nexus 还必须实时解析唯一 `ACTIVE` Application binding。ID Token、Cookie、Refresh Credential、
 Management credential、其他 AuthX Application Token 或缺少 `nexus:access` 的 Token 都不是 Gateway
-凭据。Token 不携带 Workspace、Plan、Quota、Provider 或 Secret。
+凭据。Convax Token 不携带 tenant claim、Workspace、Plan、Quota、Provider 或 Secret。
 
 Nexus 在 status/Gateway 的内部事务中按 Application + `sub` 幂等创建或读取 subject access。JIT 是
 Nexus 服务端实现，不是用户可见的 connect API。
@@ -170,6 +195,7 @@ MCP、Tool、Canvas、Service status、Checkout 与系统浏览器能力：
 | 场景                                       | 必须结果                                     |
 | ------------------------------------------ | -------------------------------------------- |
 | Nexus 没有绑定                             | AuthX 返回 setup URL；Jobs 保持 PENDING      |
+| Integration 为 PENDING 或 ATTENTION        | 显示管理员尚未完成绑定的可解释错误与恢复动作 |
 | handoff 过期/签名错误                      | Nexus 401；回 AuthX 重试 Enable              |
 | 活跃 AuthX Organization 不匹配             | Nexus 403；不暴露其他 Organization Workspace |
 | Plan/Provider 不属于 Workspace 或非 ACTIVE | Nexus 404；零写入                            |
@@ -183,14 +209,24 @@ MCP、Tool、Canvas、Service status、Checkout 与系统浏览器能力：
 
 本流程是协调发布，不能只上线一个仓库：
 
-1. 备份 Nexus PostgreSQL；应用并验证现有 Application integration migration 与
-   `20260814010000_authx_console_application_binding`。
-2. 发布 Nexus API、Console 和生成 Management SDK/contract；确认服务 GET/disable credential 一致。
-3. 发布 AuthX API、Jobs、Console 和公开 contract。
-4. 使用生产管理员完成首次 Enable、丢失回跳恢复、Disable、Re-enable，并确认 Application id 不变。
-5. 使用新的 AuthX Convax Access Token 验证 Nexus status/Gateway；Disable 后旧 Token 必须立即失败，
-   Re-enable 后新 Token 恢复。
-6. 验证 AuthX 数据库没有 Workspace/Plan/Provider facts，Nexus 日志没有 handoff、token 或 Provider
+1. 重新读取 AuthX production D1 的 live migration journal。仓库 README 的历史基线是 production
+   仅应用前 6 条、当前仓库共 17 条，因此预计有 11 条 pending；该历史记录不是生产事实，live journal
+   不一致时必须停止。
+2. 导出可恢复的 AuthX D1 snapshot，并备份 Nexus PostgreSQL；验证两侧隔离恢复。
+3. 通过 AuthX 仓库根 `deploy/cloudflare-remote.sh` 的受控路径按序应用经 live journal 证明的全部
+   pending migration；不得绕过 `@authx/database` 的 remote guard。应用并验证 Nexus 现有
+   Application integration migration 与 `20260814010000_authx_console_application_binding`。
+4. 先公开发布破坏性合同 `@microvoidio/authx@0.3.0`，再让 Nexus 从 public registry 生成真实
+   integrity-pinned lockfile。未发布 SDK、伪造 integrity 或本地 tarball 都是 `NO-GO`。
+5. 同一 hard-cut 窗口发布 AuthX Worker/Console、Nexus API/Console 与 Convax plugin
+   `nexus-service@1.0.2`。Convax host 只有本文档变化，不增加 runtime 接入。
+6. 使用生产管理员完成首次 Enable、丢失回跳恢复、Disable、Re-enable，并确认 Application id 不变；
+   PENDING/ATTENTION 必须显示配置未完成，而不是裸 `401 application_disabled`。
+7. 使用新的 AuthX Convax Access Token 验证 Nexus status/Gateway；断言三个 tenant claim 均不存在。
+   Disable 后旧 Token 必须立即失败，Re-enable 后新 Token 恢复。
+8. 验证 AuthX 数据库没有 Workspace/Plan/Provider facts，Nexus 日志没有 handoff、token 或 Provider
    Secret 明文。
 
-在上述协调迁移和发布前，不得把本地实现描述为生产已修复，也不得单独发布可见的 Enable 跳转。
+回滚必须是 AuthX D1 snapshot 恢复、Nexus PostgreSQL 恢复和 AuthX/Nexus/Convax plugin 三仓 release
+tag 同时回退。tenant claim 合同不能按单仓回滚。在上述协调迁移和发布前，不得把本地实现描述为生产
+已修复或 production ready，也不得单独发布可见的 Enable 跳转。
