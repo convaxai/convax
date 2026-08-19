@@ -149,6 +149,20 @@ Idempotency-Key，避免进程重启或网络重试产生重复 Checkout。
 - 替换现有 OpenCode Service。
 - 在 Convax 内部实现 Nexus Hosted Auth。
 
+### 3.3 单一 vendor-owned Workspace 决策
+
+当前产品明确采用一个由管理员预先绑定的 vendor-owned Nexus Workspace。所有 Convax 最终用户共享
+该 Workspace 的 Plan 与 ProviderConnection；系统不为每个用户或 AuthX Project Team 自动创建
+Workspace。每个 pairwise subject 仍拥有独立授权的 `WorkspaceAccess`，其 QuotaPeriod、Reservation、
+Usage 和 Inference Key 相互隔离，因此 quota isolation boundary 是 `WorkspaceAccess`，而不是共享
+Workspace。
+
+这是一项显式产品决策，其后果是：所有用户共享同一个 Plan 与同一个 Provider 连接，没有 per-user 或
+per-team Workspace，隔离边界只到 `WorkspaceAccess` 的配额层面。若未来需要 per-user 或 per-team 的
+Plan/Provider，必须在 Nexus 中设计新的 binding/provisioning 与 billing authority、管理选择、迁移、
+审计和回滚协议；不能通过重新解释 AuthX tenant claim、把 subject 当作 Workspace owner，或在
+companion 中静默创建 Workspace 来实现。
+
 ## 4. 职责归属
 
 ### 4.1 Nexus 仓库
@@ -472,12 +486,17 @@ Companion 在向 Convax 返回状态前，将 Nexus 响应映射为固定内部�
 | -------------------------- | --------------------------- | -------------------------- |
 | Refresh Token 无效或被重用 | `reauthentication_required` | 停止 Gateway，提示重新登录 |
 | Access 被暂停或过期        | `access_unavailable`        | 停止新推理，展示 Attention |
+| 管理员尚未完成 Nexus 绑定  | `application_setup_required` | 展示“管理员尚未完成设置”，不作为登录失败 |
+| Application 已停用或撤销   | `application_disabled`      | 展示应用不可用，提示联系管理员 |
 | Quota 耗尽                 | `quota_exhausted`           | 不重试，展示 Attention     |
 | ProviderConnection 不可用  | `provider_unavailable`      | 展示服务不可用             |
 | Nexus Timeout/5xx          | `temporarily_unavailable`   | 有界重试或由用户重试       |
 | Provider 4xx/5xx           | `provider_response`         | 保留安全的 API 语义        |
 
-未知错误默认关闭能力。上游原始响应 Body 不能作为 Service Status 诊断信息，也不能跨过 Preload。
+`application_setup_required`、`application_disabled` 与 `nexus_unavailable` 是三个可区分的
+machine-readable 类别，分别对应 Nexus 侧的 `409` / `403` / `503`。管理员未完成绑定绝不能被折叠成
+通用登录失败：用户看到的必须是“管理员尚未完成设置”，而不是认证错误。未知错误默认关闭能力。上游
+原始响应 Body 不能作为 Service Status 诊断信息，也不能跨过 Preload。
 
 ## 10. 分阶段实施
 
