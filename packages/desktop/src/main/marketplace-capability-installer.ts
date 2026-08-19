@@ -32,6 +32,7 @@ export interface DesktopMarketplaceCapabilityInstallerOptions {
   disablePlugin(id: string): Promise<void>
   enablePlugin(id: string): Promise<void>
   hardRefreshPlugin(id: string): Promise<void>
+  publishPluginChange(): void
   refreshPetProvider(id: string): Promise<void>
   scheduleStartupRefresh(identities: readonly { id: string; kind: "plugin" | "skill" }[]): void
   remote: Pick<MarketplaceArtifactInstaller, "installVerifiedMarketplaceCandidate">
@@ -260,6 +261,7 @@ export class DesktopMarketplaceCapabilityInstaller implements MarketplaceCapabil
     if (identity.kind === "plugin") {
       await this.#options.hardRefreshPlugin(identity.id)
       await this.#options.refreshPetProvider(identity.id)
+      this.#options.publishPluginChange()
     }
   }
 

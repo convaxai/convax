@@ -163,7 +163,7 @@ import {
   webPluginAssetScheme,
   webPluginFrameBindingForNavigation,
 } from "./plugin-asset-protocol"
-import { registerPluginManagementIpc } from "./plugin-management-ipc"
+import { publishPluginManagementChange, registerPluginManagementIpc } from "./plugin-management-ipc"
 import { registerPluginCapabilityIpc } from "./plugin-capability-ipc"
 import { PluginHostApiMainAdapter } from "./plugin-host-api-main-adapter"
 import { PluginHostApiService } from "./plugin-host-api-service"
@@ -2094,6 +2094,7 @@ function startApplication() {
       },
       hardRefreshPlugin: (pluginId) =>
         refreshMarketplaceCapabilities([{ id: pluginId, kind: "plugin" }], "a Marketplace Plugin change"),
+      publishPluginChange: publishPluginManagementChange,
       refreshPetProvider: () => {
         if (retiredHostApiRecovery) return Promise.resolve()
         pluginRuntimeSession.assertMutable()
