@@ -7,7 +7,7 @@ import desktopViteConfig, {
   desktopPreloadInputs,
   desktopRendererInputs,
   desktopMainInputs,
-  dshAdoptionGatePackageMetadataPlugin,
+  dshPackageMetadataPlugin,
   isWorkspaceDistPath,
   workspaceDistFullReloadPlugin,
 } from "./electron.vite.config"
@@ -133,7 +133,7 @@ describe("Desktop Main dependency packaging", () => {
       index: "src/main/index.ts",
       "dsh-project-process-smoke": "src/main/dsh-project-process-smoke.ts",
     })
-    expect(dshAdoptionGatePackageMetadataPlugin().name).toBe("dsh-adoption-gate-package-metadata")
+    expect(dshPackageMetadataPlugin().name).toBe("dsh-package-metadata")
   })
 })
 

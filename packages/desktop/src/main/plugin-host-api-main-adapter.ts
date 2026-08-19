@@ -264,10 +264,13 @@ export class PluginHostApiMainAdapter implements PluginHostNodeContextPort, Plug
     const directory = await this.options.projects.resolveEntryPath({ projectId: input.binding.projectId })
     const session = await this.options.agent.createSession({
       directory,
+      scopeId: input.binding.projectId,
       title: `Plugin: ${input.principal.pluginId}`,
     })
     const abort = () => {
-      void this.options.agent.abort({ directory, sessionId: session.id }).catch(() => undefined)
+      void this.options.agent
+        .abort({ directory, scopeId: input.binding.projectId, sessionId: session.id })
+        .catch(() => undefined)
     }
     input.signal?.addEventListener("abort", abort, { once: true })
     try {

@@ -12,7 +12,7 @@ export function desktopPackagedSmokeLaunchArguments(options: DesktopPackagedSmok
     options.executable,
     // Prove that product-default provisioning consumes packaged bytes. These
     // exact-host rules fail Official Pages and GitHub Release resolution without
-    // touching the loopback DevTools and OpenCode endpoints used by the harness.
+    // touching the loopback DevTools and Agent endpoints used by the harness.
     packagedSmokeOfficialMarketplaceNetworkIsolation,
     "--remote-debugging-address=127.0.0.1",
     `--remote-debugging-port=${options.debuggerPort}`,

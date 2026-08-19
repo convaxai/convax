@@ -378,7 +378,7 @@ export async function inspectAgentSkillDirectory(
   return { ...skillMetadata(files), files: inspectedFiles(files) }
 }
 
-/** A bounded, non-executable store for OpenCode-compatible user Skill directories. */
+/** A bounded, non-executable store for DSH-compatible user Skill directories. */
 export class ManagedAgentSkillStore {
   readonly userDirectory: string
   private readonly configRoot: string

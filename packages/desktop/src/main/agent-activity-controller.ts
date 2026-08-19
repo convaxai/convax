@@ -298,7 +298,9 @@ export class AgentActivityController {
         continue
       }
       try {
-        const sessions = (await this.#runtime.listSessions({ directory, limit: this.#maxActivities }))
+        const sessions = (
+          await this.#runtime.listSessions({ directory, limit: this.#maxActivities, scopeId: project.id })
+        )
           .sort((left, right) => right.updatedAt - left.updatedAt)
           .slice(0, this.#maxActivities)
         listedSessions.set(project.id, new Set(sessions.map((session) => activityKey(project.id, session.id))))
@@ -352,6 +354,7 @@ export class AgentActivityController {
         const sessionState = await this.#runtime.getSessionState({
           directory: candidate.directory,
           limit: 1,
+          scopeId: candidate.project.id,
           sessionId: candidate.session.id,
         })
         this.#upsert(candidate.project, sessionState, candidate.generation)
@@ -387,7 +390,9 @@ export class AgentActivityController {
       return { failed: false, sessionCount: 0 }
     }
     try {
-      const sessions = (await this.#runtime.listSessions({ directory, limit: this.#maxActivities }))
+      const sessions = (
+        await this.#runtime.listSessions({ directory, limit: this.#maxActivities, scopeId: project.id })
+      )
         .sort((left, right) => right.updatedAt - left.updatedAt)
         .slice(0, this.#maxActivities)
       const seen = new Set(sessions.map((session) => activityKey(project.id, session.id)))
@@ -405,7 +410,12 @@ export class AgentActivityController {
         const key = activityKey(project.id, session.id)
         const generation = this.#nextSessionGeneration(key)
         try {
-          const sessionState = await this.#runtime.getSessionState({ directory, limit: 1, sessionId: session.id })
+          const sessionState = await this.#runtime.getSessionState({
+            directory,
+            limit: 1,
+            scopeId: project.id,
+            sessionId: session.id,
+          })
           this.#upsert(project, sessionState, generation)
         } catch {
           failed = true
@@ -431,7 +441,7 @@ export class AgentActivityController {
       const directory = await this.#projects.resolveEntryPath({ projectId })
       const key = activityKey(projectId, sessionId)
       const generation = expectedGeneration ?? this.#nextSessionGeneration(key)
-      const sessionState = await this.#runtime.getSessionState({ directory, limit: 1, sessionId })
+      const sessionState = await this.#runtime.getSessionState({ directory, limit: 1, scopeId: projectId, sessionId })
       return this.#upsert(project, sessionState, generation)
     } catch {
       return null

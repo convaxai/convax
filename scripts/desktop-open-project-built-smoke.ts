@@ -342,7 +342,7 @@ try {
     }))
     // This smoke verifies the built renderer's real composer input, picker
     // geometry, and Canvas/Plugin flows. Keep those assertions independent from
-    // the machine's OpenCode session database and startup latency.
+    // the machine's Agent session database and startup latency.
     electron.ipcMain.removeHandler("agent:session-list")
     electron.ipcMain.handle("agent:session-list", () => [])
     return true

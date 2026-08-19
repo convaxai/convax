@@ -6,6 +6,7 @@ import { join } from "node:path"
 import { afterEach, describe, expect, test } from "bun:test"
 
 import { DeepSeekHarnessAgentRuntime } from "../src/node/deepseek-harness-agent-runtime"
+import { DeepSeekHarnessProjectRuntime } from "../src/node/deepseek-harness-project-runtime"
 import {
   MessagePortApiClient,
   serveHostFetchOverMessagePort,
@@ -29,11 +30,12 @@ afterEach(async () => {
   await Promise.all(temporaryPaths.splice(0).map((path) => rm(path, { force: true, recursive: true })))
 })
 
-function mockOpenAiServer() {
+function mockOpenAiServer(beforeResponse?: () => Promise<void>) {
   const server = createServer(async (request, response) => {
     for await (const _chunk of request) {
       // Drain the request before responding, like an ordinary HTTP provider.
     }
+    await beforeResponse?.()
     response.writeHead(200, { "content-type": "text/event-stream" })
     response.write(
       `data: ${JSON.stringify({
@@ -219,6 +221,101 @@ describe("DeepSeekHarnessAgentRuntime", () => {
       abort.abort()
       client.dispose()
       disposeCarrier()
+      await runtime.dispose()
+    }
+  })
+
+  test("routes ordinary AgentRuntime calls to one isolated DSH Host connection per Project", async () => {
+    const root = await temporaryDirectory("convax-dsh-project-router-")
+    const projectA = await temporaryDirectory("convax-dsh-project-a-")
+    const projectB = await temporaryDirectory("convax-dsh-project-b-")
+    let releaseProvider!: () => void
+    const providerReleased = new Promise<void>((resolve) => {
+      releaseProvider = resolve
+    })
+    let requestEntered!: () => void
+    const requestStarted = new Promise<void>((resolve) => {
+      requestEntered = resolve
+    })
+    const provider = await mockOpenAiServer(async () => {
+      requestEntered()
+      await providerReleased
+    })
+    const providers = {
+      smoke: {
+        models: { "smoke-model": { name: "Smoke Model" } },
+        name: "Smoke",
+        options: { apiKey: "test-key", baseURL: provider.url },
+      },
+    }
+    const children = new Map<
+      string,
+      { child: DeepSeekHarnessAgentRuntime; client: MessagePortApiClient; disposeCarrier: () => void }
+    >()
+    const closed: string[] = []
+    const closeProject = async (scopeId: string) => {
+      const current = children.get(scopeId)
+      if (!current) return
+      children.delete(scopeId)
+      closed.push(scopeId)
+      current.client.dispose()
+      current.disposeCarrier()
+      await current.child.dispose()
+    }
+    const runtime = new DeepSeekHarnessProjectRuntime({
+      closeConnections: async () => {
+        await Promise.all([...children.keys()].map(closeProject))
+      },
+      closeProject,
+      configDirectory: join(root, "host"),
+      async connectProject({ directory, scopeId }) {
+        const child = new DeepSeekHarnessAgentRuntime({
+          configDirectory: join(root, "children", scopeId),
+          resolveProviders: async () => providers,
+        })
+        const host = await child.openProjectHost({ directory, scopeId })
+        const [parentPort, childPort] = memoryMessagePorts()
+        const client = new MessagePortApiClient(parentPort)
+        const disposeCarrier = serveHostFetchOverMessagePort(childPort, host)
+        children.set(scopeId, { child, client, disposeCarrier })
+        return { agentPreset: host.agentPreset, client, close: () => closeProject(scopeId) }
+      },
+      resolveProviders: async () => providers,
+    })
+    try {
+      const a = await runtime.createSession({ directory: projectA, scopeId: "project-a", title: "A" })
+      const b = await runtime.createSession({ directory: projectB, scopeId: "project-b", title: "B" })
+      expect(children.size).toBe(2)
+      await expect(runtime.listSessions({ directory: projectA, scopeId: "project-a" })).resolves.toEqual([a])
+      await expect(runtime.listSessions({ directory: projectB, scopeId: "project-b" })).resolves.toEqual([b])
+      await expect(runtime.listSessions({ directory: projectB, scopeId: "project-a" })).rejects.toThrow(
+        "changed directory",
+      )
+      await runtime.closeProject("project-a")
+      expect(closed).toEqual(["project-a"])
+      expect(children.has("project-b")).toBe(true)
+
+      const next = await runtime.createSession({ directory: projectA, scopeId: "project-a" })
+      const prompting = runtime.prompt({
+        directory: projectA,
+        scopeId: "project-a",
+        sessionId: next.id,
+        text: "wait for refresh",
+      })
+      await requestStarted
+      let refreshed = false
+      const refresh = runtime.refreshConfiguration().then(() => {
+        refreshed = true
+      })
+      await Bun.sleep(20)
+      expect(refreshed).toBe(false)
+      expect(children.has("project-a")).toBe(true)
+      releaseProvider()
+      await prompting
+      await refresh
+      expect(refreshed).toBe(true)
+      expect(children.size).toBe(0)
+    } finally {
       await runtime.dispose()
     }
   })

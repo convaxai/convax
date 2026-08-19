@@ -161,11 +161,11 @@ model {
     }
 
     hooks = artifact 'authorized Hook snapshots' {
-      description '精确、私有、不可变 ESM 字节，只由 OpenCode 原生 Hook runtime 加载。'
+      description '精确、私有、不可变 legacy 字节；DSH 不加载，保留仅用于恢复和卸载。'
     }
 
     agentMcp = artifact 'Agent remote MCP declarations' {
-      description '已验证 HTTPS 配置，由 OpenCode native MCP client 和 OAuth 执行。'
+      description '已验证声明；当前仅 Host-authenticated loopback 入 DSH，远程 guarded transport/OAuth 由 DSH-native Plugin 提供。'
     }
 
     uiContributions = artifact 'Host-rendered UI contributions' {
@@ -360,10 +360,9 @@ deployment {
       instanceOf pluginRuntime.sidecar
     }
 
-    agentProcess = process 'OpenCode runtime' {
+    agentProcess = process 'Project-isolated DSH utility process' {
       instanceOf convax.agent
       instanceOf pluginRuntime.ownedSkills
-      instanceOf pluginRuntime.hooks
       instanceOf pluginRuntime.agentMcp
     }
 
@@ -457,7 +456,7 @@ views {
 
   deployment view process_trust_boundaries {
     title '进程、沙箱与数据边界'
-    description 'Web 无 authority；Main 持有策略；sidecar 执行精确字节；OpenCode 原生管理 Agent 扩展。'
+    description 'Web 无 authority；Main 持有策略；sidecar 执行精确字节；DSH/Cordis Plugin 组合 Agent 机制。'
     includeAncestors: true
     include workstation.**, internet.**
   }

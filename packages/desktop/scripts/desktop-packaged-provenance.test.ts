@@ -30,7 +30,7 @@ describe("packaged application provenance", () => {
     ])
   })
 
-  test("keeps the explicit packaged OpenCode exception narrow", async () => {
+  test("scans every packaged runtime directory without backend-specific exceptions", async () => {
     const root = await temporaryTree()
     const openCode = path.join(root, "Contents", "Resources", "opencode", "bin")
     await fs.mkdir(openCode, { recursive: true })
@@ -38,6 +38,7 @@ describe("packaged application provenance", () => {
     await fs.writeFile(path.join(root, "outside.bin"), "PRIVATE-VENDOR-MARKER")
 
     expect(await scanPackagedProvenance(root, ["private-vendor-marker"], 5)).toEqual([
+      { file: path.join("Contents", "Resources", "opencode", "bin", "opencode"), marker: "prohibited marker 1" },
       { file: "outside.bin", marker: "prohibited marker 1" },
     ])
   })

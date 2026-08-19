@@ -869,10 +869,7 @@ function openRouterLlmModelCatalog(value: unknown) {
   return models
 }
 
-function openAiLlmModelCatalog(
-  value: unknown,
-  fallback: ReadonlyMap<string, string>,
-) {
+function openAiLlmModelCatalog(value: unknown, fallback: ReadonlyMap<string, string>) {
   if (
     !isUnknownRecord(value) ||
     !Array.isArray(value.data) ||
@@ -890,7 +887,7 @@ function openAiLlmModelCatalog(
     ) {
       throw new Error(`OpenAI model catalog entry ${index} is invalid`)
     }
-    const name = typeof value.name === "string" ? value.name : fallback.get(value.id) ?? value.id
+    const name = typeof value.name === "string" ? value.name : (fallback.get(value.id) ?? value.id)
     if (name.length === 0 || name.length > 160 || name.includes("\0")) {
       throw new Error(`OpenAI model catalog entry ${index} is invalid`)
     }
@@ -1097,7 +1094,7 @@ export class GenerationPluginRuntime implements PluginCapabilityRuntimeInspectio
     return inspected
   }
 
-  /** Starts only declared LLM sidecars and returns Main-only OpenCode connection material. */
+  /** Starts only declared LLM sidecars and returns Main-only DSH connection material. */
   async connectLlmProviders(signal?: AbortSignal): Promise<readonly PluginLlmProviderConnection[]> {
     if (signal?.aborted) throw abortError(signal.reason)
     const plugins = await this.#discover()
@@ -1156,10 +1153,7 @@ export class GenerationPluginRuntime implements PluginCapabilityRuntimeInspectio
         const models =
           contribution.provider.protocol === "openrouter"
             ? openRouterLlmModelCatalog(catalog)
-            : openAiLlmModelCatalog(
-                catalog,
-                new Map(contribution.models.map((model) => [model.id, model.name])),
-              )
+            : openAiLlmModelCatalog(catalog, new Map(contribution.models.map((model) => [model.id, model.name])))
         const latest = (await this.#discover()).get(selected.manifest.id)
         if (
           !latest ||

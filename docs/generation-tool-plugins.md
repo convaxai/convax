@@ -107,7 +107,7 @@ Renderer may likewise persist one last-complete generation/Agent model display
 projection. A cold window renders that strictly validated, bounded, versioned cache
 immediately and revalidates it in the background. Service rows group their models
 for navigation but are not a separately committed provider choice. Cached ids never
-authorize a call: Agent prompts recheck the exact OpenCode provider/model pair and
+authorize a call: Agent prompts recheck the exact DSH provider/model pair and
 generation preparation rechecks the exact tool, schema, lease, and live Service
 status before dispatch.
 

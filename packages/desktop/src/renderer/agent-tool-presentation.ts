@@ -24,7 +24,7 @@ function hasExplicitFailureOutput(output: string) {
 }
 
 /**
- * Derives UI semantics without changing the OpenCode tool state. OpenCode's
+ * Derives UI semantics without changing the DSH tool state. DSH's
  * `completed` means that the handler completed, while a tool may still return
  * an explicit failure envelope as ordinary output.
  */

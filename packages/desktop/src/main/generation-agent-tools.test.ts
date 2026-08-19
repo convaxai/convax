@@ -164,14 +164,7 @@ describe("generation Agent tool", () => {
     expect(schema.properties.references.description).toContain("text references are never accepted")
     expect(schema.properties.references.description).toContain("first_frame may be used alone")
     expect(schema.properties.references.description).toContain("first_frame plus last_frame")
-    expect(schema.required).toEqual([
-      "anchor",
-      "canvasId",
-      "commandId",
-      "prompt",
-      "promptContextNodeIds",
-      "references",
-    ])
+    expect(schema.required).toEqual(["anchor", "canvasId", "commandId", "prompt", "promptContextNodeIds", "references"])
   })
 
   test("injects the authoritative Agent scope and actor and propagates cancellation context", async () => {
@@ -193,7 +186,7 @@ describe("generation Agent tool", () => {
 
     expect(service.calls).toEqual([
       {
-        actor: { id: "opencode:project-a", kind: "agent" },
+        actor: { id: "agent:project-a", kind: "agent" },
         request: {
           anchor: { x: 320, y: 180 },
           expectedOutputCount: 1,
@@ -236,7 +229,7 @@ describe("generation Agent tool", () => {
     await entered
     cancellation.abort(new DOMException("Stopped", "AbortError"))
     await expect(pending).rejects.toMatchObject({ name: "AbortError" })
-    expect(service.cancels).toEqual([{ actor: { id: "opencode:project-a", kind: "agent" }, operationId: "generate-1" }])
+    expect(service.cancels).toEqual([{ actor: { id: "agent:project-a", kind: "agent" }, operationId: "generate-1" }])
 
     function providerCall() {
       return createGenerationAgentToolProvider(service).callTool(scope, "canvas_generate", validInput(), {

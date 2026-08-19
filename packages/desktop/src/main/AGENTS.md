@@ -16,7 +16,7 @@ authority and lifecycle coordination, not reusable domain semantics.
 - Installed Marketplace/Plugin/Skill/MCP authority, immutable Plugin closures,
   ActiveSet selection and leases, verified executable lifecycle, and Agent runtime
   configuration.
-- DSH adoption-gate Project process registry, private MessagePort transfer,
+- Product DSH Project process registry, private MessagePort transfer,
   Project-keyed runtime roots, Host MCP capability issuance/revocation, startup
   deadline, graceful close, and forced child termination.
 - Main-owned cancellation, recovery, sender binding, and runtime disposal.
@@ -31,9 +31,9 @@ authority and lifecycle coordination, not reusable domain semantics.
 - Keep packaged Main as one self-contained CommonJS dependency bundle. Only Electron
   and Node built-ins may remain external; a bare package import or packaged
   `node_modules` dependency is a build failure.
-- Keep DSH Cordis dynamic imports inside the explicit adoption-gate entry and resolve
-  them only from the staged child runtime closure. Product Main must not import that
-  closure. Package the app-owned Bun executable independently from OpenCode.
+- Keep DSH Cordis dynamic imports inside the utility entry and resolve them only
+  from the staged child runtime closure. Product Main must not import that closure.
+  Package the app-owned Bun executable independently from the Agent runtime.
 - Call domain packages through exported typed ports. Do not implement Canvas,
   Project, Workbench, Marketplace-schema, or Agent-runtime invariants in Main.
 - Main's Canvas application service/repository is the sole authoritative document
@@ -122,7 +122,7 @@ For any matching change, read the full routed reference before planning or editi
 | Changed capability or filename theme                                          | Required contracts                                                                                                                                                                                                                                             |
 | ----------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `project-*`, `canvas-*`, resource publishing, managed assets, GC              | [`docs/architecture.md` §§4–6](../../../../docs/architecture.md#4-canonical-state), Project, Project Files, Canvas, and Workbench `AGENTS.md` files as applicable                                                                                              |
-| `agent-*`, `canvas-agent-tools`, `composite-agent-tools`, OpenCode            | [`docs/architecture.md` §7](../../../../docs/architecture.md#7-agent-tools-and-skills) and [`packages/agent-runtime/AGENTS.md`](../../../agent-runtime/AGENTS.md)                                                                                              |
+| `agent-*`, DSH Project processes, `canvas-agent-tools`, Host MCP              | [`docs/architecture.md` §7](../../../../docs/architecture.md#7-agent-tools-and-skills) and [`packages/agent-runtime/AGENTS.md`](../../../agent-runtime/AGENTS.md)                                                                                              |
 | Skill discovery/management, Plugin-owned Skills, Hook loading                 | [`docs/plugin-skill-platform.md`](../../../../docs/plugin-skill-platform.md), [`docs/architecture.md` §§7–8](../../../../docs/architecture.md#7-agent-tools-and-skills), and Agent Runtime contract                                                            |
 | Agent MCP, managed MCP, OAuth, stdio runtime                                  | [`docs/architecture.md` “MCP Server runtime boundary”](../../../../docs/architecture.md#mcp-server-runtime-boundary), §§7–8, Agent Runtime, and Marketplace contracts                                                                                          |
 | Marketplace source/cache/install, snapshot closure, ActiveSet, product lock   | [`docs/architecture.md` §§5–6 and §8](../../../../docs/architecture.md#5-persistence-map), [`docs/plugin-skill-platform.md`](../../../../docs/plugin-skill-platform.md), and Marketplace contract                                                              |
@@ -159,10 +159,10 @@ For any matching change, read the full routed reference before planning or editi
   boundary; that boundary resolves the canonical Canvas owner proof through the live
   ProjectIndex current-resource projection before opening native bytes. Invalidation
   alone never triggers upload, prompting, or execution.
-- Skills remain native OpenCode instruction bundles. Desktop owns installation
-  policy and ActiveSet selection; Agent Runtime receives generic leased Skill
-  directories, immutable Hook URLs, MCP configuration, and typed tool providers
-  only.
+- Skills remain native DSH instruction bundles. Desktop owns installation policy
+  and ActiveSet selection; each Project child receives only Host-managed and exact
+  leased Plugin Skill directories. Legacy Hook URLs are rejected, while MCP rows,
+  provider snapshots, and typed Host tools cross their explicit ports only.
 - Third-party Web code is static content in an iframe with exactly
   `sandbox="allow-scripts"`. Never import it into the host, use `webview`, enable
   same-origin/Node/Electron access, or expose a generic function-call bridge.
@@ -213,7 +213,7 @@ For any matching change, read the full routed reference before planning or editi
   recovery purpose.
 - Default provisioning must commit each immutable package transition before queuing
   one non-blocking Main-owned runtime reconciliation. Startup Skill publication must
-  not list or launch OpenCode per entry, and shutdown must not wait for an active
+  not start or rebuild DSH per entry, and shutdown must not wait for an active
   Agent use to release that queued refresh.
 - A user-confirmed install/update or explicit Local import publishes its exact
   execution authorization in the same transition. Static Web Plugins bind that
@@ -235,7 +235,7 @@ For any matching change, read the full routed reference before planning or editi
   concrete Plugin id. A failed renderer refresh never rolls back a durable creation,
   and uninstalling the Plugin leaves the node and its portable state intact.
 - Generation has one Main-owned executor shared by Agent, UI, and Plugin callers.
-  OpenCode is an Agent-side client, not the execution owner. Admit installed models
+  DSH is an Agent-side client, not the execution owner. Admit installed models
   to the display snapshot from exact manifest/service membership and the bounded
   current tool schema without waiting for or filtering on `service.status`.
   Model/control display snapshots never authorize execution; reload and validate

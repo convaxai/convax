@@ -280,7 +280,7 @@ describe("Plugin operation Agent tools", () => {
 
     expect(service.calls).toHaveLength(1)
     const call = service.calls[0]!
-    expect(call.actor).toEqual({ id: "opencode:project-a", kind: "agent" })
+    expect(call.actor).toEqual({ id: "agent:project-a", kind: "agent" })
     expect(call.signal).toBe(cancellation.signal)
     expect(call.request).toMatchObject({
       anchor: { x: 420, y: 240 },
@@ -436,19 +436,16 @@ describe("Plugin operation Agent tools", () => {
         reportEntered()
         signal?.addEventListener("abort", () => reject(signal.reason), { once: true })
       })
-    const pending = provider(service).callTool(
-      scope,
-      "plugin_media_operations_transform_media",
-      validInput(),
-      { signal: cancellation.signal },
-    )
+    const pending = provider(service).callTool(scope, "plugin_media_operations_transform_media", validInput(), {
+      signal: cancellation.signal,
+    })
     await entered
     cancellation.abort(new DOMException("Stopped", "AbortError"))
 
     await expect(pending).rejects.toMatchObject({ name: "AbortError" })
     expect(service.cancels).toEqual([
       {
-        actor: { id: "opencode:project-a", kind: "agent" },
+        actor: { id: "agent:project-a", kind: "agent" },
         operationId: expect.stringMatching(/^plugin-operation-/),
       },
     ])

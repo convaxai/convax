@@ -71,7 +71,7 @@ function exposedTool(tool: McpToolDefinition, serverKey: string): AgentToolDefin
 
 /**
  * Desktop-owned managed-stdio runtime projected through Agent Runtime's existing
- * bearer-authenticated loopback server. OpenCode receives tool schemas and calls,
+ * bearer-authenticated loopback server. DSH receives tool schemas and calls,
  * never command, argv, cwd, environment, executable path, or process ownership.
  */
 export class ManagedMcpAgentToolRegistry implements AgentToolProvider {

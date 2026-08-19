@@ -4,7 +4,7 @@ import { createElectronBuilderConfig } from "./electron-builder.config"
 
 /**
  * Adoption-gate artifact only. It boots the two-Project DSH smoke entry and
- * deliberately excludes every OpenCode runtime artifact.
+ * uses the same DSH runtime closure as the ordinary product artifact.
  */
 export function createDshPocElectronBuilderConfig(environment: NodeJS.ProcessEnv = process.env): Configuration {
   const base = createElectronBuilderConfig(environment)
@@ -15,21 +15,7 @@ export function createDshPocElectronBuilderConfig(environment: NodeJS.ProcessEnv
       ...base.extraMetadata,
       main: "./out/main/dsh-project-process-smoke.cjs",
     },
-    extraResources: [
-      ...((base.extraResources ?? []) as Exclude<Configuration["extraResources"], string | undefined>).filter(
-        (resource) => typeof resource === "object" && resource !== null && resource.to !== "opencode",
-      ),
-      {
-        from: ".packaging/runtime/dsh",
-        to: "dsh-runtime",
-        filter: ["dsh-project-utility.js", "package.json", "runtime.json"],
-      },
-      {
-        from: ".packaging/runtime/dsh/node_modules",
-        to: "dsh-runtime/node_modules",
-        filter: ["**/*"],
-      },
-    ],
+    extraResources: base.extraResources,
   }
 }
 

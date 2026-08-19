@@ -37,7 +37,8 @@ describe("Canvas Agent tools", () => {
     const scope = { directory: "/project", scopeId: projectId }
 
     await expect(provider.callTool(scope, "canvas_query_nodes", { canvasId, limit: 10 })).resolves.toEqual({
-      nodes: [], projection: document,
+      nodes: [],
+      projection: document,
     })
     const result = await provider.callTool(scope, "canvas_apply_primitive", {
       canvasId,
@@ -46,23 +47,30 @@ describe("Canvas Agent tools", () => {
     })
 
     expect(result).toMatchObject({ changed: true, operationReceipt: receipt, sync: { reloaded: true } })
-    expect(execute).toHaveBeenCalledWith(expect.objectContaining({
-      canvasId,
-      scopeId: projectId,
-      envelope: expect.objectContaining({
-        actor: { id: "opencode:project-a", kind: "agent" },
-        commandId: "move-node-a",
+    expect(execute).toHaveBeenCalledWith(
+      expect.objectContaining({
+        canvasId,
+        scopeId: projectId,
+        envelope: expect.objectContaining({
+          actor: { id: "agent:project-a", kind: "agent" },
+          commandId: "move-node-a",
+        }),
       }),
-    }))
+    )
     expect(reloadDocument).toHaveBeenCalledWith({ canvasId, scopeId: projectId })
   })
 
   test("allows document tools on another live Project route but keeps view commands mounted-only", async () => {
     const execute = mock(async () => commandResult(inactiveCanvasId))
-    const query = mock(async (): Promise<CanvasApplicationQueryResult> => ({
-      nodes: [], projection: createCanvasDocument({ id: inactiveCanvasId }),
-    }))
-    const executeView = mock(async () => { throw new Error("must not execute") })
+    const query = mock(
+      async (): Promise<CanvasApplicationQueryResult> => ({
+        nodes: [],
+        projection: createCanvasDocument({ id: inactiveCanvasId }),
+      }),
+    )
+    const executeView = mock(async () => {
+      throw new Error("must not execute")
+    })
     const provider = createProvider({ execute, query, executeView })
     const scope = { directory: "/project", scopeId: projectId }
 
@@ -72,10 +80,12 @@ describe("Canvas Agent tools", () => {
       command: { delta: { x: 1, y: 1 }, nodeIds: ["node-a"], type: "nodes.move" },
       commandId: "inactive-move",
     })
-    await expect(provider.callTool(scope, "canvas_view", {
-      canvasId: inactiveCanvasId,
-      command: { type: "selection.clear" },
-    })).rejects.toThrow("canvasId must match the live active Canvas")
+    await expect(
+      provider.callTool(scope, "canvas_view", {
+        canvasId: inactiveCanvasId,
+        command: { type: "selection.clear" },
+      }),
+    ).rejects.toThrow("canvasId must match the live active Canvas")
     expect(execute).toHaveBeenCalledTimes(1)
     expect(query).toHaveBeenCalledTimes(1)
     expect(executeView).not.toHaveBeenCalled()
@@ -83,9 +93,7 @@ describe("Canvas Agent tools", () => {
 
   test("lists only live routes from the host Project without a mounted renderer", async () => {
     const provider = createProvider({ getViewSnapshot: async () => null })
-    await expect(provider.callTool(
-      { directory: "/project", scopeId: projectId }, "canvas_list", {},
-    )).resolves.toEqual({
+    await expect(provider.callTool({ directory: "/project", scopeId: projectId }, "canvas_list", {})).resolves.toEqual({
       projectId,
       canvases: [
         { id: canvasId, name: "Main" },
@@ -97,11 +105,13 @@ describe("Canvas Agent tools", () => {
   test("fails closed when a Canvas is outside the ProjectIndex live catalog", async () => {
     const execute = mock(async () => commandResult("missing"))
     const provider = createProvider({ execute })
-    await expect(provider.callTool(
-      { directory: "/project", scopeId: projectId },
-      "canvas_apply_primitive",
-      { canvasId: "missing", commandId: "missing", command: { type: "elements.remove", nodeIds: [] } },
-    )).rejects.toThrow("not present in the current Agent Project catalog")
+    await expect(
+      provider.callTool({ directory: "/project", scopeId: projectId }, "canvas_apply_primitive", {
+        canvasId: "missing",
+        commandId: "missing",
+        command: { type: "elements.remove", nodeIds: [] },
+      }),
+    ).rejects.toThrow("not present in the current Agent Project catalog")
     expect(execute).not.toHaveBeenCalled()
   })
 
@@ -112,18 +122,22 @@ describe("Canvas Agent tools", () => {
     expect(schema).not.toContain("expectedRevision")
     expect(schema).not.toContain("storageVersion")
     expect(schema).not.toContain('"revision"')
-    await expect(provider.callTool(
-      { directory: "/project", scopeId: projectId }, "canvas_list", { version: 9 },
-    )).rejects.toThrow("does not accept Project selection arguments")
+    await expect(
+      provider.callTool({ directory: "/project", scopeId: projectId }, "canvas_list", { version: 9 }),
+    ).rejects.toThrow("does not accept Project selection arguments")
   })
 
   test("keeps a durable mutation successful when renderer reload fails", async () => {
-    const provider = createProvider({ reloadDocument: async () => { throw new Error("renderer gone") } })
-    const result = await provider.callTool(
-      { directory: "/project", scopeId: projectId },
-      "canvas_apply_primitive",
-      { canvasId, commandId: "move", command: { type: "elements.remove", nodeIds: [] } },
-    )
+    const provider = createProvider({
+      reloadDocument: async () => {
+        throw new Error("renderer gone")
+      },
+    })
+    const result = await provider.callTool({ directory: "/project", scopeId: projectId }, "canvas_apply_primitive", {
+      canvasId,
+      commandId: "move",
+      command: { type: "elements.remove", nodeIds: [] },
+    })
     expect(result).toMatchObject({
       changed: true,
       operationReceipt: receipt,
@@ -136,41 +150,63 @@ describe("Canvas Agent tools", () => {
     const reloadDocument = mock(async () => true)
     const provider = createProvider({ reloadDocument, saveText })
     const controller = new AbortController()
-    await expect(provider.callTool(
-      { directory: "/project", scopeId: projectId }, "canvas_update_text",
-      { canvasId, commandId: "write-poem", content: "春天来了", nodeId: "text-node" },
-      { signal: controller.signal },
-    )).resolves.toEqual({ contentRevision: "a".repeat(64), sync: { reloaded: true }, warnings: [] })
+    await expect(
+      provider.callTool(
+        { directory: "/project", scopeId: projectId },
+        "canvas_update_text",
+        { canvasId, commandId: "write-poem", content: "春天来了", nodeId: "text-node" },
+        { signal: controller.signal },
+      ),
+    ).resolves.toEqual({ contentRevision: "a".repeat(64), sync: { reloaded: true }, warnings: [] })
     expect(saveText).toHaveBeenCalledWith({
-      actor: { id: "opencode:project-a", kind: "agent" }, canvasId, commandId: "write-poem",
-      content: "春天来了", nodeId: "text-node", signal: controller.signal, scopeId: projectId,
+      actor: { id: "agent:project-a", kind: "agent" },
+      canvasId,
+      commandId: "write-poem",
+      content: "春天来了",
+      nodeId: "text-node",
+      signal: controller.signal,
+      scopeId: projectId,
     })
   })
 })
 
-function createProvider(overrides: {
-  execute?: (request: CanvasApplicationCommandRequest) => Promise<CanvasApplicationCommandResult>
-  query?: () => Promise<CanvasApplicationQueryResult>
-  executeView?: () => Promise<never>
-  getViewSnapshot?: () => Promise<CanvasViewSnapshot | null>
-  reloadDocument?: () => Promise<boolean>
-  saveText?: () => Promise<{ contentRevision: string; warnings: readonly string[] }>
-} = {}) {
+function createProvider(
+  overrides: {
+    execute?: (request: CanvasApplicationCommandRequest) => Promise<CanvasApplicationCommandResult>
+    query?: () => Promise<CanvasApplicationQueryResult>
+    executeView?: () => Promise<never>
+    getViewSnapshot?: () => Promise<CanvasViewSnapshot | null>
+    reloadDocument?: () => Promise<boolean>
+    saveText?: () => Promise<{ contentRevision: string; warnings: readonly string[] }>
+  } = {},
+) {
   return createCanvasAgentToolProvider({
-    canvases: { async getCanvasCatalog() { return catalog() } },
+    canvases: {
+      async getCanvasCatalog() {
+        return catalog()
+      },
+    },
     application: {
       execute: overrides.execute ?? (async (request) => commandResult(request.canvasId)),
       query: overrides.query ?? (async () => ({ nodes: [], projection: document })),
     },
     renderer: {
-      executeView: overrides.executeView ?? (async () => ({
-        foundNodeIds: [], missingNodeIds: [], snapshot: viewSnapshot(),
-      })),
+      executeView:
+        overrides.executeView ??
+        (async () => ({
+          foundNodeIds: [],
+          missingNodeIds: [],
+          snapshot: viewSnapshot(),
+        })),
       getActiveWorkbenchRef: async () => null,
       getViewSnapshot: overrides.getViewSnapshot ?? (async () => viewSnapshot()),
       reloadDocument: overrides.reloadDocument ?? (async () => true),
     },
-    resources: { async addResources(request) { return commandResult(request.canvasId) } },
+    resources: {
+      async addResources(request) {
+        return commandResult(request.canvasId)
+      },
+    },
     textResources: { save: overrides.saveText ?? (async () => ({ contentRevision: "a".repeat(64), warnings: [] })) },
   })
 }
@@ -187,10 +223,7 @@ function commandResult(id: string): CanvasApplicationCommandResult {
 }
 
 function catalog(): ProjectCanvasCatalogProjection {
-  const routes = [
-    route(canvasId, "Main", "1"),
-    route(inactiveCanvasId, "Inactive", "2"),
-  ]
+  const routes = [route(canvasId, "Main", "1"), route(inactiveCanvasId, "Inactive", "2")]
   return {
     format: "convax.project-canvas-catalog-projection",
     creationAvailability: "available",

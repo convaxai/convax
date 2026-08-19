@@ -10,11 +10,11 @@ export interface InstalledPluginAgentMcpServer {
 }
 
 /**
- * Stable OpenCode MCP identity for one installed Plugin.
+ * Stable DSH MCP identity for one installed Plugin.
  *
  * Plugin ids are strict kebab-case, so replacing hyphens with underscores is
  * injective. The reserved prefix keeps Plugin tools separate from Convax's
- * dynamically scoped host-tool bridge; OpenCode owns the final tool prefix.
+ * dynamically scoped host-tool bridge; DSH owns the final tool prefix.
  */
 export function pluginAgentMcpServerName(pluginId: string) {
   return `plugin_${requireWebPluginId(pluginId).replaceAll("-", "_")}`
@@ -41,7 +41,7 @@ export function installedPluginAgentMcpServer(plugin: InstalledWebPluginSummary)
   }
 }
 
-/** Maps the revalidated installed Plugin set into OpenCode's native Config.mcp shape. */
+/** Maps the revalidated installed Plugin set into DSH's native MCP preset shape. */
 export function installedPluginAgentMcpServers(plugins: readonly InstalledWebPluginSummary[]) {
   const servers: Record<string, InstalledPluginAgentMcpServer> = {}
   for (const plugin of plugins) {

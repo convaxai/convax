@@ -684,7 +684,7 @@ Explicit cancellation is operation-scoped:
   operation.
 
 Renderer destruction, node unmount, selection changes, Canvas switches, and panel
-changes do not imply cancellation. OpenCode Stop is different: the Agent adapter
+changes do not imply cancellation. Agent Stop is different: the DSH adapter
 turns it into an explicit operation-scoped Main cancellation before detaching its
 wait.
 

@@ -85,14 +85,12 @@ export function createPluginOperationAgentToolProvider(
               },
             }),
         references: parsed.references,
-        resultMode: returnsToAgent
-          ? { type: "return" as const }
-          : { type: "create-pending-node" as const },
+        resultMode: returnsToAgent ? { type: "return" as const } : { type: "create-pending-node" as const },
         ...(!returnsToAgent && parsed.relationNodeIds.length ? { relationAnchorNodeIds: parsed.relationNodeIds } : {}),
         toolId: operation.tool.id,
         ...(parsed.toolInput === undefined ? {} : { toolInput: parsed.toolInput }),
       }
-      const actor = { id: `opencode:${requiredIdentifier(scope.scopeId, "Agent scope id")}`, kind: "agent" } as const
+      const actor = { id: `agent:${requiredIdentifier(scope.scopeId, "Agent scope id")}`, kind: "agent" } as const
       const cancel = () => {
         void service.cancel(request.operationId, actor).catch(() => undefined)
       }

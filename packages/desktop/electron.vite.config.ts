@@ -37,9 +37,9 @@ export function workspaceDistFullReloadPlugin(): Plugin {
 }
 
 /** Inline DSH package attribution because the staged utility closure has no dependency-relative package.json. */
-export function dshAdoptionGatePackageMetadataPlugin(): Plugin {
+export function dshPackageMetadataPlugin(): Plugin {
   return {
-    name: "dsh-adoption-gate-package-metadata",
+    name: "dsh-package-metadata",
     transform(code, id) {
       if (!id.includes("@deepseek-ai")) return
       const transformed = code.replace(
@@ -194,7 +194,7 @@ export function desktopMainInputs(includeDshAdoptionGate: boolean) {
 export default defineConfig({
   main: {
     plugins: [
-      ...(dshAdoptionGateBuild ? [dshAdoptionGatePackageMetadataPlugin()] : []),
+      dshPackageMetadataPlugin(),
       packagedRuntimeBoundaryPlugin("Main", dshAdoptionGateBuild ? ["dsh-project-process-smoke.cjs"] : []),
     ],
     build: {

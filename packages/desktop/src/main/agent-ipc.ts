@@ -70,12 +70,22 @@ export function registerAgentIpc(
     registerHandler<ClientInput<"listSessions">, Awaited<ReturnType<AgentClient["listSessions"]>>>(
       agentIpcChannels.listSessions,
       options.isTrustedSender,
-      async (input) => runtime.listSessions({ directory: await directoryFor(input.scopeId), limit: input.limit }),
+      async (input) =>
+        runtime.listSessions({
+          directory: await directoryFor(input.scopeId),
+          limit: input.limit,
+          scopeId: input.scopeId,
+        }),
     ),
     registerHandler<ClientInput<"createSession">, Awaited<ReturnType<AgentClient["createSession"]>>>(
       agentIpcChannels.createSession,
       options.isTrustedSender,
-      async (input) => runtime.createSession({ directory: await directoryFor(input.scopeId), title: input.title }),
+      async (input) =>
+        runtime.createSession({
+          directory: await directoryFor(input.scopeId),
+          scopeId: input.scopeId,
+          title: input.title,
+        }),
     ),
     registerHandler<ClientInput<"getSessionState">, Awaited<ReturnType<AgentClient["getSessionState"]>>>(
       agentIpcChannels.getSessionState,
@@ -84,6 +94,7 @@ export function registerAgentIpc(
         runtime.getSessionState({
           directory: await directoryFor(input.scopeId),
           limit: input.limit,
+          scopeId: input.scopeId,
           sessionId: input.sessionId,
         }),
     ),
@@ -91,7 +102,9 @@ export function registerAgentIpc(
       agentIpcChannels.prompt,
       options.isTrustedSender,
       async (input) => {
-        await updateActivity(options.activity && (() => options.activity!.promptStarted(input.scopeId, input.sessionId)))
+        await updateActivity(
+          options.activity && (() => options.activity!.promptStarted(input.scopeId, input.sessionId)),
+        )
         try {
           const result = await runtime.prompt({
             agent: input.agent,
@@ -104,18 +117,25 @@ export function registerAgentIpc(
             text: input.text,
             variant: input.variant,
           })
-          await updateActivity(options.activity && (() => options.activity!.promptSettled(input.scopeId, input.sessionId)))
+          await updateActivity(
+            options.activity && (() => options.activity!.promptSettled(input.scopeId, input.sessionId)),
+          )
           return result
         } catch (error) {
           await updateActivity(
-            options.activity && (() => options.activity!.promptSettled(input.scopeId, input.sessionId, { failed: true })),
+            options.activity &&
+              (() => options.activity!.promptSettled(input.scopeId, input.sessionId, { failed: true })),
           )
           throw error
         }
       },
     ),
     registerHandler<ClientInput<"abort">, void>(agentIpcChannels.abort, options.isTrustedSender, async (input) => {
-      await runtime.abort({ directory: await directoryFor(input.scopeId), sessionId: input.sessionId })
+      await runtime.abort({
+        directory: await directoryFor(input.scopeId),
+        scopeId: input.scopeId,
+        sessionId: input.sessionId,
+      })
       await updateActivity(options.activity && (() => options.activity!.aborted(input.scopeId, input.sessionId)))
     }),
     registerHandler<ClientInput<"listCapabilities">, Awaited<ReturnType<AgentClient["listCapabilities"]>>>(
@@ -145,8 +165,11 @@ export function registerAgentIpc(
           message: input.message,
           reply: input.reply,
           requestId: input.requestId,
+          scopeId: input.scopeId,
         })
-        await updateActivity(options.activity && (() => options.activity!.permissionReplied(input.scopeId, input.requestId)))
+        await updateActivity(
+          options.activity && (() => options.activity!.permissionReplied(input.scopeId, input.requestId)),
+        )
       },
     ),
     registerHandler<ClientInput<"replyQuestion">, void>(
@@ -157,8 +180,11 @@ export function registerAgentIpc(
           answers: input.answers,
           directory: await directoryFor(input.scopeId),
           requestId: input.requestId,
+          scopeId: input.scopeId,
         })
-        await updateActivity(options.activity && (() => options.activity!.questionReplied(input.scopeId, input.requestId)))
+        await updateActivity(
+          options.activity && (() => options.activity!.questionReplied(input.scopeId, input.requestId)),
+        )
       },
     ),
     registerHandler<ClientInput<"rejectQuestion">, void>(
@@ -168,8 +194,11 @@ export function registerAgentIpc(
         await runtime.rejectQuestion({
           directory: await directoryFor(input.scopeId),
           requestId: input.requestId,
+          scopeId: input.scopeId,
         })
-        await updateActivity(options.activity && (() => options.activity!.questionReplied(input.scopeId, input.requestId)))
+        await updateActivity(
+          options.activity && (() => options.activity!.questionReplied(input.scopeId, input.requestId)),
+        )
       },
     ),
   ]

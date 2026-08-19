@@ -28,7 +28,7 @@ function rpcBody(id: number, method: string) {
 async function run() {
   const dshRoot = app.isPackaged
     ? join(process.resourcesPath, "dsh-runtime")
-    : join(app.getAppPath(), "../..", ".packaging", "runtime", "dsh")
+    : join(app.getAppPath(), ".packaging", "runtime", "dsh")
   const dshRuntime = {
     moduleDirectory: join(dshRoot, "node_modules"),
     utilityEntry: join(dshRoot, "dsh-project-utility.js"),
@@ -303,7 +303,15 @@ async function run() {
           approvalRequiredToolPrefixes: ["mcp__host__"],
           configDirectory: fixture.configDirectory,
           directory: fixture.directory,
-          mcpServers: { host: { headers: registration.headers, oauth: false, type: "remote", url: registration.url } },
+          mcpServers: {
+            host: {
+              headers: registration.headers,
+              networkBoundary: "host-authenticated-loopback",
+              oauth: false,
+              type: "remote",
+              url: registration.url,
+            },
+          },
           moduleDirectory: dshRuntime.moduleDirectory,
           persona: fixture.persona,
           providers: {

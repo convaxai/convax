@@ -69,5 +69,5 @@ export function checkoutStatusLabel(locale: AppLocale, status: PluginServiceChec
 }
 
 export function serviceDescription(locale: AppLocale, service: ServiceCatalogEntry) {
-  return service.kind === "builtin" ? appMessage(locale, "services.openCodeDescription") : service.description
+  return service.kind === "builtin" ? appMessage(locale, "services.dshDescription") : service.description
 }

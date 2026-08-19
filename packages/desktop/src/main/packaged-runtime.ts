@@ -1,7 +1,17 @@
 import { join } from "node:path"
 
-export function desktopOpenCodeBinaryDirectory(input: { isPackaged: boolean; resourcesDirectory: string }) {
-  return input.isPackaged ? join(input.resourcesDirectory, "opencode", "bin") : undefined
+export function desktopDshRuntime(input: {
+  applicationDirectory: string
+  isPackaged: boolean
+  resourcesDirectory: string
+}) {
+  const root = input.isPackaged
+    ? join(input.resourcesDirectory, "dsh-runtime")
+    : join(input.applicationDirectory, ".packaging", "runtime", "dsh")
+  return {
+    moduleDirectory: join(root, "node_modules"),
+    utilityEntry: join(root, "dsh-project-utility.js"),
+  } as const
 }
 
 export function desktopBunRuntime(input: {

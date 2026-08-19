@@ -119,7 +119,7 @@ Tool、generation、service 和 generic operation 复用同一 verified sidecar 
 - Host 不发现或回退到 closure 外部的可执行文件，也不存在 vendor registry 或
   Plugin-id 分支。
 
-Agent 使用 OpenCode native remote MCP；Convax 只注入已验证的 HTTPS 配置和薄
+Agent 使用 DSH MCP Plugin；Convax 只注入已验证的配置和薄
 status/auth 调用，不实现第二套 MCP transport、OAuth 或 tool proxy。
 
 ## 3. 贡献平面
@@ -129,9 +129,9 @@ status/auth 调用，不实现第二套 MCP transport、OAuth 或 tool proxy。
 | Canvas node renderer        | `sandbox="allow-scripts"` iframe | 静态资源、frame/node binding、Main Host API transport | Node/Electron、同源、原生路径 |
 | command/menu/toolbar/action | Host UI                          | 从 Manifest 投影、当前 selection/revision gate        | 任意 host function 注册       |
 | Tool/generation/service     | verified sidecar                 | receipt、snapshot、staging、取消、结果校验            | shell、PATH、Host 凭据        |
-| Plugin-owned Skill          | OpenCode Skill discovery         | 与 closure 原子发布、直接从 leased closure 解析       | Plugin/Host capability        |
-| Hook                        | OpenCode Hook runtime            | 精确 ESM 字节授权和私有 snapshot                      | 未声明依赖、动态 loader       |
-| Agent MCP                   | OpenCode native MCP client       | 已验证 HTTPS config、稳定 server key、刷新            | Renderer token、local command |
+| Plugin-owned Skill          | DSH Skill Plugin discovery       | 与 closure 原子发布、直接从 leased closure 解析       | Plugin/Host capability        |
+| Hook                        | legacy bytes only                | DSH 拒绝旧 ABI；新 ABI 单独治理                       | 未声明依赖、动态 loader       |
+| Agent MCP                   | DSH MCP Plugin                   | loopback Host MCP；远程 guarded transport 后续接入    | Renderer token、local command |
 | Agent Tool                  | Agent runtime bridge             | typed adapter 到同一领域/Tool executor                | 独立业务实现                  |
 
 Canvas、Project、Workbench 和 Agent 的所有权不因 Plugin 而改变。插件代码不能直接

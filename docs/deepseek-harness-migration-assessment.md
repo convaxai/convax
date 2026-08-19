@@ -1,16 +1,15 @@
 # DeepSeek Harness migration assessment
 
-Status: accepted target design; the macOS arm64 adoption-gate implementation has
-passed both Go/No-Go proofs in section 13. Product cutover remains M3 work, so this
-document does not by itself authorize removing the current OpenCode product path.
+Status: M3 product cutover implemented on this branch. The ordinary dev, product
+Main, and packaged paths use DSH only; the earlier macOS arm64 adoption gate remains
+the recorded isolation proof in section 13.
 
 Research date: 2026-08-18.
 
 Implementation proof date: 2026-08-19.
 
-The executable proof is intentionally separate from the product entry. The packaged
-gate contains no OpenCode runtime, while the ordinary Desktop product continues to
-use its current OpenCode composition until M3 changes the public runtime path.
+The dedicated executable proof remains available, but it now stages the same DSH
+utility closure as the ordinary product rather than a separate backend profile.
 
 ## 1. Decision
 
@@ -322,11 +321,10 @@ The first release is a clean runtime cutover:
 - automatic child crash recovery, hot profile replacement, and side-effect replay
   are deferred.
 
-Convax currently also uses the OpenCode-shipped Bun runtime for interpreted verified
-Plugin companions. That hidden responsibility must move to an independently packaged
-app-owned Bun artifact before the OpenCode executable can be removed. Companion
-execution remains a Desktop-owned verified process boundary and is not moved into
-DSH.
+Convax now stages a separately verified app-owned Bun runtime for interpreted Plugin
+companions. Removing the OpenCode executable therefore does not change companion
+execution: it remains a Desktop-owned verified process boundary and is not moved
+into DSH.
 
 These omissions are explicit compatibility cuts, not reasons to retain OpenCode.
 They may be designed independently after the two adoption proofs.
@@ -364,13 +362,17 @@ They may be designed independently after the two adoption proofs.
 
 ### M3: complete the cutover
 
-- compose the production Prompt, Skills, admitted Hooks, managed/static MCP, LLM,
-  and persistence Plugins;
-- run packaged platform/architecture smoke for DSH ESM, Loader/native peers,
-  signing, state durability, cancellation, and exit cleanup;
-- delete OpenCode runtime, SDK, configuration, OAuth wiring, and packaged bytes;
-- update the canonical architecture, Mermaid map, package contracts, boundaries,
-  protocol version, and package/packaged tests in the implementation PR.
+- [x] route ordinary Agent IPC through one DSH utility process per Project;
+- [x] compose Prompt, Host-managed and Plugin Skills, authenticated Host MCP,
+      managed loopback MCP, installed Service LLM routes, credentials, and persistence;
+- [x] remove the OpenCode runtime, SDK, executable stager, package dependency,
+      product UI identity, and packaged bytes;
+- [x] move reusable managed Skills into the backend-neutral store without decoding
+      or deleting legacy sessions, credentials, or Hook snapshots;
+- [x] update canonical architecture, Mermaid, package contracts, packaging, and
+      focused tests;
+- [x] refresh the ordinary macOS arm64 product package and packaged smoke through
+      DSH; Windows and Linux hosted proof remains blocked by account billing.
 
 ## 13. Go/No-Go gates
 
@@ -409,9 +411,10 @@ Convax control-plane protocol are not Go/No-Go gates.
 ### Recorded implementation evidence
 
 The implementation on this branch pins DSH `0.1.0-rc.7`, stages its exact dependency
-closure and a separate app-owned Bun, and builds a dedicated Electron entry whose
-resources contain DSH but no OpenCode directory. On macOS arm64, the packaged entry
-reported `DSH_PROJECT_ISOLATION_POC_OK` after:
+closure and a separate app-owned Bun, and keeps Cordis boot code in the child-only
+utility entry. The ordinary Electron Main bundle contains neither that boot graph nor
+OpenCode. On macOS arm64, the packaged isolation entry reported
+`DSH_PROJECT_ISOLATION_POC_OK` after:
 
 - creating two concurrent Project children and separate sessions;
 - carrying official Host ApiProxy request, response, event-stream, cancellation,
@@ -423,19 +426,24 @@ reported `DSH_PROJECT_ISOLATION_POC_OK` after:
 - closing, reopening, and reading each Project's own durable session state.
 
 The staged DSH closure is approximately 271 MiB and the independent Bun artifact is
-approximately 60 MiB on this platform. Size reduction, Windows/Linux proof, product
-IPC cutover, automatic crash recovery, Remote MCP OAuth, and Hook ABI replacement
-remain explicit M3 or later work.
+approximately 60 MiB on this platform. Size reduction, Windows/Linux proof,
+automatic crash recovery, guarded Remote MCP/OAuth transport, and Hook ABI
+replacement remain explicit later work; none retains a fallback backend.
+
+The ordinary macOS arm64 product package was also rebuilt after the M3 cutover. Its
+packaged smoke started DSH `0.1.0-rc.7`, created a Project-scoped process through
+the ordinary Main composition, listed the model catalog, and exited cleanly. The
+isolated external OpenRouter catalog returned HTTP 502 during that run, so the valid
+catalog contained zero connected providers; provider availability is not a DSH
+startup invariant. The resulting application contained approximately 284 MiB of
+DSH runtime bytes and 61 MiB of app-owned Bun bytes, with no OpenCode runtime
+directory.
 
 ## 14. Canonical architecture impact
 
-This PR remains a design decision and does not change the current production
-runtime. Therefore `docs/architecture.md`, the architecture Mermaid map, root
-`AGENTS.md`, and the Agent Runtime/Desktop contracts correctly continue to name
-OpenCode as the current owner implementation.
-
-The first implementation PR that makes DSH executable must update those files in
-the same change. At minimum it must:
+This PR changes the production runtime path. `docs/architecture.md`, the Mermaid
+map, root `AGENTS.md`, and Agent Runtime/Desktop contracts therefore name DSH as the
+single owner implementation. The cutover change:
 
 - rename `@convax/agent-runtime` ownership from OpenCode integration to generic DSH
   Host integration;
@@ -466,5 +474,5 @@ per live Project, the official Host ApiProxy contract, and an authenticated
 Project-scoped Host MCP capability. Reject dual backends, per-session processes, an
 in-process Electron Main Cordis root, and a Convax-owned Agent business protocol.
 
-The first implementation PR should prove only the packaged child carrier and
-two-Project capability isolation. Both passing is Go; either failing is No-Go.
+The dedicated adoption proof established Go. M3 then applies the same carrier and
+per-Project isolation to ordinary product composition without adding a fallback.

@@ -23,16 +23,13 @@ export function pluginAgentComposerResource(
   return skills.length === 1 ? { kind: "skill", name: skills[0]!.name } : undefined
 }
 
-export function openPluginInAgent(
-  plugin: Pick<WebPluginManifest, "contributes">,
-  composer: PluginAgentComposerPort,
-) {
+export function openPluginInAgent(plugin: Pick<WebPluginManifest, "contributes">, composer: PluginAgentComposerPort) {
   const resource = pluginAgentComposerResource(plugin)
   if (resource) composer.addResources([resource])
   else composer.focusComposer()
 }
 
-/** Makes a Plugin-started OpenCode session visible before its prompt can request user input. */
+/** Makes a Plugin-started DSH session visible before its prompt can request user input. */
 export function showPluginAgentSession(
   panel: PluginAgentSessionPort | null,
   input: { scopeId: string; session: AgentSession },

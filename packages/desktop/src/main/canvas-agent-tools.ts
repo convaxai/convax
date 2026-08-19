@@ -17,10 +17,7 @@ import {
   type CanvasViewCommand,
   type CanvasViewCommandRequest,
 } from "@convax/canvas/view"
-import {
-  requireProjectResourceReference,
-  type ProjectCanvasCatalogProjection,
-} from "@convax/project/canvas"
+import { requireProjectResourceReference, type ProjectCanvasCatalogProjection } from "@convax/project/canvas"
 import type { CanvasRendererBridge } from "./canvas-renderer-bridge"
 import type { CanvasTextResourceWriter } from "./canvas-text-resource-service"
 
@@ -818,7 +815,7 @@ function safeRetainedNoteLabels(error: CanvasResourcePartialFailureError): reado
 }
 
 function actor(scope: AgentToolScope) {
-  return { id: `opencode:${scope.scopeId}`, kind: "agent" as const }
+  return { id: `agent:${scope.scopeId}`, kind: "agent" as const }
 }
 
 function ref(scope: AgentToolScope, canvasId: string): CanvasDocumentRef {

@@ -20,7 +20,7 @@ import {
   type RpcError,
   type RpcResponse,
 } from "@deepseek-ai/dsh-host-apiproxy"
-import type { ContentBlock, Message } from "@deepseek-ai/dsh-llm/types"
+import type { Message } from "@deepseek-ai/dsh-llm/types"
 import { deriveEventMessage, foldSurface } from "@deepseek-ai/dsh-session/surface"
 import type { SessionEvent } from "@deepseek-ai/dsh-session/types"
 
@@ -74,11 +74,22 @@ export interface AgentRemoteMcpOAuthConfig {
 export interface AgentRemoteMcpServerConfig {
   enabled?: boolean
   headers?: Readonly<Record<string, string>>
-  networkBoundary?: "host-authenticated-loopback" | "internet"
+  networkBoundary: "host-authenticated-loopback" | "host-validated-https"
   oauth?: AgentRemoteMcpOAuthConfig | false
   timeout?: number
   type: "remote"
   url: string
+}
+
+export interface AgentHookModule {
+  /** Legacy immutable hook location retained only so the DSH cutover can reject it explicitly. */
+  readonly fileUrl: string
+}
+
+export interface AgentPluginConfiguration {
+  readonly hookModules?: readonly AgentHookModule[]
+  readonly mcpServers?: Readonly<Record<string, AgentRemoteMcpServerConfig>>
+  readonly skillPaths?: readonly string[]
 }
 
 export type AgentMcpServerStatus =
@@ -101,6 +112,8 @@ export interface DeepSeekHarnessAgentRuntimeOptions {
   resolveHookModules?: () => Promise<ReadonlyArray<{ fileUrl: string }>>
   resolveMcpServers?: () => Promise<Readonly<Record<string, AgentRemoteMcpServerConfig>>>
   resolveProviders?: () => Promise<Readonly<Record<string, DeepSeekHarnessProviderConfig>>>
+  /** Host-resolved Plugin Skill directories mounted into this Project runtime. */
+  skillDirectories?: readonly string[]
   protectedPathPatterns?: readonly string[]
   protectedPaths?: readonly string[]
   toolCallTimeout?: number
@@ -252,13 +265,6 @@ class HostCredentialProvider extends CredentialProvider {
   }
 }
 
-function messageText(message: Message) {
-  return message.content
-    .filter((block): block is ContentBlock & { type: "text" } => block.type === "text")
-    .map((block) => block.text)
-    .join("\n")
-}
-
 function blockParts(message: Message, event: SessionEvent): AgentMessagePart[] {
   const parts: AgentMessagePart[] = []
   let index = 0
@@ -356,10 +362,16 @@ function validateRemoteMcp(name: string, config: AgentRemoteMcpServerConfig) {
   const loopback = url.protocol === "http:" && (url.hostname === "127.0.0.1" || url.hostname === "localhost")
   if (!loopback && url.protocol !== "https:")
     throw new Error(`MCP server must use HTTPS or exact loopback HTTP: ${name}`)
+  if (loopback !== (config.networkBoundary === "host-authenticated-loopback")) {
+    throw new Error(`MCP server URL does not match its validated transport boundary: ${name}`)
+  }
+  if (!loopback) {
+    throw new Error(`Remote MCP requires a DSH-native guarded HTTPS transport: ${name}`)
+  }
   if (config.oauth !== false) throw new Error(`MCP OAuth is unavailable in the current DSH release: ${name}`)
   return {
     failOnStartupError: true,
-    headers: { ...(config.headers ?? {}) },
+    headers: { ...config.headers },
     serverName: name,
     toolCallTimeoutMs: config.timeout ?? 60_000,
     transport: "streamable-http",
@@ -446,7 +458,7 @@ export class DeepSeekHarnessAgentRuntime implements AgentRuntime {
         this.rootConfig,
         patches,
         (ctx) => {
-          new HostCredentialProvider(ctx, this.credentials)
+          void new HostCredentialProvider(ctx, this.credentials)
         },
         this.moduleRequire.resolve("@deepseek-ai/dsh-base/package.json"),
       )
@@ -514,7 +526,7 @@ export class DeepSeekHarnessAgentRuntime implements AgentRuntime {
           request: {
             always: [],
             id: String(envelope.rpcId),
-            metadata: { ...(frame.reason ? { reason: frame.reason } : {}) },
+            metadata: frame.reason ? { reason: frame.reason } : {},
             patterns: [],
             permission: frame.toolName,
             sessionID: String(frame.sessionId),
@@ -612,7 +624,11 @@ export class DeepSeekHarnessAgentRuntime implements AgentRuntime {
         id: "skill-filesystem",
         name: this.officialPlugin("@deepseek-ai/dsh-skill-filesystem"),
         config: {
-          customSkillDirs: [this.skillStore.userDirectory],
+          customSkillDirs: [
+            ...new Set(
+              [...(this.options.skillDirectories ?? []), this.skillStore.userDirectory].map(normalizedDirectory),
+            ),
+          ],
           includeDefaultRoots: false,
           watch: true,
         },
@@ -881,11 +897,7 @@ export class DeepSeekHarnessAgentRuntime implements AgentRuntime {
       await wait.catch(() => undefined)
       throw error
     }
-    try {
-      await wait
-    } catch (error) {
-      throw error
-    }
+    await wait
     const state = await this.getSessionState({ directory: input.directory, sessionId: input.sessionId })
     return (
       findLastAssistant(state.messages) ?? {
@@ -1018,9 +1030,14 @@ export class DeepSeekHarnessAgentRuntime implements AgentRuntime {
         name,
         config.enabled === false
           ? { status: "disabled" as const }
-          : config.oauth === false
-            ? { status: "connected" as const }
-            : { status: "needs_auth" as const },
+          : config.networkBoundary === "host-validated-https" && config.oauth === false
+            ? {
+                error: "Remote MCP requires a DSH-native guarded HTTPS transport",
+                status: "failed" as const,
+              }
+            : config.oauth === false
+              ? { status: "connected" as const }
+              : { status: "needs_auth" as const },
       ]),
     )
   }

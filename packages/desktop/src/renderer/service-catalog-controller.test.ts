@@ -263,7 +263,7 @@ describe("ServiceCatalogController", () => {
     controller.dispose()
   })
 
-  test("joins Plugin service metadata and OpenCode models without adding an execution router", async () => {
+  test("joins Plugin service metadata and DSH models without adding an execution router", async () => {
     const agentClient = {
       listModels: mock(async () => ({
         providers: [
@@ -287,8 +287,8 @@ describe("ServiceCatalogController", () => {
         billing: { kind: "free" },
         capabilities: ["llm"],
         models: [expect.objectContaining({ name: "Free Model", providerName: "OpenCode Zen" })],
-        name: "OpenCode",
-        serviceId: "builtin:opencode",
+        name: "DeepSeek Harness",
+        serviceId: "builtin:dsh",
       }),
       expect.objectContaining({
         authentication: "authenticated",

@@ -1,24 +1,33 @@
 import { describe, expect, test } from "bun:test"
 import { join } from "node:path"
-import { desktopBunRuntime, desktopOpenCodeBinaryDirectory } from "./packaged-runtime"
+import { desktopBunRuntime, desktopDshRuntime } from "./packaged-runtime"
 
 describe("Desktop packaged runtime composition", () => {
-  test("uses only the staged OpenCode binary directory in a packaged app", () => {
+  test("uses only the staged DSH utility closure in a packaged app", () => {
+    const resourcesDirectory = join("Applications", "Convax.app", "Contents", "Resources")
     expect(
-      desktopOpenCodeBinaryDirectory({
+      desktopDshRuntime({
+        applicationDirectory: "unused",
         isPackaged: true,
-        resourcesDirectory: join("Applications", "Convax.app", "Contents", "Resources"),
+        resourcesDirectory,
       }),
-    ).toBe(join("Applications", "Convax.app", "Contents", "Resources", "opencode", "bin"))
+    ).toEqual({
+      moduleDirectory: join(resourcesDirectory, "dsh-runtime", "node_modules"),
+      utilityEntry: join(resourcesDirectory, "dsh-runtime", "dsh-project-utility.js"),
+    })
   })
 
-  test("leaves source and dev-server binary resolution to agent-runtime", () => {
+  test("uses the repository-staged DSH utility closure in development", () => {
     expect(
-      desktopOpenCodeBinaryDirectory({
+      desktopDshRuntime({
+        applicationDirectory: "/repo/packages/desktop",
         isPackaged: false,
         resourcesDirectory: "unused",
       }),
-    ).toBeUndefined()
+    ).toEqual({
+      moduleDirectory: join("/repo", "packages", "desktop", ".packaging", "runtime", "dsh", "node_modules"),
+      utilityEntry: join("/repo", "packages", "desktop", ".packaging", "runtime", "dsh", "dsh-project-utility.js"),
+    })
   })
 
   test("uses an independently staged app-owned Bun CLI", () => {

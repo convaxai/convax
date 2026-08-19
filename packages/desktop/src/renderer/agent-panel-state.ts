@@ -250,7 +250,7 @@ export async function withAgentStoppingState<T>(
 }
 
 /**
- * OpenCode polling returns fresh arrays even when nothing changed. A stable
+ * Agent polling returns fresh arrays even when nothing changed. A stable
  * content key prevents those no-op polls from repeatedly forcing scroll work.
  */
 export function agentSessionContentKey(state: AgentSessionState | undefined) {

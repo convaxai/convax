@@ -565,13 +565,10 @@ for (const workspacePackage of packages) {
         `${sourcePath}: ${reservedWorkspacePackageName} is reserved; Workbench owns active window state and Project owns one folder`,
       )
     }
-    if (
-      workspacePackage.name !== "@convax/agent-runtime" &&
-      (specifier === "opencode-ai" ||
-        specifier.startsWith("opencode-ai/") ||
-        specifier.startsWith("@opencode-ai/") ||
-        specifier.startsWith("@deepseek-ai/"))
-    ) {
+    if (specifier === "opencode-ai" || specifier.startsWith("opencode-ai/") || specifier.startsWith("@opencode-ai/")) {
+      throw new Error(`${sourcePath}: removed OpenCode backend imports are forbidden`)
+    }
+    if (workspacePackage.name !== "@convax/agent-runtime" && specifier.startsWith("@deepseek-ai/")) {
       throw new Error(`${sourcePath}: Agent backend imports must stay behind @convax/agent-runtime`)
     }
     if (nodeBuiltinSpecifiers.has(specifier) && !canImportNodeBuiltins(workspacePackage.name, sourcePath)) {
@@ -665,12 +662,15 @@ for (const workspacePackage of packages) {
     }
   }
 
+  const removedBackendDependency = Object.keys(runtimeDependencies).find(
+    (dependency) => dependency === "opencode-ai" || dependency.startsWith("@opencode-ai/"),
+  )
+  if (removedBackendDependency) {
+    throw new Error(`${workspacePackage.name}: removed backend dependency ${removedBackendDependency} is forbidden`)
+  }
   if (workspacePackage.name !== "@convax/agent-runtime") {
-    const forbiddenDependency = Object.keys(runtimeDependencies).find(
-      (dependency) =>
-        dependency === "opencode-ai" ||
-        dependency.startsWith("@opencode-ai/") ||
-        dependency.startsWith("@deepseek-ai/"),
+    const forbiddenDependency = Object.keys(runtimeDependencies).find((dependency) =>
+      dependency.startsWith("@deepseek-ai/"),
     )
     if (forbiddenDependency) {
       throw new Error(`${workspacePackage.name}: ${forbiddenDependency} must stay behind @convax/agent-runtime`)

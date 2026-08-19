@@ -15,7 +15,7 @@ export interface PluginAgentMcpRuntime {
 }
 
 /**
- * Main-only adapter from an installed Plugin id to OpenCode's native OAuth API.
+ * Main-only adapter from an installed Plugin id to DSH MCP connection status.
  * The renderer never selects a server name or supplies connection material.
  */
 export class PluginAgentMcpConnectionService {
@@ -51,7 +51,7 @@ export class PluginAgentMcpConnectionService {
     if (!resolved) throw new Error(`Plugin does not contribute a remote Agent MCP server: ${plugin.id}`)
 
     let current = (await this.#readStatuses(plugin.id))[resolved.name]
-    if (!current) throw new Error(`OpenCode did not load the Plugin Agent MCP server: ${plugin.id}`)
+    if (!current) throw new Error(`DSH did not admit the Plugin Agent MCP server: ${plugin.id}`)
     if (current.status === "connected") {
       this.#refreshProjectConnections(plugin.id)
       return
@@ -64,7 +64,7 @@ export class PluginAgentMcpConnectionService {
         throw new Error(`Plugin Agent MCP reconnect failed: ${plugin.id}`)
       }
       current = (await this.#readStatuses(plugin.id))[resolved.name]
-      if (!current) throw new Error(`OpenCode did not load the Plugin Agent MCP server: ${plugin.id}`)
+      if (!current) throw new Error(`DSH did not admit the Plugin Agent MCP server: ${plugin.id}`)
       if (current.status === "connected") {
         this.#refreshProjectConnections(plugin.id)
         return
@@ -89,11 +89,8 @@ export class PluginAgentMcpConnectionService {
     if (authenticated.status !== "connected") {
       throw new Error(`Plugin Agent MCP authentication did not connect: ${plugin.id}`)
     }
-    // OAuth credentials are OpenCode-owned and durable, while MCP clients are
-    // directory-instance scoped. Dispose the live instances so every Project
-    // reconnects with the newly stored credential on its next Agent call. This
-    // cleanup is deliberately detached: an active Agent run must not block the
-    // successful connection action, and cleanup failure cannot revoke OAuth.
+    // A DSH-native Plugin owns the credential envelope. Retire live Project
+    // instances so each reconnects from the next immutable configuration snapshot.
     this.#refreshProjectConnections(plugin.id)
   }
 

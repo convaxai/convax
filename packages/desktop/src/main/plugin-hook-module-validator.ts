@@ -8,7 +8,7 @@ import {
   type Program,
 } from "acorn"
 
-function hasOpenCodePluginExport(program: Program) {
+function hasLegacyHookExport(program: Program) {
   return program.body.some(
     (statement) =>
       statement.type === "ExportDefaultDeclaration" ||
@@ -69,8 +69,8 @@ export function assertSelfContainedHookModule(bytes: Uint8Array, label: string) 
   } catch (error) {
     throw new Error(`${label} must be a valid JavaScript ESM module`, { cause: error })
   }
-  if (!hasOpenCodePluginExport(program)) {
-    throw new Error(`${label} must export at least one OpenCode Plugin entry`)
+  if (!hasLegacyHookExport(program)) {
+    throw new Error(`${label} must export at least one legacy Agent Hook entry`)
   }
   const dependencies = inspectHookModuleDependencies(program)
   if (dependencies.commonJsReference) {

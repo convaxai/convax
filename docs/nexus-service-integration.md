@@ -13,7 +13,7 @@ Convax 的内置依赖。
 
 ## 1. 核心决策
 
-Convax 把该集成以 **Convax** 的名称展示为一个与内置 OpenCode Service 并列的已安装 Service；Nexus 只保留为后端和代码所有权名称。具体集成由 `convaxai/convax-plugins` 仓库中的官方 Plugin 和经过验证的 Companion 实现；Convax 主仓只提供任何 Service 都可以复用的通用宿主能力。
+Convax 把该集成以 **Convax** 的名称展示为一个与内置 DeepSeek Harness Service 并列的已安装 Service；Nexus 只保留为后端和代码所有权名称。具体集成由 `convaxai/convax-plugins` 仓库中的官方 Plugin 和经过验证的 Companion 实现；Convax 主仓只提供任何 Service 都可以复用的通用宿主能力。
 
 Nexus Service 负责：
 
@@ -24,9 +24,9 @@ Nexus Service 负责：
 - 通过宿主管理的固定 Checkout 操作在系统浏览器完成升级；
 - 运行一个仅 Main 进程可见的本地 OpenRouter 协议 Gateway；
 - 获取短期 Nexus Data Token，并将其附加到 Gateway 请求；
-- 确保 Nexus 凭据和上游 Provider 凭据不会暴露给 Renderer、OpenCode、Canvas 文档、Project 文件或日志。
+- 确保 Nexus 凭据和上游 Provider 凭据不会暴露给 Renderer、DSH、Canvas 文档、Project 文件或日志。
 
-Nexus 始终是可选的已安装 Service。内置 OpenCode Service 继续独立工作。
+Nexus 始终是可选的已安装 Service。内置 DeepSeek Harness Service 继续独立工作。
 
 ## 2. 产品体验
 
@@ -134,9 +134,9 @@ Idempotency-Key，避免进程重启或网络重试产生重复 Checkout。
 - 每个用户拥有独立授权的 `WorkspaceAccess` 和 Quota。
 - Agent LLM 流量通过 Nexus ProviderConnection 转发。
 - 保持流式传输、背压和取消语义。
-- 所有长期或短期 Nexus 凭据均不进入 Renderer 和 OpenCode。
+- 所有长期或短期 Nexus 凭据均不进入 Renderer 和 DSH。
 - 具体 Nexus 行为留在 Convax 主仓之外。
-- OpenCode 和 Nexus 两个 Service 可以同时存在。
+- DeepSeek Harness 和 Nexus 两个 Service 可以同时存在。
 
 ### 3.2 非目标
 
@@ -146,7 +146,7 @@ Idempotency-Key，避免进程重启或网络重试产生重复 Checkout。
 - 允许 Desktop 向 Nexus 传入客户端选择的上游 Host。
 - 在 Convax 中实现模型映射、Fallback、定价或路由逻辑。
 - 将 Nexus Token 持久化到 Project、Canvas 文档或普通 Preferences。
-- 替换现有 OpenCode Service。
+- 替换现有 DeepSeek Harness Service。
 - 在 Convax 内部实现 Nexus Hosted Auth。
 
 ## 4. 职责归属
@@ -430,7 +430,7 @@ llm.gateway.start
 Companion 的 Loopback Gateway 使用当前短期 Data Token 原样代理
 `{gatewayBaseUrl}/{providerPath...}`。Nexus 继续按普通 Provider Path 代理到 OpenRouter，
 目录响应不携带 Provider Key。Convax Main 主动拉取目录、限制为最多 2048 个模型，并把
-验证后的结果同时提供给 OpenCode 内存配置和 Nexus Service 卡片；Renderer 不接收
+验证后的结果同时提供给 DSH Project 子进程配置和 Nexus Service 卡片；Renderer 不接收
 Gateway URL、Data Token 或上游凭据。
 
 图片和视频目录不从通用模型列表推导。Companion 分别请求 OpenRouter 官方
@@ -462,7 +462,7 @@ Gateway URL、Data Token 或上游凭据。
 - 对 Header 和 Body 设置上限；
 - 不记录 Prompt、Completion、Cookie 或 Token。
 
-OpenCode 只能得到本地 Base URL 和随机本地 Key，不能得到 Nexus Token 或上游 Provider Secret。
+DSH Project 子进程只能得到本地 Base URL 和随机本地 Key，不能得到 Nexus Token 或上游 Provider Secret。
 
 ## 9. 错误收敛
 
@@ -535,7 +535,7 @@ Plugin 永远不使用 Management Key。该阶段只用于内部验证，正式�
 - 取消、超时、Plugin 更新和应用退出都会关闭 Transaction。
 - 不同 Plugin 的 Credential Record 相互隔离。
 - `authorize`、`reauthorize` 和 `signOut` 会刷新 Agent 配置。
-- OpenCode 和 Nexus 是两个相互独立的 Service Catalog Entry。
+- DeepSeek Harness 和 Nexus 是两个相互独立的 Service Catalog Entry。
 - Core Source 不根据 Nexus Plugin ID 进行分支。
 - Status v1 被明确拒绝；Status v2 缺少 Plan/Billing 或包含额外字段时失败关闭。
 - Renderer 只能选择 Status v2 公布的 Plan Key，不能传入 Checkout URL 或支付参数。
@@ -547,7 +547,7 @@ Plugin 永远不使用 Management Key。该阶段只用于内部验证，正式�
 - PKCE 使用 `S256`；State 不匹配和重放默认失败。
 - Refresh 和 Data Token 请求执行 Single-flight。
 - 只有 Refresh Token 可以持久化。
-- Data Token 不会返回给 OpenCode 或 Renderer。
+- Data Token 不会返回给 DSH 或 Renderer。
 - Streaming、背压和取消可以端到端工作。
 - 认证过期最多重试一次。
 - Quota 和 Provider 失败不会被错误重试。

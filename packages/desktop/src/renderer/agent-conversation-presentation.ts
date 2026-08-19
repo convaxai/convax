@@ -217,7 +217,7 @@ function presentTurn(user: AgentMessage | undefined, assistants: AgentMessage[])
 }
 
 /**
- * Groups the ordered OpenCode message stream into user turns and separates the
+ * Groups the ordered DSH message stream into user turns and separates the
  * primary delivery from inspectable activity. Activity remains available to a
  * caller that wants to reveal it, while final text, files, Skills, and errors
  * can stay visible when activity is collapsed. Pending permission and question

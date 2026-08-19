@@ -19,7 +19,7 @@ export function availableAgentLlmProviders(
   return catalog?.providers.filter((provider) => provider.connected && provider.models.length > 0) ?? []
 }
 
-/** Resolves a remembered provider/model pair against the current connected OpenCode catalog. */
+/** Resolves a remembered provider/model pair against the current connected DSH catalog. */
 export function findAgentLlmModel(
   selection: AgentLlmModelSelection | undefined,
   catalog: AgentModelCatalog | undefined,

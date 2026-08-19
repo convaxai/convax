@@ -53,7 +53,7 @@ const topLevelFields = new Set([
 ])
 
 /**
- * Exposes the shared generation application service to OpenCode. The adapter
+ * Exposes the shared generation application service to DSH. The adapter
  * contributes no generation implementation of its own: installed Tool Plugins
  * remain the only executors, while the host supplies the authoritative Agent
  * Project scope and mutation actor.
@@ -72,7 +72,7 @@ export function createGenerationAgentToolProvider(service: GenerationCanvasAgent
       const installed = await installedTools()
       if (!installed.length) throw new Error("No generation Tool Plugin is installed")
       const request = generationRequest(scope, input, installed)
-      const actor = { id: `opencode:${requiredIdentifier(scope.scopeId, "Agent scope id")}`, kind: "agent" } as const
+      const actor = { id: `agent:${requiredIdentifier(scope.scopeId, "Agent scope id")}`, kind: "agent" } as const
       const cancel = () => {
         void service.cancel(request.operationId, actor).catch(() => undefined)
       }

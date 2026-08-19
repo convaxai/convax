@@ -37,7 +37,7 @@ export interface AgentMessage {
   id: string
   sessionId: string
   role: "user" | "assistant"
-  /** Exact provider/model recorded by OpenCode for this message. */
+  /** Exact provider/model recorded by the Agent runtime for this message. */
   model?: AgentModel
   createdAt: number
   completedAt?: number
@@ -115,7 +115,7 @@ export interface AgentActivityProjectionContext {
 export interface AgentSkill {
   name: string
   description?: string
-  /** Native OpenCode source location. Hosts may use it to distinguish managed and external Skills. */
+  /** Native runtime source location. Hosts may use it to distinguish managed and external Skills. */
   location?: string
 }
 
@@ -162,14 +162,14 @@ export interface AgentModel {
   modelId: string
 }
 
-/** A display-only OpenCode model projection. Provider configuration stays inside the runtime. */
+/** A display-only Agent model projection. Provider configuration stays inside the runtime. */
 export interface AgentModelCatalogModel {
   modelId: string
   modelName: string
   default: boolean
 }
 
-/** A display-only OpenCode provider projection with no credentials or provider options. */
+/** A display-only Agent provider projection with no credentials or provider options. */
 export interface AgentModelCatalogProvider {
   providerId: string
   providerName: string
@@ -178,7 +178,7 @@ export interface AgentModelCatalogProvider {
   models: AgentModelCatalogModel[]
 }
 
-/** OpenCode's currently available LLM providers and models for one host-resolved directory. */
+/** The Agent runtime's available LLM providers and models for one host-resolved directory. */
 export interface AgentModelCatalog {
   providers: AgentModelCatalogProvider[]
 }
@@ -261,16 +261,19 @@ export interface AgentClient {
 
 export interface AgentRuntimeListSessionsInput {
   directory: string
+  scopeId?: string
   limit?: number
 }
 
 export interface AgentRuntimeCreateSessionInput {
   directory: string
+  scopeId?: string
   title?: string
 }
 
 export interface AgentRuntimeGetSessionStateInput {
   directory: string
+  scopeId?: string
   sessionId: string
   limit?: number
 }
@@ -282,6 +285,7 @@ export interface AgentRuntimePromptInput extends AgentPromptFields<AgentRuntimeR
 
 export interface AgentRuntimeSessionInput {
   directory: string
+  scopeId?: string
   sessionId: string
 }
 
@@ -306,7 +310,7 @@ export interface AgentToolCallContext {
   signal?: AbortSignal
 }
 
-/** Host-owned tools exposed to OpenCode through the runtime boundary. */
+/** Host-owned tools exposed through the Agent runtime boundary. */
 export interface AgentToolProvider {
   callTool(
     scope: AgentToolScope,
@@ -319,6 +323,7 @@ export interface AgentToolProvider {
 
 export interface AgentRuntimeReplyPermissionInput {
   directory: string
+  scopeId?: string
   requestId: string
   reply: "once" | "always" | "reject"
   message?: string
@@ -326,18 +331,20 @@ export interface AgentRuntimeReplyPermissionInput {
 
 export interface AgentRuntimeReplyQuestionInput {
   directory: string
+  scopeId?: string
   requestId: string
   answers: string[][]
 }
 
 export interface AgentRuntimeRejectQuestionInput {
   directory: string
+  scopeId?: string
   requestId: string
 }
 
 export interface AgentRuntime {
   getStatus(): Promise<AgentRuntimeStatus>
-  /** List OpenCode-native Skills without requiring a host tool scope. */
+  /** List runtime-native Skills without requiring a host tool scope. */
   listSkills(input: AgentRuntimeDirectoryInput): Promise<AgentSkill[]>
   listSessions(input: AgentRuntimeListSessionsInput): Promise<AgentSession[]>
   createSession(input: AgentRuntimeCreateSessionInput): Promise<AgentSession>

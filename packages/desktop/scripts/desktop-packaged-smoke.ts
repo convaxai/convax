@@ -407,44 +407,29 @@ async function verifyPackagedLayout(executable: string) {
   const appArchive = path.join(resourcesDirectory, "app.asar")
   if (!(await regularFile(appArchive))) throw new Error(`Packaged app.asar was not found: ${appArchive}`)
 
-  const runtimeRoot = path.join(resourcesDirectory, "opencode")
+  const runtimeRoot = path.join(resourcesDirectory, "dsh-runtime")
   const runtimeMetadataPath = path.join(runtimeRoot, "runtime.json")
   const runtime = JSON.parse(await fs.readFile(runtimeMetadataPath, "utf8")) as {
-    arch?: string
-    executable?: string
-    package?: string
-    platform?: string
+    packages?: Record<string, string[]>
     schema?: string
-    sha256?: string
-    version?: string
   }
-  const packagePlatform = process.platform === "win32" ? "windows" : process.platform
-  const expectedPackagePrefix = `opencode-${packagePlatform}-${process.arch}`
+  const dshVersions = runtime.packages?.["@deepseek-ai/dsh-host-apiproxy"]
   if (
-    runtime.schema !== "convax.packaged-runtime/1" ||
-    runtime.platform !== process.platform ||
-    runtime.arch !== process.arch ||
-    (runtime.package !== expectedPackagePrefix && !runtime.package?.startsWith(`${expectedPackagePrefix}-`)) ||
-    !/^[0-9a-f]{64}$/.test(runtime.sha256 ?? "") ||
-    typeof runtime.version !== "string" ||
-    !runtime.version ||
-    typeof runtime.executable !== "string" ||
-    !runtime.executable
+    runtime.schema !== "convax.packaged-dsh-runtime/1" ||
+    !runtime.packages ||
+    !Array.isArray(dshVersions) ||
+    dshVersions.length !== 1
   ) {
-    throw new Error(`Packaged OpenCode metadata is invalid: ${JSON.stringify(runtime)}`)
+    throw new Error(`Packaged DSH metadata is invalid: ${JSON.stringify(runtime)}`)
   }
-  const runtimeExecutable = path.resolve(runtimeRoot, ...runtime.executable.split("/"))
-  if (
-    !runtimeExecutable.startsWith(`${path.resolve(runtimeRoot)}${path.sep}`) ||
-    !(await regularFile(runtimeExecutable))
-  ) {
-    throw new Error(`Packaged OpenCode executable was not found: ${runtimeExecutable}`)
+  for (const required of [
+    path.join(runtimeRoot, "dsh-project-utility.js"),
+    path.join(runtimeRoot, "package.json"),
+    path.join(runtimeRoot, "node_modules", "@convax", "agent-runtime", "package.json"),
+  ]) {
+    if (!(await regularFile(required))) throw new Error(`Packaged DSH runtime file was not found: ${required}`)
   }
-  const executableDigest = await sha256(runtimeExecutable)
-  if (executableDigest !== runtime.sha256) {
-    throw new Error(`Packaged OpenCode executable digest does not match runtime.json: ${executableDigest}`)
-  }
-  return { ...runtime, resourcesDirectory }
+  return { dshVersion: dshVersions[0]!, resourcesDirectory }
 }
 
 async function terminate(child: Bun.Subprocess) {
@@ -563,7 +548,7 @@ try {
   }
   // This smoke verifies the self-contained packaged runtime and provider catalog,
   // not a developer's external network. A stale local proxy can otherwise make
-  // OpenCode provider discovery hang even though the packaged binary is healthy.
+  // DSH provider discovery hang even though the packaged binary is healthy.
   for (const name of ["ALL_PROXY", "HTTPS_PROXY", "HTTP_PROXY", "all_proxy", "https_proxy", "http_proxy"]) {
     delete environment[name]
   }
@@ -753,8 +738,14 @@ try {
     providerCount?: number
     state?: string
   }
-  if (agent.state !== "ready" || !agent.providerCount || !agent.modelCount) {
-    throw new Error(`Packaged OpenCode runtime did not become ready: ${JSON.stringify(agent)}`)
+  const validCount = (value: unknown) => Number.isSafeInteger(value) && Number(value) >= 0
+  if (
+    agent.state !== "ready" ||
+    !validCount(agent.connectedProviders) ||
+    !validCount(agent.providerCount) ||
+    !validCount(agent.modelCount)
+  ) {
+    throw new Error(`Packaged DSH runtime did not become ready: ${JSON.stringify(agent)}`)
   }
 
   await assertLocalMarketplaceIdentity(userDataRoot)
@@ -885,7 +876,7 @@ try {
       path: filePath,
     }))
     const installed = await inspectAgentSkillDirectory(
-      path.join(userDataRoot, "opencode", "skills", "user", expected.id),
+      path.join(userDataRoot, "agent-runtime", "skills", "user", expected.id),
     )
     if (exactSkillTreeDigest(installed.files) !== exactSkillTreeDigest(expectedFiles)) {
       throw new Error(`Packaged default standalone Skill tree is not exact: ${expected.id}`)
@@ -894,7 +885,7 @@ try {
   await assertNoLegacyDefaultCapabilityReceipt(userDataRoot)
 
   console.log(
-    `Packaged Desktop smoke passed (${path.basename(executable)}, OpenCode ${packagedRuntime.version}, ${seeded.projectId}, ${defaultInstallExpected ? defaultRemotePluginId : "no target-specific default"}, ${agent.providerCount} OpenCode providers)`,
+    `Packaged Desktop smoke passed (${path.basename(executable)}, DSH ${packagedRuntime.dshVersion}, ${seeded.projectId}, ${defaultInstallExpected ? defaultRemotePluginId : "no target-specific default"}, ${agent.providerCount} DSH providers)`,
   )
   const application =
     process.platform === "darwin" ? path.resolve(path.dirname(executable), "..", "..") : path.dirname(executable)

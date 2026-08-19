@@ -50,11 +50,11 @@ contract and its routed references.
 - Main owns Electron/native I/O, Project Node adapters, authoritative repositories,
   ActiveSet and installed capability authority, Agent runtime composition, trusted
   IPC, and the signed packaged-application update lifecycle.
-- The DSH adoption gate uses one utility process and one independently issued Host
+- The product DSH runtime uses one utility process and one independently issued Host
   MCP capability per live Project. Main owns the Project registry, MessagePort
   transfer, startup deadline, revocation and forced termination; Agent Runtime owns
-  only the host-neutral official Host ApiProxy adapter. This gate is not a product
-  backend router or an OpenCode fallback.
+  only the host-neutral official Host ApiProxy adapter. There is no product backend
+  router or fallback.
 - Preload exposes a narrow typed bridge. It owns no durable or business state.
 - Renderer owns presentation, controller composition, fallible projections, and
   user preferences. It never imports Node or Electron.
@@ -68,10 +68,9 @@ contract and its routed references.
   Electron and Node built-ins may remain external, the ASAR must not contain or
   depend on `node_modules`, and Main stays CommonJS so Electron Vite cannot inject
   its ESM compatibility shim into dependency-bundled source strings.
-- The explicit DSH adoption-gate artifact may additionally stage one exact DSH
-  child-only `node_modules` closure outside ASAR. Ordinary Main/Preload never resolve
-  packages from it. The app-owned Bun executable is a separate resource and must not
-  be sourced from an Agent backend binary.
+- Every ordinary dev and packaged product stages one exact DSH child-only
+  `node_modules` closure outside ASAR. Main/Preload never resolve packages from it;
+  only the utility process does. The app-owned Bun executable is a separate resource.
 - Main also composes the PeerJS data plane, its independently bound channels,
   user-managed private identity-key files, Project-scoped writer coordination, and
   typed ports to collaboration, Project, Canvas, and control-plane owners. It never
@@ -203,7 +202,7 @@ contract and its routed references.
 - Only typed Project resources staged as generation inputs may retain a bounded,
   stable `.convax/staging` hard-link alias. Plugin outputs, executable snapshots,
   and every other native copy retain the single-link requirement.
-- Treat standalone Skills, Plugin-owned Skills, Web entries, OpenCode Hooks, Agent
+- Treat standalone Skills, Plugin-owned Skills, Web entries, legacy Hooks, Agent
   MCP contributions, Tool companions, Host API calls, and inter-Plugin capabilities
   as distinct surfaces. One never grants another's authority.
 - Publish each Plugin as one complete immutable closure and select exact snapshots
@@ -280,7 +279,7 @@ These references are mandatory when the named capability is involved:
 | ------------------------------------------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | Project/Canvas/Workbench composition                         | [`docs/architecture.md` §§4–6](../../docs/architecture.md#4-canonical-state) and the relevant package contracts                                                                                                            |
 | Host API/SDK change                                          | [`docs/plugin-host-change-governance.md`](../../docs/plugin-host-change-governance.md), Plugin API/SDK package contracts, and [`docs/plugin-skill-platform.md`](../../docs/plugin-skill-platform.md)                       |
-| Agent/OpenCode/Skills/Hooks/MCP                              | [`docs/architecture.md` §§7–8](../../docs/architecture.md#7-agent-tools-and-skills), [`docs/plugin-skill-platform.md`](../../docs/plugin-skill-platform.md), and Agent Runtime/Main contracts                              |
+| Agent/DSH/Skills/Hooks/MCP                                   | [`docs/architecture.md` §§7–8](../../docs/architecture.md#7-agent-tools-and-skills), [`docs/plugin-skill-platform.md`](../../docs/plugin-skill-platform.md), and Agent Runtime/Main contracts                              |
 | Marketplace/Registry/install/snapshot/ActiveSet/provisioning | [`docs/architecture.md` Marketplace flow and §8](../../docs/architecture.md#marketplace-listing-install-and-setup), [`docs/plugin-skill-platform.md`](../../docs/plugin-skill-platform.md), and Marketplace/Main contracts |
 | Generation/models/services/LRO                               | [`docs/generation-tool-plugins.md`](../../docs/generation-tool-plugins.md), [`docs/canvas-node-generation-state-persistence.md`](../../docs/canvas-node-generation-state-persistence.md), and Main/Renderer contracts      |
 | Web Plugin/Host API/broker/Canvas grants                     | [`docs/plugin-canvas-capabilities.md`](../../docs/plugin-canvas-capabilities.md) and all touched process contracts                                                                                                         |

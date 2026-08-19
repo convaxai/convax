@@ -67,7 +67,7 @@ export function createElectronBuilderConfig(environment: NodeJS.ProcessEnv = pro
     electronUpdaterCompatibility: ">=2.16",
     publish: updateBaseUrl ? [{ provider: "generic", url: updateBaseUrl }] : undefined,
     releaseInfo: releaseNotesFile ? { releaseNotesFile } : undefined,
-    // Main, preload, renderer, the OpenCode SDK, and every Convax workspace
+    // Main, preload, renderer, and every Convax workspace
     // dependency are already bundled by electron-vite. electron-builder's Bun
     // dependency traversal would otherwise follow workspace links and publish
     // package source, tests, and build caches inside app.asar.
@@ -84,8 +84,13 @@ export function createElectronBuilderConfig(environment: NodeJS.ProcessEnv = pro
         filter: ["**/*"],
       },
       {
-        from: ".packaging/runtime/opencode",
-        to: "opencode",
+        from: ".packaging/runtime/dsh",
+        to: "dsh-runtime",
+        filter: ["dsh-project-utility.js", "package.json", "runtime.json"],
+      },
+      {
+        from: ".packaging/runtime/dsh/node_modules",
+        to: "dsh-runtime/node_modules",
         filter: ["**/*"],
       },
       {

@@ -15,6 +15,7 @@ export interface DshProjectProcessOptions {
   moduleDirectory: string
   persona?: string
   providers?: Readonly<Record<string, DeepSeekHarnessProviderConfig>>
+  skillDirectories?: readonly string[]
   scopeId: string
   startupTimeoutMs?: number
   utilityEntry: string
@@ -82,6 +83,7 @@ export class DshProjectProcess {
             moduleDirectory: options.moduleDirectory,
             persona: options.persona,
             providers: options.providers,
+            skillDirectories: options.skillDirectories,
             scopeId: options.scopeId,
             type: "dsh/init",
           },

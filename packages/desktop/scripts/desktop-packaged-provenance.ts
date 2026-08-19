@@ -7,16 +7,6 @@ export interface PackagedProvenanceFinding {
   marker: string
 }
 
-function isOpenCodeRuntime(relativePath: string) {
-  const normalized = relativePath.split(path.sep).join("/").toLowerCase()
-  return (
-    normalized === "contents/resources/opencode" ||
-    normalized.startsWith("contents/resources/opencode/") ||
-    normalized === "resources/opencode" ||
-    normalized.startsWith("resources/opencode/")
-  )
-}
-
 function asciiLowercase(value: Buffer) {
   const result = Buffer.from(value)
   for (let index = 0; index < result.length; index += 1) {
@@ -76,7 +66,6 @@ export async function scanPackagedProvenance(root: string, denylist: readonly st
     for (const entry of entries) {
       const entryPath = path.join(directory, entry.name)
       const relativePath = path.relative(resolvedRoot, entryPath)
-      if (isOpenCodeRuntime(relativePath)) continue
       if (entry.isDirectory()) {
         pending.push(entryPath)
       } else if (entry.isFile()) {

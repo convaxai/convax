@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto"
 
-import { AbstractApiClient } from "@deepseek-ai/dsh-host-apiproxy"
+import { AbstractApiClient } from "@deepseek-ai/dsh-host-apiproxy/client"
 
 import "./dsh-disposable-compat"
 
@@ -170,7 +170,7 @@ export class MessagePortApiClient extends AbstractApiClient {
     this.closed = true
     this.unsubscribe()
     this.port.close()
-    for (const id of [...this.pending.keys()]) this.fail(id, reason)
+    for (const id of this.pending.keys()) this.fail(id, reason)
   }
 }
 

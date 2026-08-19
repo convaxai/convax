@@ -1,2 +1,11 @@
 export * from "./managed-skill-store"
-export * from "./opencode-agent-runtime"
+export type {
+  AgentHookModule,
+  AgentMcpServerStatus,
+  AgentPluginConfiguration,
+  AgentRemoteMcpOAuthConfig,
+  AgentRemoteMcpServerConfig,
+  AgentRuntimeProfileConfig,
+  DeepSeekHarnessAgentRuntimeOptions,
+  DeepSeekHarnessProviderConfig,
+} from "./deepseek-harness-agent-runtime"

@@ -13,7 +13,19 @@ import type { ProjectEntry } from "@convax/project-files"
 import { parseProjectEntryDrag, PROJECT_ENTRY_DRAG_TYPE } from "@convax/project-files/drag"
 import type { PetDisplayedSession } from "../pet-contracts"
 import { parseProjectCanvasDrag, PROJECT_CANVAS_DRAG_TYPE, type ProjectCanvas } from "@convax/project/canvas"
-import { BeamButton, BeamSurface, Button, cn, createToolInputDefaultValues, Loading, LoadingSpinner, reconcileToolInputValues, Tooltip, TooltipProvider, validateToolInputValues } from "@convax/ui"
+import {
+  BeamButton,
+  BeamSurface,
+  Button,
+  cn,
+  createToolInputDefaultValues,
+  Loading,
+  LoadingSpinner,
+  reconcileToolInputValues,
+  Tooltip,
+  TooltipProvider,
+  validateToolInputValues,
+} from "@convax/ui"
 import type {
   GenerationToolDescription,
   GenerationToolInput,
@@ -140,7 +152,12 @@ import {
 import { AgentMarkdown } from "./agent-markdown"
 import { useAgentGenerationPreference } from "./agent-generation-preference"
 import { useAgentModelCatalog } from "./agent-model-catalog"
-import { findAgentLlmModel, reconcileAgentLlmModelSelection, reconcileAgentLlmModelSelectionFromReadyCatalog, type AgentLlmModelSelection } from "./agent-llm-models"
+import {
+  findAgentLlmModel,
+  reconcileAgentLlmModelSelection,
+  reconcileAgentLlmModelSelectionFromReadyCatalog,
+  type AgentLlmModelSelection,
+} from "./agent-llm-models"
 import {
   agentConversationAnnouncementState,
   agentConversationCopyText,
@@ -537,21 +554,23 @@ export const AgentPanel = forwardRef<AgentPanelHandle, AgentPanelProps>(function
     const scopeId = props.projectId
     if (sharedGenerationController) {
       if (!scopeId) return Promise.resolve<readonly GenerationToolSummary[]>([])
-      return sharedGenerationController
-        .listTools()
-        .then((listed) => {
-          const tools = listed.filter((tool) => isAgentGenerationOutput(tool.output))
-          if (!mountedRef.current || activeProjectRef.current !== scopeId) return tools
-          const current = generationToolSelectionRef.current
-          const reconciled = reconcileAgentGenerationToolPreference(current, tools)
-          if (current?.id !== reconciled?.id || current?.output !== reconciled?.output) {
-            setGenerationToolSelection(reconciled)
-          }
-          return tools
-        })
-        // The shared snapshot owns user-visible failure state and keeps stale data.
-        // Event/effect callers intentionally fire-and-forget this reconciliation.
-        .catch(() => [])
+      return (
+        sharedGenerationController
+          .listTools()
+          .then((listed) => {
+            const tools = listed.filter((tool) => isAgentGenerationOutput(tool.output))
+            if (!mountedRef.current || activeProjectRef.current !== scopeId) return tools
+            const current = generationToolSelectionRef.current
+            const reconciled = reconcileAgentGenerationToolPreference(current, tools)
+            if (current?.id !== reconciled?.id || current?.output !== reconciled?.output) {
+              setGenerationToolSelection(reconciled)
+            }
+            return tools
+          })
+          // The shared snapshot owns user-visible failure state and keeps stale data.
+          // Event/effect callers intentionally fire-and-forget this reconciliation.
+          .catch(() => [])
+      )
     }
     const isLatest = generationCatalogRequestRef.current.begin(generationCatalogScope)
     setGenerationTools([])
@@ -587,71 +606,81 @@ export const AgentPanel = forwardRef<AgentPanelHandle, AgentPanelProps>(function
       })
   }, [generationCatalogScope, props.projectId, setGenerationToolSelection, sharedGenerationController])
 
-  const loadLlmModels = useCallback((options?: { reconcileReady?: boolean; refreshShared?: boolean; throwOnError?: boolean }) => {
-    const scopeId = props.projectId
-    if (usesSharedModelCatalog) {
-      const request = options?.refreshShared ? refreshSharedLlmModels?.() : Promise.resolve(sharedLlmCatalog)
-      return (request ?? Promise.resolve(sharedLlmCatalog))
-        .then((readyCatalog) => {
-          if (
-            options?.reconcileReady !== false &&
-            scopeId &&
-            mountedRef.current &&
-            activeProjectRef.current === scopeId
-          ) {
+  const loadLlmModels = useCallback(
+    (options?: { reconcileReady?: boolean; refreshShared?: boolean; throwOnError?: boolean }) => {
+      const scopeId = props.projectId
+      if (usesSharedModelCatalog) {
+        const request = options?.refreshShared ? refreshSharedLlmModels?.() : Promise.resolve(sharedLlmCatalog)
+        return (request ?? Promise.resolve(sharedLlmCatalog))
+          .then((readyCatalog) => {
+            if (
+              options?.reconcileReady !== false &&
+              scopeId &&
+              mountedRef.current &&
+              activeProjectRef.current === scopeId
+            ) {
+              const current = llmSelectionRef.current
+              const reconciled = reconcileAgentLlmModelSelectionFromReadyCatalog(current, readyCatalog)
+              if (current?.providerId !== reconciled?.providerId || current?.modelId !== reconciled?.modelId) {
+                setLlmSelection(reconciled)
+              }
+            }
+            return readyCatalog ?? { providers: [] }
+          })
+          .catch((cause) => {
+            if (options?.throwOnError) throw cause
+            return sharedLlmCatalog ?? { providers: [] }
+          })
+      }
+      const isLatest = llmCatalogRequestRef.current.begin(llmCatalogScope)
+      if (llmCatalogValueScopeRef.current !== llmCatalogScope) {
+        llmCatalogValueScopeRef.current = ""
+        setLlmCatalog(undefined)
+      }
+      setLlmCatalogError(undefined)
+      if (!scopeId) {
+        llmCatalogValueScopeRef.current = ""
+        setLlmCatalogLoading(false)
+        return Promise.resolve<AgentModelCatalog>({ providers: [] })
+      }
+      setLlmCatalogLoading(true)
+      return window.convax.agent
+        .listModels({ scopeId })
+        .then((catalog) => {
+          if (!mountedRef.current || activeProjectRef.current !== scopeId || !isLatest()) return catalog
+          llmCatalogValueScopeRef.current = llmCatalogScope
+          setLlmCatalog(catalog)
+          if (options?.reconcileReady !== false) {
             const current = llmSelectionRef.current
-            const reconciled = reconcileAgentLlmModelSelectionFromReadyCatalog(current, readyCatalog)
+            const reconciled = reconcileAgentLlmModelSelection(current, catalog)
             if (current?.providerId !== reconciled?.providerId || current?.modelId !== reconciled?.modelId) {
               setLlmSelection(reconciled)
             }
           }
-          return readyCatalog ?? { providers: [] }
+          return catalog
         })
         .catch((cause) => {
-          if (options?.throwOnError) throw cause
-          return sharedLlmCatalog ?? { providers: [] }
-        })
-    }
-    const isLatest = llmCatalogRequestRef.current.begin(llmCatalogScope)
-    if (llmCatalogValueScopeRef.current !== llmCatalogScope) {
-      llmCatalogValueScopeRef.current = ""
-      setLlmCatalog(undefined)
-    }
-    setLlmCatalogError(undefined)
-    if (!scopeId) {
-      llmCatalogValueScopeRef.current = ""
-      setLlmCatalogLoading(false)
-      return Promise.resolve<AgentModelCatalog>({ providers: [] })
-    }
-    setLlmCatalogLoading(true)
-    return window.convax.agent
-      .listModels({ scopeId })
-      .then((catalog) => {
-        if (!mountedRef.current || activeProjectRef.current !== scopeId || !isLatest()) return catalog
-        llmCatalogValueScopeRef.current = llmCatalogScope
-        setLlmCatalog(catalog)
-        if (options?.reconcileReady !== false) {
-          const current = llmSelectionRef.current
-          const reconciled = reconcileAgentLlmModelSelection(current, catalog)
-          if (current?.providerId !== reconciled?.providerId || current?.modelId !== reconciled?.modelId) {
-            setLlmSelection(reconciled)
+          if (mountedRef.current && activeProjectRef.current === scopeId && isLatest()) {
+            setLlmCatalogError(errorMessage(cause))
           }
-        }
-        return catalog
-      })
-      .catch((cause) => {
-        if (mountedRef.current && activeProjectRef.current === scopeId && isLatest()) {
-          setLlmCatalogError(errorMessage(cause))
-        }
-        if (options?.throwOnError) throw cause
-        return { providers: [] }
-      })
-      .finally(() => {
-        if (mountedRef.current && activeProjectRef.current === scopeId && isLatest()) {
-          setLlmCatalogLoading(false)
-        }
-      })
-  }, [llmCatalogScope, props.projectId, refreshSharedLlmModels, setLlmSelection, sharedLlmCatalog, usesSharedModelCatalog])
+          if (options?.throwOnError) throw cause
+          return { providers: [] }
+        })
+        .finally(() => {
+          if (mountedRef.current && activeProjectRef.current === scopeId && isLatest()) {
+            setLlmCatalogLoading(false)
+          }
+        })
+    },
+    [
+      llmCatalogScope,
+      props.projectId,
+      refreshSharedLlmModels,
+      setLlmSelection,
+      sharedLlmCatalog,
+      usesSharedModelCatalog,
+    ],
+  )
 
   useEffect(() => {
     void loadGenerationTools()
@@ -666,12 +695,7 @@ export const AgentPanel = forwardRef<AgentPanelHandle, AgentPanelProps>(function
     if (current.id !== reconciled?.id || current.output !== reconciled?.output) {
       setGenerationToolSelection(reconciled)
     }
-  }, [
-    generationTools,
-    props.projectId,
-    setGenerationToolSelection,
-    sharedGenerationSnapshot?.ready,
-  ])
+  }, [generationTools, props.projectId, setGenerationToolSelection, sharedGenerationSnapshot?.ready])
 
   useEffect(() => {
     const ownerChanged = generationToolInputOwnerRef.current !== generationToolInputOwner
@@ -2082,14 +2106,10 @@ export const AgentPanel = forwardRef<AgentPanelHandle, AgentPanelProps>(function
                   <EmptyState
                     icon={<Folder />}
                     title="Open a project"
-                    description="The agent uses the active project as its OpenCode working directory."
+                    description="DeepSeek Harness uses the active Project as its isolated working directory."
                   />
                 ) : loading && !sessionState ? (
-                  <Loading
-                    className="agent-empty-state m-auto"
-                    label="Loading conversation…"
-                    size="sm"
-                  />
+                  <Loading className="agent-empty-state m-auto" label="Loading conversation…" size="sm" />
                 ) : !sessionId || !conversationTurns.length ? (
                   <EmptyState
                     icon={<Sparkles />}
@@ -2301,9 +2321,7 @@ export const AgentPanel = forwardRef<AgentPanelHandle, AgentPanelProps>(function
                   />
                 ) : null}
                 <BeamSurface
-                  beam={
-                    responseStopping || runtimeBusy || submitting ? "rotate" : "idle"
-                  }
+                  beam={responseStopping || runtimeBusy || submitting ? "rotate" : "idle"}
                   className={cn(
                     "agent-composer-frame",
                     compactEmbeddedChrome
@@ -2643,11 +2661,7 @@ export const AgentPanel = forwardRef<AgentPanelHandle, AgentPanelProps>(function
                           size="icon-sm"
                           tone="spectrum"
                         >
-                          {submitting ? (
-                            <LoaderCircle className="animate-spin motion-reduce:animate-none" />
-                          ) : (
-                            <Send />
-                          )}
+                          {submitting ? <LoaderCircle className="animate-spin motion-reduce:animate-none" /> : <Send />}
                         </BeamButton>
                       </Tooltip>
                     )}
@@ -2676,11 +2690,7 @@ export function AgentRuntimeStatus(props: { runtimeBusy: boolean; stopping: bool
         <span className="flex items-center">
           <LoaderCircle aria-hidden="true" className="size-3.5 animate-spin motion-reduce:animate-none" />
           <span className="sr-only">
-            {props.stopping
-              ? "Stopping response"
-              : props.runtimeBusy
-                ? "Response in progress"
-                : "Submitting message"}
+            {props.stopping ? "Stopping response" : props.runtimeBusy ? "Response in progress" : "Submitting message"}
           </span>
         </span>
       ) : null}
@@ -3110,7 +3120,8 @@ function PermissionCard(props: {
         Permission required
       </div>
       <div className="mt-2 text-muted-foreground">
-        OpenCode wants permission to <span className="font-medium text-foreground">{props.request.permission}</span>.
+        DeepSeek Harness wants permission to{" "}
+        <span className="font-medium text-foreground">{props.request.permission}</span>.
       </div>
       {props.request.patterns.length ? (
         <div className="mt-1 break-all font-mono text-[10px] text-muted-foreground">

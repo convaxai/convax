@@ -19,7 +19,7 @@ Canvas owns document and editor semantics independently of Project and Agent.
 ## Invariants
 
 - Use host-neutral `scopeId`; Canvas must not know Project roots, `.convax`, Electron,
-  Workbench, OpenCode, or native persistence.
+  Workbench, Agent runtime implementation, or native persistence.
 - Canvas owns editable-text draft semantics and the transient write-behind store
   keyed by scope/document/node. Stage each edit immediately, autosave through the
   injected text-resource port, keep failures for retry across remounts, and let an

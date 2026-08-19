@@ -380,7 +380,7 @@ export class AgentLocalToolServer {
     this.server = undefined
     if (!server) return
     server.close()
-    // OpenCode may still have an MCP request in flight while the desktop is
+    // DSH may still have an MCP request in flight while the desktop is
     // quitting. Waiting for that request would keep the Electron main process
     // alive indefinitely and allow a new renderer to run against stale IPC.
     server.closeAllConnections()

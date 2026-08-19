@@ -216,14 +216,14 @@ are forbidden.
 
 ## Trust boundaries
 
-| Surface                           | Execution owner                | Boundary                                                                         |
-| --------------------------------- | ------------------------------ | -------------------------------------------------------------------------------- |
-| Web node                          | sandboxed iframe               | `sandbox="allow-scripts"`; no same-origin, Node, Electron, or generic bridge     |
-| Host-rendered menu/Toolbar/action | Host UI + typed Main executor  | declarative contribution and current scope                                       |
-| Companion Tool                    | Desktop-owned child process    | exact closure bytes, no shell, bounded environment and process-tree cancellation |
-| Skill                             | OpenCode instruction discovery | no implicit Plugin or Host authority                                             |
-| Hook                              | OpenCode native Plugin runtime | separately authorized exact immutable self-contained module                      |
-| Remote MCP                        | OpenCode native MCP client     | validated HTTPS declaration; OpenCode owns OAuth and protocol                    |
+| Surface                           | Execution owner               | Boundary                                                                             |
+| --------------------------------- | ----------------------------- | ------------------------------------------------------------------------------------ |
+| Web node                          | sandboxed iframe              | `sandbox="allow-scripts"`; no same-origin, Node, Electron, or generic bridge         |
+| Host-rendered menu/Toolbar/action | Host UI + typed Main executor | declarative contribution and current scope                                           |
+| Companion Tool                    | Desktop-owned child process   | exact closure bytes, no shell, bounded environment and process-tree cancellation     |
+| Skill                             | DSH Skill Plugin discovery    | no implicit Plugin or Host authority                                                 |
+| Hook                              | legacy bytes preserved only   | DSH rejects the old ABI; a new ABI requires separate Host governance                 |
+| Remote MCP                        | DSH MCP Plugin                | requires an actual guarded HTTPS/OAuth transport; current unguarded rows fail closed |
 
 Canvas and Project domain invariants remain in their owning application services.
 UI, Agent, Host API, and Plugin-to-Plugin adapters are thin entry points into the

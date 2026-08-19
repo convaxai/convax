@@ -81,8 +81,13 @@ describe("Desktop package contents", () => {
       filter: ["**/*"],
     })
     expect(config.extraResources).toContainEqual({
-      from: ".packaging/runtime/opencode",
-      to: "opencode",
+      from: ".packaging/runtime/dsh",
+      to: "dsh-runtime",
+      filter: ["dsh-project-utility.js", "package.json", "runtime.json"],
+    })
+    expect(config.extraResources).toContainEqual({
+      from: ".packaging/runtime/dsh/node_modules",
+      to: "dsh-runtime/node_modules",
       filter: ["**/*"],
     })
     expect(config.extraResources).toContainEqual({
@@ -108,7 +113,7 @@ describe("Desktop package contents", () => {
 })
 
 describe("Desktop platform artifacts", () => {
-  test("matches the OpenCode-style platform target set", () => {
+  test("matches the supported desktop platform target set", () => {
     const config = createElectronBuilderConfig({})
 
     expect(config.artifactName).toBe("convax-desktop-${version}-${os}-${arch}.${ext}")

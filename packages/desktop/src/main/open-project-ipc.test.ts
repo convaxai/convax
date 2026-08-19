@@ -398,7 +398,11 @@ describe("desktop Project lifecycle IPC smoke", () => {
     expect(JSON.stringify(withResource.projection)).not.toContain(selectedLocalFilePath)
 
     await exposedBridge.agent.listSessions({ limit: 60, scopeId: projectId })
-    expect(listSessionsInput).toEqual({ directory: await fs.realpath(selectedProjectPath), limit: 60 })
+    expect(listSessionsInput).toEqual({
+      directory: await fs.realpath(selectedProjectPath),
+      limit: 60,
+      scopeId: projectId,
+    })
     await exposedBridge.agent.prompt({ scopeId: projectId, sessionId: "session-main", text: "Hello" })
     expect(activity.promptStarted).toHaveBeenCalledWith(projectId, "session-main")
     expect(activity.promptSettled).toHaveBeenCalledWith(projectId, "session-main")
@@ -426,6 +430,10 @@ describe("desktop Project lifecycle IPC smoke", () => {
       projectId: createdProjectId,
     })
     await exposedBridge.agent.listSessions({ limit: 60, scopeId: createdProjectId })
-    expect(listSessionsInput).toEqual({ directory: await fs.realpath(createdProjectPath), limit: 60 })
+    expect(listSessionsInput).toEqual({
+      directory: await fs.realpath(createdProjectPath),
+      limit: 60,
+      scopeId: createdProjectId,
+    })
   })
 })

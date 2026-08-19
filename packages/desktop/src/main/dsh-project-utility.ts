@@ -19,6 +19,7 @@ interface ProjectUtilityInit {
   moduleDirectory: string
   persona?: string
   providers?: Readonly<Record<string, DeepSeekHarnessProviderConfig>>
+  skillDirectories?: readonly string[]
   scopeId: string
   type: "dsh/init"
 }
@@ -84,6 +85,7 @@ parentPort.on("message", (event) => {
       persona: message.persona,
       resolveMcpServers: async () => message.mcpServers ?? {},
       resolveProviders: async () => message.providers ?? {},
+      skillDirectories: message.skillDirectories,
     })
     const host = await runtime.openProjectHost({ directory: message.directory, scopeId: message.scopeId })
     disposeCarrier = serveHostFetchOverMessagePort(asHostMessagePort(event.ports[0]!), host)

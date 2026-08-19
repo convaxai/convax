@@ -170,8 +170,8 @@ flowchart TB
     subgraph Entry["Runtime entry surfaces"]
       Renderer["Renderer UI<br/>React and controllers"]
       Preload["Preload<br/>typed window.convax bridge"]
-      Agent["Agent UI / current OpenCode product path"]
-      DshRegistry["DSH adoption-gate registry<br/>one child per live Project"]
+      Agent["Agent UI / DSH product path"]
+      DshRegistry["DSH Project registry<br/>one child per live Project"]
       DshChild["DSH utility process<br/>official Host ApiProxy"]
       PluginRuntime["Plugin iframe, sidecar, Skill, Hook"]
       Main["Main authority<br/>I/O, execution, persistence"]
@@ -388,9 +388,9 @@ catalog schemas are unsupported and are never migrated or rewritten.
 
 ### Skill and Plugin
 
-An Agent Skill is a trusted instruction bundle discovered and executed by the
-selected runtime's native Skill Plugin. The current product path uses OpenCode;
-the DSH adoption gate mounts only Host-managed Skill roots in its isolated child.
+An Agent Skill is a trusted instruction bundle discovered and executed by DSH's
+native Skill Plugin. Each isolated Project child mounts only the Host-managed user
+Skill root and exact immutable Plugin Skill roots selected by Desktop Main.
 A Convax Plugin is an installable product surface or
 integration composed by Desktop from generic Skill, MCP, Agent, Tool, Canvas and UI
 capabilities. Concrete 3D, FFmpeg, external-editor, model and vendor behavior belongs
@@ -561,11 +561,11 @@ Release grants Host authority. See
 [`plugin-sdk-release.md`](plugin-sdk-release.md).
 
 Capability Center reads a renderer-safe connection projection keyed only by the
-installed Plugin id. It never receives OpenCode server keys, URLs, headers, OAuth
-material, or raw diagnostics. OAuth credentials are OpenCode-owned and durable,
-while MCP clients are directory-instance scoped; after a successful connection,
-Desktop invalidates live OpenCode capability instances so every Project reconnects
-with the stored credential. A connected headless Plugin exposes a generic Agent
+installed Plugin id. It never receives DSH server keys, URLs, headers, OAuth
+material, or raw diagnostics. Static MCP credentials are supplied only through a
+DSH-native Plugin envelope; legacy OAuth credentials are not imported. After a
+connection change, Desktop retires affected idle Project children and defers active
+ones until their prompt settles. A connected headless Plugin exposes a generic Agent
 entry: return to and focus the Agent composer, attaching its owned Skill only when
 exactly one workflow is unambiguous. Navigation never invokes a vendor API.
 
@@ -581,10 +581,10 @@ execution authority.
 
 An MCP Server is a first-class installed capability whose identity and version come
 from a reviewed, fixed-schema `server.json`. A supported HTTP MCP Server has exactly
-one fixed HTTPS endpoint. The current product configures it into OpenCode after
-explicit setup. The DSH adoption gate admits only static non-OAuth rows and one
-independently issued authenticated Host MCP endpoint per Project; Remote MCP OAuth
-remains unavailable there. A managed-stdio MCP Server is instead owned
+one fixed HTTPS endpoint. DSH admits only static non-OAuth rows and one independently
+issued authenticated Host MCP endpoint per Project; Remote MCP OAuth requires a
+DSH-native Plugin credential envelope and is otherwise reported as unavailable. A
+managed-stdio MCP Server is instead owned
 by Desktop, which verifies and snapshots an exact target companion, owns its process
 tree and MCP client, and exposes only an authenticated loopback Streamable HTTP
 configuration to Agent Runtime. These profiles never mix within one installed item.
@@ -606,7 +606,7 @@ the Desktop-owned managed-stdio profile.
 | `@convax/project/canvas`    | ProjectIndex catalog/relationship projection and typed-intent adapter, controller, drag and resource references                                                                                          |
 | `@convax/project/node`      | Native Project, Project Files and private storage; sole collaboration object/journal/head/outbox/reset persistence writer                                                                                |
 | `@convax/workbench`         | Headless window Input/Selection/Surface and layout state machines                                                                                                                                        |
-| `@convax/agent-runtime`     | Host-agnostic Agent contracts, current OpenCode adapter, and DSH Host ApiProxy boot/carrier integration                                                                                                  |
+| `@convax/agent-runtime`     | Host-agnostic Agent contracts, closed DSH boot, Project router, official Host ApiProxy carrier, sessions, resources and Skill store                                                                      |
 | `@convax/marketplace`       | Marketplace refs, schemas, source identity, validation and Catalog aggregation                                                                                                                           |
 | `@convax/marketplace-kit`   | Authoring-time deterministic Registry, Showcase, bundle and artifact generation, including exact-baseline selective removal                                                                              |
 | `@convax/plugin-api`        | Headless Plugin Host API catalog, availability contracts, compatibility history and deterministic generated reference inputs                                                                             |
@@ -826,7 +826,8 @@ Electron userData/
                                         target-specific verified managed-stdio bytes
   mcp-server-execution-grants/<identity-key>/
                                         exact authorization-contract setup grants
-  opencode/skills/user/<skill>/         independently managed standalone Skills only
+  agent-runtime/skills/user/<skill>/    independently managed standalone Skills only
+  dsh/projects/<project-id>/            private DSH session/config state for one Project child
   plugin-installations/
     closures/<snapshot-digest>/         immutable package, owned Skills, Hook and companion closure
     state/installed/<snapshot-digest>.json
@@ -1018,7 +1019,7 @@ Marketplace installer and, for Plugins, the immutable closure and global ActiveS
 CAS. It presents no approval dialog and never blocks Canvas switching or first-window
 use; one entry failure is diagnosed without aborting the window or preventing later
 entries and retries. Startup Skill publication writes the managed store without
-listing, launching, or refreshing OpenCode per entry. After every successful
+starting or rebuilding a DSH Project child per entry. After every successful
 package transition has converged, Main queues one process-local runtime
 reconciliation for the final ActiveSet and Skill inventory; an active Agent use may
 delay that refresh, but neither the provisioning success marker nor shutdown drains
@@ -1247,8 +1248,8 @@ explicitly relink missing nodes.
 Installed Plugins are user-global. Canvas documents persist only the existing file
 node kind plus a stable Plugin reference and namespaced portable instance state.
 Uninstalling a Plugin therefore leaves recoverable Canvas data and falls back to the
-unknown-file renderer. Managed Skills are copied into Convax's OpenCode config root;
-normal external global Skills remain visible and read-only.
+unknown-file renderer. Managed Skills are copied into Convax's backend-neutral Agent
+config root; immutable Plugin Skills enter only the current ActiveSet snapshot.
 
 Plugin node state is one atomic, bounded JSON snapshot. The Plugin adapter owns its
 schema version and migrations; an unknown or invalid schema is preserved and must
@@ -1486,22 +1487,22 @@ boundary.
 
 ### MCP Server runtime boundary
 
-HTTP MCP definitions are configured into OpenCode only after explicit endpoint
-setup, including anonymous endpoints. The Agent Runtime accepts generic host
-configuration and owns no Marketplace or installed identity. HTTP execution is
-globally fail-closed unless the actual OpenCode socket path enforces HTTPS plus
-redirect, DNS, IPv4/IPv6, private/reserved/metadata-address, and rebinding policy;
-Desktop preflight cannot substitute for the socket gate.
+HTTP MCP definitions reach DSH only after explicit endpoint setup. Agent Runtime
+accepts generic host configuration and owns no Marketplace or installed identity.
+Remote execution remains fail-closed until a DSH-native transport enforces HTTPS
+plus redirect, DNS, IPv4/IPv6, private/reserved/metadata-address, and rebinding
+policy on the actual socket path; Desktop preflight cannot substitute for that gate.
+The current closed profile mounts only authenticated exact-loopback HTTP rows.
 
-The executable DSH adoption gate is a separate non-product entry, not a backend
-router. Desktop Main starts at most one independently owned utility process for each
+Desktop Main starts at most one independently owned DSH utility process for each
 live Project and transfers one private MessagePort. `@convax/agent-runtime` boots a
 closed Cordis profile and exposes the official DSH Host ApiProxy through a
 fetch-shaped carrier; the carrier does not redeclare Agent business methods. Each
 child receives only its Project's cwd, private state root, Prompt, Skill roots,
 provider routes, and authenticated Host MCP endpoint/token. Main rechecks scope at
-the existing owner-defined tool boundary. The gate rejects OAuth MCP rows, ambient
-Project discovery, the OpenCode Hook ABI, and high-authority native tools.
+the existing owner-defined tool boundary. The product rejects remote/OAuth MCP
+rows without a DSH-native guarded transport, ambient Project discovery, the legacy
+Hook ABI, and high-authority native tools.
 
 Managed stdio is a Desktop process boundary. Main matches one exact platform/arch
 companion or a setup-selected Local executable, verifies real path/size/SHA-256,
@@ -1522,9 +1523,9 @@ external command compose the complete concrete integration behind the declared t
 contract; there is no parallel provider registry.
 
 Agent, Toolbar/UI, and sandboxed Plugin entry points call the same scoped generation
-tool executor owned by Desktop main. OpenCode is only the Agent-side tool client: it
-does not own generation execution, and direct product actions do not require an
-OpenCode session. Successful media output is prepared through
+tool executor owned by Desktop main. DSH is only the Agent-side tool client: it does
+not own generation execution, and direct product actions do not require an Agent
+session. Successful media output is prepared through
 `CanvasResourceBusinessService` after Main atomically publishes it as a user-visible
 Project file under `Generated/`; the existing Canvas `file` node flow then references
 that Project file. A failed Canvas commit retains the published output and reports
@@ -1599,8 +1600,8 @@ OS sandbox for stronger isolation.
 A managed companion whose bytes begin with the exact
 `#!/usr/bin/env convax-bun` header is an interpreted Bun program. Desktop records
 that mode with the immutable companion receipt, snapshots the script exactly like a
-native entrypoint, and invokes it through the app-owned Bun runtime already shipped
-for OpenCode. The Plugin authorization identity includes the interpreted mode while
+native entrypoint, and invokes it through the independently staged app-owned Bun
+runtime. The Plugin authorization identity includes the interpreted mode while
 remaining bound to the downloaded script path, size, and SHA-256. No Plugin id or
 Registry schema branch selects this behavior, native companions remain unchanged,
 and a missing shared runtime fails before process start.
@@ -1888,12 +1889,12 @@ Desktop actively requests that protocol's `/models` catalog, validates it in Mai
 and projects the resulting connected Plugin provider back into its owning Service card.
 Dynamic account, Plan, Billing, credit and aggregate usage data still comes only
 from the bounded service status; the optional bounded usage-history tool supplies
-display records only. The existing OpenCode Agent runtime contributes a safe display-only
+display records only. DSH contributes a safe display-only
 projection of its connected non-Plugin LLM model catalog through
 `@convax/agent-runtime`. This composition has no execute or provider-resolution API:
 generation continues to select a generation tool id and Agent prompts continue to
-select an OpenCode provider/model pair. Agent messages may carry the exact
-provider/model identity recorded by OpenCode for that message so Renderer can show
+select a DSH provider/model pair. Agent messages may carry the exact
+provider/model identity recorded by DSH for that message so Renderer can show
 the dispatch result; model-authored prose is never model-selection evidence.
 
 The Services page and generation pickers may display installed model rows while a
@@ -1905,7 +1906,7 @@ status checks and cross the external-call boundary only while the service is
 connected.
 
 The v8 manifest may add one generic LLM contribution without introducing a built-in
-vendor registry. Desktop derives a namespaced OpenCode provider id from the validated
+vendor registry. Desktop derives a namespaced DSH provider id from the validated
 Plugin contribution, verifies and starts the same leased immutable companion lifecycle, and
 calls only the fixed `llm.gateway.start`. The manifest must declare `protocol: "openai"`
 or `protocol: "openrouter"`; both authoring and runtime fail closed when the protocol
@@ -1914,13 +1915,13 @@ bounds the bytes and entries, and keeps model ids opaque. OpenRouter discovery
 additionally admits only text-output models for Agent LLM use. Host never infers or
 adapts a protocol from a Plugin id, provider id, vendor, URL, model name, retired
 manifest shape, or Plugin publication date. The sidecar returns a Main-only, ephemeral
-`127.0.0.1` protocol base URL and random bearer key. OpenCode receives that
+`127.0.0.1` protocol base URL and random bearer key. The Project DSH child receives that
 connection material only in its in-memory host configuration; renderer, service
 status, manifests, and durable config never receive it. Renderer receives only the
 validated display catalog. The sidecar retains upstream
 URLs, routing headers, vendor credentials and Cookies, and owns streaming,
 backpressure and cancellation. Plugin changes dispose the exact sidecar and cause the
-Agent runtime to rebuild its lazy OpenCode connection without deleting sessions.
+Agent runtime to rebuild the affected Project connection without deleting sessions.
 Choosing Configure and personally completing the service sign-in is the explicit
 authorization: an allowlisted cookie add/update triggers an exact-origin cookie
 check and continues automatically, without a second confirmation dialog. Closing
@@ -2135,11 +2136,11 @@ Neither Project nor Workbench imports the other to implement this flow.
 - Primitive and view tools remain available when the request needs exact control.
 - Desktop prepares structured resources, binds the current Project scope, and exposes
   the MCP/tool schema. `@convax/agent-runtime` remains unaware of Convax semantics.
-- The DSH adoption gate composes Prompt, Skills, tools, MCP, LLM and persistence as
+- The product DSH runtime composes Prompt, Skills, tools, MCP, LLM and persistence as
   exact-pinned Cordis Plugins inside one child per Project. Parent/child control uses
   only the official Host ApiProxy envelopes over a bounded MessagePort carrier.
   Closing a Project revokes its port and Host MCP capability before bounded child
-  termination; no failure replays work through OpenCode.
+  termination; no failure replays work through another backend.
 - Tool arguments cannot select another Project or expand the host-provided scope.
   Document tools may explicitly select any Canvas from the current Project's live
   catalog and still require typed semantic/field guards. View tools resolve the live mounted
@@ -2154,17 +2155,18 @@ Neither Project nor Workbench imports the other to implement this flow.
   then requests an optional mounted-view reload. Direct shell edits are not commits;
   filesystem watcher events remain invalidation hints.
 - Opening a Project must not discover project-local `.agents`/`.claude` Skills or
-  executable OpenCode extensions. Managed Skill changes refresh volatile OpenCode
-  discovery state without replacing durable sessions.
-- Installed v8 Agent MCP declarations are host-validated generic OpenCode
-  configuration inputs, not project discovery. Desktop resolves remote MCP
-  configurations, authorized Hook URLs, and Plugin-owned Skill paths from one exact
+  executable runtime extensions. Managed Skill changes retire idle DSH Project
+  children without replacing durable sessions; active prompts finish first.
+- Installed v8 Agent MCP declarations are host-validated generic DSH configuration
+  inputs, not project discovery. Desktop resolves remote MCP configurations, legacy
+  Hook URLs, and Plugin-owned Skill paths from one exact
   leased ActivePluginSet and returns them through one atomic Agent configuration
   generation; parallel inventory reads and mixed revisions are forbidden. Remote
-  MCP uses an absolute HTTPS URL, bounded non-sensitive literal headers, and no
-  Plugin-supplied OAuth credentials. OpenCode owns the native transport, OAuth
-  client, and durable credential store. Install, update, and uninstall rebuild the
-  lazy configuration after existing prompts finish without deleting sessions.
+  MCP uses an absolute HTTPS URL and bounded non-sensitive literal headers, but stays
+  unmounted until a DSH-native Plugin supplies the required guarded transport and,
+  when needed, a static credential envelope. Legacy Hook bytes are rejected.
+  Install, update, and uninstall rebuild the affected Project configuration after
+  existing prompts finish without deleting sessions.
   Authentication UI addresses a Plugin id only; renderer code never receives or
   supplies a server name, URL, headers, callback, credential, or token.
 - Skill management may inspect a selected managed or globally discovered Skill as a
@@ -2236,23 +2238,12 @@ Neither Project nor Workbench imports the other to implement this flow.
   match. `default-install` never weakens that recovery proof, even when both
   purposes share one closure; absent or mismatched entries never bypass fetch or
   quarantine.
-- A Plugin `hooks` path names one self-contained JavaScript ESM OpenCode Plugin
-  module. Explicit install/update snapshots and fingerprints the exact bytes in the
-  private Hook authorization store before package publication. OpenCode receives
-  only those immutable file URLs, in stable Plugin-id order after base Plugins and
-  before the strong protected-path guard. Changed bytes disable that Plugin Hook
-  and require reinstall without disabling other authorized Hooks. Authorization
-  parses but never executes the module; it requires valid ESM with an exported
-  OpenCode Plugin entry. Static `node:`/`bun:` built-ins are the only imports that
-  may remain, except runtime module-loader APIs such as `node:module`. CommonJS
-  globals and every other dependency must be bundled out of the declared file.
-  Default/background provisioning must recheck the exact parsed product candidate
-  and fails closed before publication when it declares a Hook; only an explicit
-  user-authorized installation may authorize new Hook bytes.
-  Post-publication Agent invalidation runs outside the per-Plugin mutation lock so
-  an in-flight Agent startup can finish Hook resolution. Desktop then reacquires
-  that lock, reads the latest installed identity, reconciles execution state, and
-  removes superseded snapshots only after the old generation has disposed.
+- A `convax.plugin/8` `hooks` path is a retained legacy contribution. Desktop may
+  preserve its exact immutable bytes and authorization record for uninstall or
+  recovery, but DSH never loads or executes it. Any ActiveSet containing an admitted
+  legacy Hook makes Agent startup fail closed with a migration error. A future
+  DSH-native Hook contribution requires a separately governed SDK/Host ABI; ordinary
+  Prompt, Skill, MCP, tool, and Host API Plugin surfaces do not inherit Hook authority.
 
 ## 8. Plugin host boundary
 
@@ -2294,15 +2285,9 @@ subresources use portable relative URLs: the exact
 the document origin, so a root-relative or absolute URL is rejected instead of
 silently resolving against a newer same-id or same-version installation.
 
-A declared Agent Hook is a separate executable boundary, not a Web surface. Desktop
-does not import it; OpenCode loads the authorized private snapshot as a native Plugin.
-The first ABI permits one self-contained `.js`/`.mjs` file with no dynamic or
-unbundled package imports, so dependencies cannot escape the authorized byte
-identity. Hook modules are user-global but OpenCode instantiates them per workspace
-directory. A synchronous client-use lease makes configuration refresh wait for
-admitted calls and blocks new calls before disposal begins. Superseded snapshots
-remain available until the old generation completes bounded disposal and server
-close; only then may reconciliation collect them.
+A declared legacy Agent Hook is a preserved executable boundary, not a Web surface.
+Desktop does not import it and DSH does not load it. Its immutable snapshot may stay
+available for recovery/uninstall, but it grants no product execution authority.
 
 Each mounted node receives a fresh `MessageChannel` speaking only
 `convax.plugin-host/8`. The renderer is a transport adapter, not an authorization
@@ -2591,12 +2576,10 @@ not run its ESM compatibility shim over dependency-bundled source strings. Elect
 Builder excludes `node_modules` entirely, so the application archive never relies
 on a staged dependency tree or monorepo workspace layout.
 
-The explicit DSH adoption-gate package is the sole exception to the ordinary
-resource layout: it stages an exact child-only DSH dependency closure outside ASAR
-and permits Cordis Loader's computed imports only in the dedicated smoke entry. The
-ordinary product Main and Preload never resolve from that closure. The independently
-staged app-owned Bun executable is used for verified companions and no longer relies
-on OpenCode's executable compatibility mode.
+Every ordinary dev and packaged product stages one exact child-only DSH dependency
+closure outside ASAR. Cordis Loader computed imports resolve only inside the utility
+process; product Main and Preload never resolve from that closure. The independently
+staged app-owned Bun executable remains a separate verified-companion resource.
 
 The public bridge keeps separate namespaces for Project lifecycle, Project Files,
 Project Canvas, Canvas documents/views, Agent runtime, Plugin management, Plugin

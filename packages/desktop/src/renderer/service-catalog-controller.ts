@@ -197,7 +197,7 @@ function pluginEntry(
   }
 }
 
-function openCodeEntry(input: {
+function dshEntry(input: {
   catalog?: AgentModelCatalog
   error?: string
   loading: boolean
@@ -219,13 +219,13 @@ function openCodeEntry(input: {
     authentication: "not-applicable",
     billing: { kind: "free" },
     capabilities: ["llm"],
-    description: "OpenCode agent runtime",
+    description: "DeepSeek Harness agent runtime",
     error: input.error,
     kind: "builtin",
     loading: input.loading,
     models,
-    name: "OpenCode",
-    serviceId: "builtin:opencode",
+    name: "DeepSeek Harness",
+    serviceId: "builtin:dsh",
     state: input.error ? "attention" : input.loading ? "unknown" : models.length > 0 ? "connected" : "disconnected",
   }
 }
@@ -236,7 +236,7 @@ function errorMessage(error: unknown) {
 
 /**
  * Desktop-only read model joining installed Plugin services with the existing
- * OpenCode Agent runtime. Execution remains owned by Plugin generation tools and
+ * DeepSeek Harness Agent runtime. Execution remains owned by Plugin generation tools and
  * Agent Runtime respectively; this catalog deliberately has no execute method.
  */
 export class ServiceCatalogController {
@@ -443,7 +443,7 @@ export class ServiceCatalogController {
       error: this.#pluginSnapshot.error,
       loading: this.#pluginSnapshot.loading || this.#agentLoading,
       services: [
-        openCodeEntry({ catalog: this.#agentCatalog, error: this.#agentError, loading: this.#agentLoading }),
+        dshEntry({ catalog: this.#agentCatalog, error: this.#agentError, loading: this.#agentLoading }),
         ...this.#pluginSnapshot.services.map((service) =>
           pluginEntry(
             service,

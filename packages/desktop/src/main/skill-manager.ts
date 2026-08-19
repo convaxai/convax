@@ -171,7 +171,7 @@ export class DesktopSkillManager {
 
   /**
    * Installs a default Skill before the Agent runtime is exposed to callers.
-   * Cold-start provisioning must not launch OpenCode merely to refresh a
+   * Cold-start provisioning must not launch DSH merely to refresh a
    * registry that has not been observed yet.
    */
   async installManagedAtStartup(sourceDirectory: string) {
@@ -185,17 +185,11 @@ export class DesktopSkillManager {
 
   /**
    * Installs immutable Marketplace bytes during cold-start provisioning without
-   * observing or launching the lazy OpenCode runtime.
+   * observing or launching a lazy Project DSH runtime.
    */
-  async installFromFilesAtStartup(
-    files: Readonly<Record<string, string | Uint8Array>>,
-    expectedName?: string,
-  ) {
+  async installFromFilesAtStartup(files: Readonly<Record<string, string | Uint8Array>>, expectedName?: string) {
     return this.mutate(async () => {
-      const installed = await this.store.installFromFiles(
-        files,
-        expectedName === undefined ? {} : { expectedName },
-      )
+      const installed = await this.store.installFromFiles(files, expectedName === undefined ? {} : { expectedName })
       await this.assertStandaloneInstallAllowed(installed)
       this.emit()
       return this.summary(installed)
@@ -322,7 +316,7 @@ export class DesktopSkillManager {
 
   /**
    * Publishes an inventory change already committed by another lifecycle.
-   * The caller owns runtime invalidation; this method never starts OpenCode.
+   * The caller owns runtime invalidation; this method never starts DSH.
    */
   notifyInventoryChanged() {
     this.emit()
