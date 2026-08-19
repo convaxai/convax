@@ -6,14 +6,18 @@ import path from "node:path"
 
 import {
   webPluginManifestSchemaV8,
+  webPluginManifestSchemaV9,
   type InstalledWebPluginSummary,
   type WebPluginGenerationModality,
+  type WebPluginManifestV8,
+  type WebPluginManifestV9,
 } from "../plugin-contracts"
 import type { PluginCanvasCapabilityClient } from "../plugin-capability-contracts"
 import {
   GenerationPluginRuntime,
   generationPluginEnvironment,
   generationPluginToolHostId,
+  pluginLlmProviderHostId,
   type GenerationPluginExecutableBinding,
   type GenerationPluginMcpClient,
   type GenerationPluginRuntimeOptions,
@@ -33,8 +37,8 @@ type DeepMutable<Value> = Value extends (...args: never[]) => unknown
       ? { -readonly [Key in keyof Value]: DeepMutable<Value[Key]> }
       : Value
 
-function mutablePlugin(plugin: InstalledWebPluginSummary): DeepMutable<InstalledWebPluginSummary> {
-  return structuredClone(plugin) as DeepMutable<InstalledWebPluginSummary>
+function mutablePlugin<Plugin extends InstalledWebPluginSummary>(plugin: Plugin): DeepMutable<Plugin> {
+  return structuredClone(plugin) as DeepMutable<Plugin>
 }
 import { toolPluginCompanionMcpMethod } from "./tool-plugin-canvas-capabilities"
 import { generationModelIdRole } from "./generation-tool-input-schema"
@@ -58,7 +62,7 @@ function generationPlugin(
     toolId?: string
     version?: string
   } = {},
-): InstalledWebPluginSummary {
+): WebPluginManifestV8 {
   const id = options.id ?? "image-tools"
   return {
     capabilities: [],
@@ -90,7 +94,7 @@ function generationPlugin(
   }
 }
 
-function staticPlugin(): InstalledWebPluginSummary {
+function staticPlugin(): WebPluginManifestV8 {
   return {
     capabilities: [],
     contributes: { canvas: { renderer: { create: true } } },
@@ -104,7 +108,7 @@ function staticPlugin(): InstalledWebPluginSummary {
   }
 }
 
-function declarativeGenerationPlugin(options: { recovery?: boolean; skill?: boolean } = {}): InstalledWebPluginSummary {
+function declarativeGenerationPlugin(options: { recovery?: boolean; skill?: boolean } = {}): WebPluginManifestV8 {
   return {
     capabilities: [],
     contributes: {
@@ -150,8 +154,8 @@ function declarativeGenerationPlugin(options: { recovery?: boolean; skill?: bool
 }
 
 function servicePlugin(
-  actions: NonNullable<InstalledWebPluginSummary["contributes"]["service"]>["actions"] = ["sign_out"],
-): InstalledWebPluginSummary {
+  actions: NonNullable<WebPluginManifestV8["contributes"]["service"]>["actions"] = ["sign_out"],
+): WebPluginManifestV8 {
   return {
     capabilities: [],
     contributes: { service: { actions } },
@@ -165,7 +169,56 @@ function servicePlugin(
   }
 }
 
-function llmPlugin(): InstalledWebPluginSummary {
+function multiServicePlugin(): WebPluginManifestV9 {
+  const generation = (output: "image" | "video") => ({
+    models: [{ name: `${output} model`, tool: "media.generate" }],
+    tools: [
+      {
+        acceptedInputs: ["text" as const],
+        description: `Generate ${output}`,
+        id: "media.generate",
+        output,
+        title: `Generate ${output}`,
+      },
+    ],
+  })
+  return {
+    capabilities: [],
+    contributes: {
+      services: [
+        {
+          actions: ["authorize"],
+          description: "First media account",
+          generation: generation("image"),
+          id: "first-media",
+          llm: {
+            models: [{ id: "first-chat", name: "First Chat" }],
+            provider: { id: "chat", name: "First Chat", protocol: "openai" },
+          },
+          name: "First Media",
+          runtime: { args: ["--provider=first"] },
+        },
+        {
+          actions: [],
+          description: "Second media account without an LLM",
+          generation: generation("video"),
+          id: "second-media",
+          name: "Second Media",
+          runtime: { args: ["--provider=second"] },
+        },
+      ],
+    },
+    description: "Shared media companion",
+    hostApi: { major: 3, optional: [], required: [] },
+    id: "media-router",
+    name: "Media Router",
+    runtime: { args: ["serve"], command: "media-router-cli", type: "mcp-stdio" },
+    schema: webPluginManifestSchemaV9,
+    version: "1.0.0",
+  }
+}
+
+function llmPlugin(): WebPluginManifestV8 {
   return {
     capabilities: [],
     contributes: {
@@ -186,11 +239,15 @@ function llmPlugin(): InstalledWebPluginSummary {
 
 class FakePluginSource implements GenerationPluginSource {
   acquired = 0
+  #activationSequence = 0
+  readonly #activationSnapshots = new Map<string, string>()
   activeRevision = 1
   activeSetDigest = "a".repeat(64)
+  readonly activationIds = new Map<string, string>()
   readonly authorizationIdentities = new Map<string, string>()
   companionAuthorized = true
   companionPresent = true
+  exposeInstallationActivation = true
   companionResolutionPaths: string[] = []
   resolveCompanionBinding: (
     plugin: InstalledWebPluginSummary,
@@ -200,12 +257,14 @@ class FakePluginSource implements GenerationPluginSource {
     size: 4_096,
   })
   installed: InstalledWebPluginSummary[] = []
+  listError?: Error
   readonly ownerPins = new Map<string, Awaited<ReturnType<FakePluginSource["activeIdentity"]>>>()
   released = 0
   readonly resolutions: Array<[string, string]> = []
   readonly snapshots = new Map<
     string,
     {
+      activationId: string
       authorizationIdentity: string
       binding: GenerationPluginExecutableBinding & { path: string }
       plugin: InstalledWebPluginSummary
@@ -213,6 +272,7 @@ class FakePluginSource implements GenerationPluginSource {
   >()
 
   async list() {
+    if (this.listError) throw this.listError
     return this.installed
   }
 
@@ -255,8 +315,15 @@ class FakePluginSource implements GenerationPluginSource {
       )
       .digest("hex")
     this.authorizationIdentities.set(pluginId, authorizationIdentity)
-    this.snapshots.set(identity.snapshotDigest, { authorizationIdentity, binding, plugin })
-    return this.createHandle(identity, plugin, binding, authorizationIdentity)
+    const activationId = this.installationActivationId(plugin, identity.snapshotDigest)
+    this.snapshots.set(identity.snapshotDigest, { activationId, authorizationIdentity, binding, plugin })
+    return this.createHandle(
+      identity,
+      plugin,
+      binding,
+      authorizationIdentity,
+      this.exposeInstallationActivation ? activationId : undefined,
+    )
   }
 
   async acquirePluginSnapshot(identity: {
@@ -288,6 +355,7 @@ class FakePluginSource implements GenerationPluginSource {
       snapshot.plugin,
       snapshot.binding,
       snapshot.authorizationIdentity,
+      snapshot.activationId,
     )
   }
 
@@ -296,7 +364,13 @@ class FakePluginSource implements GenerationPluginSource {
     if (!pinned || !sameFakeIdentity(pinned, identity)) throw new Error("Plugin snapshot pin owner is missing or stale")
     const snapshot = this.snapshots.get(identity.snapshotDigest)
     if (!snapshot) throw new Error("Pinned Plugin snapshot is missing")
-    return this.createHandle(identity, snapshot.plugin, snapshot.binding, snapshot.authorizationIdentity)
+    return this.createHandle(
+      identity,
+      snapshot.plugin,
+      snapshot.binding,
+      snapshot.authorizationIdentity,
+      snapshot.activationId,
+    )
   }
 
   async assertCurrentActivePlugin(identity: Awaited<ReturnType<FakePluginSource["activeIdentity"]>>) {
@@ -329,6 +403,7 @@ class FakePluginSource implements GenerationPluginSource {
     plugin: InstalledWebPluginSummary,
     binding: GenerationPluginExecutableBinding & { path: string },
     authorizationIdentity: string,
+    installationActivationId?: string,
   ) {
     this.acquired += 1
     let released = false
@@ -363,6 +438,7 @@ class FakePluginSource implements GenerationPluginSource {
         snapshotDigest: identity.snapshotDigest,
         version: identity.version,
       },
+      ...(installationActivationId ? { installationActivationId } : {}),
       plugin,
       release: releaseLease,
       resolveCompanion: async () => {
@@ -371,6 +447,28 @@ class FakePluginSource implements GenerationPluginSource {
         return this.companionResolutionPaths[companionResolution++] ?? binding.path
       },
     }
+  }
+
+  private installationActivationId(plugin: InstalledWebPluginSummary, snapshotDigest: string) {
+    if (this.#activationSnapshots.get(plugin.id) !== snapshotDigest || !this.activationIds.has(plugin.id)) {
+      this.#activationSequence += 1
+      this.#activationSnapshots.set(plugin.id, snapshotDigest)
+      this.activationIds.set(
+        plugin.id,
+        createHash("sha256")
+          .update(`activation:${plugin.id}:${snapshotDigest}:${this.#activationSequence}`)
+          .digest("hex"),
+      )
+    }
+    return this.activationIds.get(plugin.id)!
+  }
+
+  rotateInstallationActivation(pluginId: string) {
+    this.#activationSequence += 1
+    this.activationIds.set(
+      pluginId,
+      createHash("sha256").update(`activation:${pluginId}:rotated:${this.#activationSequence}`).digest("hex"),
+    )
   }
 }
 
@@ -495,7 +593,13 @@ function setup(
   }),
   runtimeOptions: Pick<
     GenerationPluginRuntimeOptions,
-    "bunRuntime" | "canvasCapabilities" | "fetch" | "platform" | "recoveryRuntimeDirectory" | "recoveryStateDirectory"
+    | "bunRuntime"
+    | "canvasCapabilities"
+    | "fetch"
+    | "platform"
+    | "profileStateDirectory"
+    | "recoveryRuntimeDirectory"
+    | "recoveryStateDirectory"
   > = {},
 ) {
   const plugins = new FakePluginSource()
@@ -566,6 +670,8 @@ describe("GenerationPluginRuntime", () => {
         pluginId: "xiaoyunque-generation",
         protocol: "openai",
         providerId: "plugin-xiaoyunque-generation-pippit-glm",
+        serviceId: "xiaoyunque-generation",
+        serviceTarget: { pluginId: "xiaoyunque-generation", serviceId: "xiaoyunque-generation" },
       },
     ])
     expect(clients[0]!.calls[0]).toMatchObject({ input: {}, name: "llm.gateway.start" })
@@ -598,6 +704,8 @@ describe("GenerationPluginRuntime", () => {
         pluginId: "xiaoyunque-generation",
         protocol: "openai",
         providerId: "plugin-xiaoyunque-generation-pippit-glm",
+        serviceId: "xiaoyunque-generation",
+        serviceTarget: { pluginId: "xiaoyunque-generation", serviceId: "xiaoyunque-generation" },
       },
     ])
     expect(clients[0]!.calls.map(({ name }) => name)).toEqual(["llm.gateway.start"])
@@ -638,6 +746,8 @@ describe("GenerationPluginRuntime", () => {
         pluginId: "xiaoyunque-generation",
         protocol: "openrouter",
         providerId: "plugin-xiaoyunque-generation-pippit-glm",
+        serviceId: "xiaoyunque-generation",
+        serviceTarget: { pluginId: "xiaoyunque-generation", serviceId: "xiaoyunque-generation" },
       },
     ])
     expect(clients[0]!.calls.map(({ name }) => name)).toEqual(["llm.gateway.start"])
@@ -676,6 +786,86 @@ describe("GenerationPluginRuntime", () => {
     expect(clients[0]!.closed).toBe(0)
   })
 
+  test("keeps healthy sibling LLM providers when one Service catalog fails", async () => {
+    const combined = mutablePlugin(multiServicePlugin())
+    combined.contributes.services![1]!.llm = {
+      models: [{ id: "second-chat", name: "Second Chat" }],
+      provider: { id: "chat", name: "Second Chat", protocol: "openai" },
+    }
+    let catalogs = 0
+    const { clients, runtime } = setup([combined], ["llm.gateway.start"], undefined, undefined, {
+      fetch: mock(async () => {
+        catalogs += 1
+        return catalogs === 1
+          ? new Response(null, { status: 502 })
+          : Response.json({ data: [{ id: "second-chat", name: "Second Chat" }] })
+      }),
+    })
+
+    expect(await runtime.connectLlmProviders()).toEqual([
+      {
+        apiKey: "a".repeat(43),
+        baseUrl: "http://127.0.0.1:43123/v1",
+        models: [{ id: "second-chat", name: "Second Chat" }],
+        name: "Second Chat",
+        pluginId: "media-router",
+        protocol: "openai",
+        providerId: "plugin-media-router--service-second-media--provider-chat",
+        serviceId: "second-media",
+        serviceTarget: { pluginId: "media-router", serviceId: "second-media" },
+      },
+    ])
+    expect(clients).toHaveLength(2)
+    expect(clients.map(({ closed }) => closed)).toEqual([0, 0])
+  })
+
+  test("preserves v8 fail-fast behavior when one of multiple Plugin LLM providers fails", async () => {
+    const first = llmPlugin()
+    const second = mutablePlugin(llmPlugin())
+    second.id = "second-llm-plugin"
+    second.name = "Second LLM Plugin"
+    second.runtime = { command: "second-llm", type: "mcp-stdio" }
+    second.contributes.llm!.provider = { id: "second", name: "Second", protocol: "openai" }
+    const { clients, runtime } = setup([first, second], ["llm.gateway.start"], undefined, undefined, {
+      fetch: mock(async () => new Response(null, { status: 502 })),
+    })
+
+    await expect(runtime.connectLlmProviders()).rejects.toThrow("OpenAI model catalog failed with HTTP 502")
+    expect(clients).toHaveLength(1)
+  })
+
+  test("propagates caller cancellation instead of continuing to sibling LLM providers", async () => {
+    const combined = mutablePlugin(multiServicePlugin())
+    combined.contributes.services![1]!.llm = {
+      models: [{ id: "second-chat", name: "Second Chat" }],
+      provider: { id: "chat", name: "Second Chat", protocol: "openai" },
+    }
+    let markCatalogStarted!: () => void
+    const catalogStarted = new Promise<void>((resolve) => {
+      markCatalogStarted = resolve
+    })
+    const { clients, runtime } = setup([combined], ["llm.gateway.start"], undefined, undefined, {
+      fetch: mock(
+        (_input, init) =>
+          new Promise<Response>((_resolve, reject) => {
+            markCatalogStarted()
+            const signal = init?.signal
+            if (!signal) return reject(new Error("Expected a bounded Provider catalog signal"))
+            const rejectCanceled = () => reject(signal.reason)
+            if (signal.aborted) rejectCanceled()
+            else signal.addEventListener("abort", rejectCanceled, { once: true })
+          }),
+      ),
+    })
+    const controller = new AbortController()
+    const pending = runtime.connectLlmProviders(controller.signal)
+    await catalogStarted
+    controller.abort(new Error("stop provider discovery"))
+
+    await expect(pending).rejects.toMatchObject({ message: "stop provider discovery", name: "AbortError" })
+    expect(clients).toHaveLength(1)
+  })
+
   test("keeps service authorization alive when generation catalog inspection fails", async () => {
     const combined = mutablePlugin(generationPlugin())
     combined.contributes.service = { actions: ["authorize"] }
@@ -694,10 +884,7 @@ describe("GenerationPluginRuntime", () => {
       authorization_id: "request_0123456789abcdef",
       schema: "convax.plugin-service-external-authorization-completion/1",
     })
-    expect(clients[0]!.calls.map(({ name }) => name)).toEqual([
-      "service.authorize",
-      "service.authorization.complete",
-    ])
+    expect(clients[0]!.calls.map(({ name }) => name)).toEqual(["service.authorize", "service.authorization.complete"])
     expect(clients[0]!.closed).toBe(0)
   })
 
@@ -720,6 +907,7 @@ describe("GenerationPluginRuntime", () => {
         output: "image",
         pluginId: "image-tools",
         pluginName: "Image Tools",
+        serviceId: "image-tools",
         title: "Generate",
         toolId: "generate.image",
       },
@@ -732,6 +920,7 @@ describe("GenerationPluginRuntime", () => {
         output: "video",
         pluginId: "video-tools",
         pluginName: "Video Tools",
+        serviceId: "video-tools",
         title: "Generate",
         toolId: "generate-video",
       },
@@ -740,6 +929,419 @@ describe("GenerationPluginRuntime", () => {
       "video-tools/generate-video",
     ])
     expect(clients).toHaveLength(0)
+  })
+
+  test("isolates v9 Services behind one verified companion and keeps LLM optional per Service", async () => {
+    const { clients, options, runtime } = setup(
+      [multiServicePlugin()],
+      ["llm.gateway.start", "media.generate", "service.authorize", "service.status"],
+    )
+
+    expect(await runtime.listServices()).toEqual([
+      expect.objectContaining({
+        capabilities: ["image", "llm"],
+        llmProviderIds: ["plugin-media-router--service-first-media--provider-chat"],
+        pluginId: "media-router",
+        pluginName: "First Media",
+        serviceId: "first-media",
+      }),
+      expect.objectContaining({
+        actions: [],
+        capabilities: ["video"],
+        llmProviderIds: [],
+        pluginId: "media-router",
+        pluginName: "Second Media",
+        serviceId: "second-media",
+      }),
+    ])
+    const tools = await runtime.listTools()
+    expect(tools.map(({ id, serviceId }) => ({ id, serviceId }))).toEqual([
+      { id: "media-router/first-media/media.generate", serviceId: "first-media" },
+      { id: "media-router/second-media/media.generate", serviceId: "second-media" },
+    ])
+    expect(clients).toHaveLength(0)
+
+    await runtime.callService({ pluginId: "media-router", serviceId: "first-media" }, "status")
+    await runtime.describeTool("media-router/second-media/media.generate")
+    expect(await runtime.connectLlmProviders()).toEqual([
+      expect.objectContaining({
+        pluginId: "media-router",
+        providerId: "plugin-media-router--service-first-media--provider-chat",
+        serviceId: "first-media",
+      }),
+    ])
+
+    expect(options.map(({ args }) => args)).toEqual([
+      ["serve", "--provider=first"],
+      ["serve", "--provider=second"],
+    ])
+    const [firstProfile, secondProfile] = options
+    expect(firstProfile!.cwd).not.toBe(secondProfile!.cwd)
+    for (const profile of [firstProfile!, secondProfile!]) {
+      const profileRoot = path.dirname(profile.cwd)
+      const processTemp = profile.env!.TMPDIR!
+      expect(path.dirname(profileRoot)).toBe(path.resolve(os.tmpdir()))
+      expect(path.basename(profileRoot)).toStartWith("convax-generation-profile-")
+      expect(path.dirname(processTemp)).toBe(path.resolve(os.tmpdir()))
+      expect(path.basename(processTemp)).toStartWith("convax-generation-profile-temp-")
+      expect(profile.env).toMatchObject({
+        HOME: path.join(profileRoot, "home"),
+        TEMP: processTemp,
+        TMP: processTemp,
+        TMPDIR: processTemp,
+        XDG_CACHE_HOME: path.join(profileRoot, "cache"),
+        XDG_CONFIG_HOME: path.join(profileRoot, "config"),
+        XDG_DATA_HOME: path.join(profileRoot, "data"),
+      })
+      expect(profile.env).not.toHaveProperty("USERPROFILE")
+      expect((await fs.stat(profile.cwd)).mode & 0o777).toBe(0o700)
+      expect((await fs.stat(profile.env!.HOME!)).mode & 0o777).toBe(0o700)
+    }
+    expect(firstProfile!.env!.HOME).not.toBe(secondProfile!.env!.HOME)
+    expect(firstProfile!.env!.TMPDIR).not.toBe(secondProfile!.env!.TMPDIR)
+
+    await runtime.callService({ pluginId: "media-router", serviceId: "first-media" }, "status")
+    expect(options).toHaveLength(2)
+    expect(clients).toHaveLength(2)
+    expect(clients[0]!.calls.map(({ name }) => name)).toEqual(["service.status", "llm.gateway.start", "service.status"])
+
+    expect(runtime.disposePlugin("media-router")).toBeTrue()
+    await runtime.callService({ pluginId: "media-router", serviceId: "first-media" }, "status")
+    expect(options).toHaveLength(3)
+    expect(options[2]!.cwd).toBe(firstProfile!.cwd)
+    expect(options[2]!.env).toMatchObject({
+      HOME: firstProfile!.env!.HOME,
+      XDG_CACHE_HOME: firstProfile!.env!.XDG_CACHE_HOME,
+      XDG_CONFIG_HOME: firstProfile!.env!.XDG_CONFIG_HOME,
+      XDG_DATA_HOME: firstProfile!.env!.XDG_DATA_HOME,
+    })
+    expect(options[2]!.env!.TMPDIR).not.toBe(firstProfile!.env!.TMPDIR)
+    await expect(fs.stat(firstProfile!.env!.TMPDIR!)).rejects.toMatchObject({ code: "ENOENT" })
+
+    const profileRoots = [...new Set(options.map(({ cwd }) => path.dirname(cwd)))]
+    const processTemps = options.map(({ env }) => env!.TMPDIR!)
+    await runtime.disposeAndWait()
+    for (const profileRoot of profileRoots) {
+      await expect(fs.stat(profileRoot)).rejects.toMatchObject({ code: "ENOENT" })
+    }
+    for (const processTemp of processTemps) {
+      await expect(fs.stat(processTemp)).rejects.toMatchObject({ code: "ENOENT" })
+    }
+  })
+
+  test("fails closed when a v9 nested Service comes from a legacy ActiveSet without an activation", async () => {
+    const { clients, plugins, runtime } = setup([multiServicePlugin()], ["service.status"])
+    plugins.exposeInstallationActivation = false
+
+    await expect(runtime.callService({ pluginId: "media-router", serviceId: "first-media" }, "status")).rejects.toThrow(
+      "ActiveSet activation is unavailable",
+    )
+    expect(clients).toHaveLength(0)
+  })
+
+  test("persists exact v9 Service profile state across runtime restarts without sharing sibling state", async () => {
+    const profileStateDirectory = await fs.mkdtemp(path.join(os.tmpdir(), "convax-profile-state-test-"))
+    try {
+      const first = setup([multiServicePlugin()], ["media.generate", "service.status"], undefined, undefined, {
+        profileStateDirectory,
+      })
+      await first.runtime.callService({ pluginId: "media-router", serviceId: "first-media" }, "status")
+      const firstHome = first.options[0]!.env!.HOME!
+      const firstTemp = first.options[0]!.env!.TMPDIR!
+      const credential = path.join(firstHome, "credential.json")
+      await fs.writeFile(credential, "persisted", { mode: 0o600 })
+      await first.runtime.disposeAndWait()
+
+      expect(await fs.readFile(credential, "utf8")).toBe("persisted")
+      await expect(fs.stat(firstTemp)).rejects.toMatchObject({ code: "ENOENT" })
+
+      const restarted = setup([multiServicePlugin()], ["media.generate", "service.status"], undefined, undefined, {
+        profileStateDirectory,
+      })
+      await restarted.runtime.callService({ pluginId: "media-router", serviceId: "first-media" }, "status")
+      await restarted.runtime.callService({ pluginId: "media-router", serviceId: "second-media" }, "status")
+
+      expect(restarted.options[0]!.env!.HOME).toBe(firstHome)
+      expect(restarted.options[0]!.env!.TMPDIR).not.toBe(firstTemp)
+      expect(await fs.readFile(path.join(restarted.options[0]!.env!.HOME!, "credential.json"), "utf8")).toBe(
+        "persisted",
+      )
+      expect(restarted.options[1]!.env!.HOME).not.toBe(firstHome)
+      await expect(
+        fs.readFile(path.join(restarted.options[1]!.env!.HOME!, "credential.json"), "utf8"),
+      ).rejects.toMatchObject({ code: "ENOENT" })
+
+      await restarted.runtime.disposeAndWait()
+      expect(await fs.readFile(credential, "utf8")).toBe("persisted")
+    } finally {
+      await fs.rm(profileStateDirectory, { force: true, recursive: true })
+    }
+  })
+
+  test("garbage-collects only unowned exact profile bindings and fails closed on an invalid root", async () => {
+    const profileStateDirectory = await fs.mkdtemp(path.join(os.tmpdir(), "convax-profile-gc-test-"))
+    const bindingDirectory = path.join(profileStateDirectory, "bindings")
+    const orphan = path.join(bindingDirectory, "f".repeat(64))
+    const invalid = path.join(bindingDirectory, "unexpected-entry")
+    try {
+      await fs.mkdir(bindingDirectory, { mode: 0o700 })
+      await fs.mkdir(orphan, { mode: 0o700 })
+      await fs.writeFile(path.join(orphan, "credential.json"), "orphaned", { mode: 0o600 })
+      const setupResult = setup([multiServicePlugin()], ["media.generate", "service.status"], undefined, undefined, {
+        profileStateDirectory,
+      })
+
+      await setupResult.runtime.reconcileProfileState()
+      await expect(fs.stat(orphan)).rejects.toMatchObject({ code: "ENOENT" })
+
+      await fs.mkdir(orphan, { mode: 0o700 })
+      await fs.writeFile(path.join(orphan, "credential.json"), "orphaned", { mode: 0o600 })
+      await fs.writeFile(invalid, "not a profile")
+      await expect(setupResult.runtime.reconcileProfileState()).rejects.toThrow("contains an invalid entry")
+      expect(await fs.readFile(path.join(orphan, "credential.json"), "utf8")).toBe("orphaned")
+
+      await fs.rm(invalid)
+      setupResult.plugins.listError = new Error("ActiveSet inventory unavailable")
+      await expect(setupResult.runtime.reconcileProfileState()).rejects.toThrow("ActiveSet inventory unavailable")
+      expect(await fs.readFile(path.join(orphan, "credential.json"), "utf8")).toBe("orphaned")
+
+      setupResult.plugins.listError = undefined
+    } finally {
+      await fs.rm(profileStateDirectory, { force: true, recursive: true })
+    }
+  })
+
+  test("removes uninstalled profile state and replaces an obsolete update binding", async () => {
+    const profileStateDirectory = await fs.mkdtemp(path.join(os.tmpdir(), "convax-profile-lifecycle-test-"))
+    try {
+      const setupResult = setup([multiServicePlugin()], ["media.generate", "service.status"], undefined, undefined, {
+        profileStateDirectory,
+      })
+      const firstTarget = { pluginId: "media-router", serviceId: "first-media" }
+      await setupResult.runtime.callService(firstTarget, "status")
+      const oldRoot = path.dirname(setupResult.options[0]!.cwd)
+
+      setupResult.plugins.installed = [multiServicePlugin(), staticPlugin()]
+      setupResult.plugins.activeRevision += 1
+      setupResult.plugins.activeSetDigest = "b".repeat(64)
+      await setupResult.runtime.callService(firstTarget, "status")
+      expect(path.dirname(setupResult.options[1]!.cwd)).toBe(oldRoot)
+
+      const updated = mutablePlugin(multiServicePlugin())
+      updated.version = "2.0.0"
+      setupResult.plugins.installed = [updated, staticPlugin()]
+      setupResult.plugins.activeRevision += 1
+      setupResult.plugins.activeSetDigest = "c".repeat(64)
+      expect(setupResult.runtime.disposePlugin("media-router")).toBeTrue()
+      await setupResult.runtime.callService(firstTarget, "status")
+      const newRoot = path.dirname(setupResult.options[2]!.cwd)
+      expect(newRoot).not.toBe(oldRoot)
+
+      await setupResult.runtime.reconcileProfileState()
+      await expect(fs.stat(oldRoot)).rejects.toMatchObject({ code: "ENOENT" })
+      expect((await fs.stat(newRoot)).isDirectory()).toBeTrue()
+
+      setupResult.plugins.installed = []
+      setupResult.plugins.activeRevision += 1
+      setupResult.plugins.activeSetDigest = "d".repeat(64)
+      expect(setupResult.runtime.disposePlugin("media-router")).toBeTrue()
+      await setupResult.runtime.reconcileProfileState()
+      await expect(fs.stat(newRoot)).rejects.toMatchObject({ code: "ENOENT" })
+    } finally {
+      await fs.rm(profileStateDirectory, { force: true, recursive: true })
+    }
+  })
+
+  test("retains an uninstalled Service profile for its LRO owner and gives each sidecar a disposable temp", async () => {
+    const directory = await fs.mkdtemp(path.join(os.tmpdir(), "convax-profile-lro-owner-test-"))
+    try {
+      const plugin = mutablePlugin(multiServicePlugin())
+      plugin.contributes.services![0]!.generation!.tools[0]!.recovery = {
+        mode: "long-running-operation",
+        schema: "convax.generation-lro/1",
+      }
+      const setupResult = setup([plugin], ["media.generate", "service.status"], undefined, undefined, {
+        profileStateDirectory: path.join(directory, "profiles"),
+        recoveryRuntimeDirectory: path.join(directory, "runtime-v3"),
+        recoveryStateDirectory: path.join(directory, "operation-v1"),
+      })
+      const summary = (await setupResult.runtime.listTools()).find(
+        ({ serviceId, recovery }) => serviceId === "first-media" && recovery === "long-running-operation",
+      )!
+      const live = await setupResult.runtime.prepareTool(summary)
+      const binding = {
+        executionBindingDigest: live.recovery!.executionBindingDigest,
+        pluginPackageDigest: live.recovery!.pluginPackageDigest,
+        runtimeAuthorizationDigest: live.recovery!.runtimeAuthorizationDigest,
+        sidecarRecoveryBindingDigest: live.recovery!.bindingDigest,
+        toolId: summary.id,
+      }
+      const liveOptions = setupResult.options[0]!
+      const profileRoot = path.dirname(liveOptions.cwd)
+      const [pinned, siblingPinned] = await Promise.all([
+        setupResult.runtime.prepareRecoveryTool(binding),
+        setupResult.runtime.prepareRecoveryTool(binding),
+      ])
+      const pinnedOptions = setupResult.options[1]!
+
+      expect(pinned.tool).toEqual(summary)
+      expect(siblingPinned.tool).toEqual(summary)
+      expect(setupResult.options).toHaveLength(2)
+      expect(pinnedOptions.cwd).toBe(liveOptions.cwd)
+      expect(pinnedOptions.env!.HOME).toBe(liveOptions.env!.HOME)
+      expect(pinnedOptions.env!.TMPDIR).not.toBe(liveOptions.env!.TMPDIR)
+
+      setupResult.plugins.installed = []
+      setupResult.plugins.activeRevision += 1
+      setupResult.plugins.activeSetDigest = "d".repeat(64)
+      setupResult.runtime.disposePlugin("media-router")
+      await setupResult.runtime.reconcileProfileState()
+      expect((await fs.stat(profileRoot)).isDirectory()).toBeTrue()
+
+      // Reinstalling the exact same package is a new activation incarnation.
+      // Its active Service must not inherit credentials retained only for the
+      // old operation's owner-pinned recovery runtime.
+      setupResult.plugins.rotateInstallationActivation("media-router")
+      setupResult.plugins.installed = [plugin]
+      setupResult.plugins.activeRevision += 1
+      setupResult.plugins.activeSetDigest = "e".repeat(64)
+      await setupResult.runtime.callService({ pluginId: "media-router", serviceId: "first-media" }, "status")
+      const reinstalledOptions = setupResult.options[2]!
+      const reinstalledRoot = path.dirname(reinstalledOptions.cwd)
+      expect(reinstalledRoot).not.toBe(profileRoot)
+      expect((await fs.stat(profileRoot)).isDirectory()).toBeTrue()
+      expect((await fs.stat(reinstalledRoot)).isDirectory()).toBeTrue()
+
+      await setupResult.runtime.releaseRecoveryTool(binding.executionBindingDigest)
+      await expect(fs.stat(profileRoot)).rejects.toMatchObject({ code: "ENOENT" })
+      expect((await fs.stat(reinstalledRoot)).isDirectory()).toBeTrue()
+      await expect(fs.stat(liveOptions.env!.TMPDIR!)).rejects.toMatchObject({ code: "ENOENT" })
+      await expect(fs.stat(pinnedOptions.env!.TMPDIR!)).rejects.toMatchObject({ code: "ENOENT" })
+    } finally {
+      await fs.rm(directory, { force: true, recursive: true })
+    }
+  })
+
+  test("waits for closing and newly starting profiles before committing lifecycle GC", async () => {
+    const profileStateDirectory = await fs.mkdtemp(path.join(os.tmpdir(), "convax-profile-race-test-"))
+    try {
+      const setupResult = setup([multiServicePlugin()], ["media.generate", "service.status"], undefined, undefined, {
+        profileStateDirectory,
+      })
+      const target = { pluginId: "media-router", serviceId: "first-media" }
+      await setupResult.runtime.callService(target, "status")
+      const oldRoot = path.dirname(setupResult.options[0]!.cwd)
+      let finishClose!: () => void
+      const closeBarrier = new Promise<void>((resolve) => {
+        finishClose = resolve
+      })
+      setupResult.clients[0]!.closeAndWait = async () => closeBarrier
+
+      const updated = mutablePlugin(multiServicePlugin())
+      updated.version = "2.0.0"
+      setupResult.plugins.installed = [updated]
+      setupResult.plugins.activeRevision += 1
+      setupResult.plugins.activeSetDigest = "e".repeat(64)
+      setupResult.runtime.disposePlugin("media-router")
+      const reconciliation = setupResult.runtime.reconcileProfileState()
+      const starting = setupResult.runtime.callService(target, "status")
+      await starting
+      const newRoot = path.dirname(setupResult.options[1]!.cwd)
+      finishClose()
+      await reconciliation
+
+      expect(newRoot).not.toBe(oldRoot)
+      await expect(fs.stat(oldRoot)).rejects.toMatchObject({ code: "ENOENT" })
+      expect((await fs.stat(newRoot)).isDirectory()).toBeTrue()
+    } finally {
+      await fs.rm(profileStateDirectory, { force: true, recursive: true })
+    }
+  })
+
+  test("keeps v8 and v9 top-level profiles on the existing base cwd and environment", async () => {
+    const v9 = mutablePlugin(multiServicePlugin())
+    v9.contributes.generation = {
+      models: [{ name: "Top image", tool: "top.generate" }],
+      tools: [
+        {
+          acceptedInputs: ["text"],
+          description: "Generate from the base runtime",
+          id: "top.generate",
+          output: "image",
+          title: "Top generate",
+        },
+      ],
+    }
+    const { options, runtime } = setup([generationPlugin(), v9], ["generate.image", "top.generate"])
+
+    await runtime.callTool("image-tools/generate.image", {})
+    await runtime.callTool("media-router/top.generate", {})
+
+    expect(options).toHaveLength(2)
+    expect(options[0]!.cwd).toBe(options[1]!.cwd)
+    expect(path.basename(options[0]!.cwd)).toStartWith("convax-generation-runtime-")
+    expect(options.map(({ env }) => env)).toEqual([
+      {
+        HOME: "/Users/tester",
+        LANG: "zh_CN.UTF-8",
+        PATH: "/usr/local/bin:/usr/bin",
+      },
+      {
+        HOME: "/Users/tester",
+        LANG: "zh_CN.UTF-8",
+        PATH: "/usr/local/bin:/usr/bin",
+      },
+    ])
+  })
+
+  test("keeps v9 top-level generation and LLM on the base runtime without a Service status gate", async () => {
+    const plugin = mutablePlugin(multiServicePlugin())
+    plugin.contributes.generation = {
+      models: [{ name: "Top image", tool: "top.generate" }],
+      tools: [
+        {
+          acceptedInputs: ["text"],
+          description: "Generate from the base runtime",
+          id: "top.generate",
+          output: "image",
+          title: "Top generate",
+        },
+      ],
+    }
+    plugin.contributes.llm = {
+      models: [{ id: "top-chat", name: "Top Chat" }],
+      provider: { id: "top-chat", name: "Top Chat", protocol: "openai" },
+    }
+    const { runtime } = setup(
+      [plugin],
+      ["llm.gateway.start", "top.generate", "media.generate", "service.authorize", "service.status"],
+      undefined,
+      undefined,
+      {
+        fetch: mock(async () =>
+          Response.json({
+            data: [
+              { id: "first-chat", name: "First Chat" },
+              { id: "top-chat", name: "Top Chat" },
+            ],
+          }),
+        ),
+      },
+    )
+
+    const topLevel = (await runtime.listTools()).find(({ id }) => id === "media-router/top.generate")!
+    expect(await runtime.serviceStatusTarget(topLevel)).toBeNull()
+    expect(await runtime.connectLlmProviders()).toEqual([
+      expect.objectContaining({
+        providerId: "plugin-media-router--service-first-media--provider-chat",
+        serviceTarget: { pluginId: "media-router", serviceId: "first-media" },
+      }),
+      expect.objectContaining({
+        providerId: "plugin-media-router-top-chat",
+        serviceId: "media-router",
+        serviceTarget: null,
+      }),
+    ])
   })
 
   test("derives v8 model and operation metadata without inferring from Plugin identity", async () => {
@@ -755,6 +1357,7 @@ describe("GenerationPluginRuntime", () => {
         output: "image",
         pluginId: "declarative-tools",
         pluginName: "Declarative Tools",
+        serviceId: "declarative-tools",
         title: "Image generation tool",
         toolId: "generate.image",
       },
@@ -767,6 +1370,7 @@ describe("GenerationPluginRuntime", () => {
         output: "video",
         pluginId: "declarative-tools",
         pluginName: "Declarative Tools",
+        serviceId: "declarative-tools",
         title: "Video operation",
         toolId: "transform.video",
       },
@@ -776,9 +1380,11 @@ describe("GenerationPluginRuntime", () => {
         actions: [],
         capabilities: ["image"],
         description: "Explicit models and operations",
+        llmProviderIds: [],
         models: [{ capability: "image", id: "generate.image", name: "Example Image 1" }],
         pluginId: "declarative-tools",
         pluginName: "Declarative Tools",
+        serviceId: "declarative-tools",
         version: "1.0.0",
       },
     ])
@@ -1637,9 +2243,11 @@ describe("GenerationPluginRuntime", () => {
         actions: ["sign_out"],
         capabilities: [],
         description: "External account service",
+        llmProviderIds: [],
         models: [],
         pluginId: "account-tools",
         pluginName: "Account Tools",
+        serviceId: "account-tools",
         version: "1.0.0",
       },
     ])
@@ -1695,12 +2303,14 @@ describe("GenerationPluginRuntime", () => {
         actions: ["authorize"],
         capabilities: ["image", "video"],
         description: "External generation tools",
+        llmProviderIds: [],
         models: [
           { capability: "image", id: "image.generate", name: "Image Model" },
           { capability: "video", id: "video.generate", name: "Video Model" },
         ],
         pluginId: "creative-service",
         pluginName: "Creative Service",
+        serviceId: "creative-service",
         version: "1.0.0",
       },
     ])
@@ -1717,9 +2327,11 @@ describe("GenerationPluginRuntime", () => {
         actions: ["authorize"],
         capabilities: ["llm"],
         description: "External LLM provider",
+        llmProviderIds: ["plugin-xiaoyunque-generation-pippit-glm"],
         models: [{ capability: "llm", id: "pippit-glm-main", name: "Pippit GLM Main" }],
         pluginId: "xiaoyunque-generation",
         pluginName: "XiaoYunque",
+        serviceId: "xiaoyunque-generation",
         version: "0.4.0",
       },
     ])
@@ -2188,6 +2800,13 @@ describe("GenerationPluginRuntime", () => {
 describe("generation Plugin identifiers and environment", () => {
   test("uses an unambiguous host id and rejects command/path-shaped ids", () => {
     expect(generationPluginToolHostId("image-tools", "generate.image")).toBe("image-tools/generate.image")
+    expect(pluginLlmProviderHostId("image-tools", "main-provider")).toBe("plugin-image-tools-main-provider")
+    expect(pluginLlmProviderHostId("image", "provider", "tools-main")).toBe(
+      "plugin-image--service-tools-main--provider-provider",
+    )
+    expect(pluginLlmProviderHostId("image", "provider", "tools-main")).not.toBe(
+      pluginLlmProviderHostId("image-tools", "main-provider"),
+    )
     expect(() => generationPluginToolHostId("image/tools", "generate.image")).toThrow("Invalid Plugin id")
     expect(() => generationPluginToolHostId("image-tools", "../generate")).toThrow("Invalid generation tool id")
   })

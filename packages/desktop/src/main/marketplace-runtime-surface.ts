@@ -4,7 +4,7 @@ import type {
   RegistryPackage,
   SourceQualifiedItem,
 } from "@convax/marketplace"
-import { parsePortablePluginManifestV8, type PortablePluginManifestV8 } from "@convax/plugin-sdk"
+import { parsePortablePluginManifest, type PortablePluginManifest } from "@convax/plugin-sdk"
 
 export type MarketplaceRuntimeSurface = SourceQualifiedItem["runtimeSurface"]
 
@@ -20,11 +20,17 @@ const noPluginCategories = Object.freeze([]) as readonly MarketplacePluginCatego
  * The result is presentation metadata only and never substitutes for live runtime
  * or authorization checks.
  */
-export function projectPluginCategories(manifest: PortablePluginManifestV8): readonly MarketplacePluginCategory[] {
+export function projectPluginCategories(manifest: PortablePluginManifest): readonly MarketplacePluginCategory[] {
   const contributions = manifest.contributes
-  const outputs = new Set(contributions.generation?.tools.map((tool) => tool.output) ?? [])
+  const serviceContributions = "services" in contributions ? (contributions.services ?? []) : []
+  const outputs = new Set([
+    ...(contributions.generation?.tools.map((tool) => tool.output) ?? []),
+    ...serviceContributions.flatMap((service) => service.generation?.tools.map((tool) => tool.output) ?? []),
+  ])
   const categories: MarketplacePluginCategory[] = []
-  if (contributions.service !== undefined) categories.push("service")
+  if (("service" in contributions && contributions.service !== undefined) || serviceContributions.length > 0) {
+    categories.push("service")
+  }
   if (outputs.has("video")) categories.push("video")
   if (outputs.has("image")) categories.push("image")
   if ((contributions.skills?.length ?? 0) > 0) categories.push("skill")
@@ -35,14 +41,15 @@ export function projectPluginCategories(manifest: PortablePluginManifestV8): rea
  * Desktop-only presentation policy over the canonical Plugin ABI.
  *
  * The SDK owns syntax and cross-field validation. This adapter receives only a
- * parsed v8 manifest and intentionally projects no execution authority.
+ * parsed released manifest and intentionally projects no execution authority.
  */
-export function projectPluginRuntimeSurface(manifest: PortablePluginManifestV8): MarketplaceRuntimeSurface {
+export function projectPluginRuntimeSurface(manifest: PortablePluginManifest): MarketplaceRuntimeSurface {
   const contributions = manifest.contributes
   if (
     contributions.canvas !== undefined ||
     contributions.generation !== undefined ||
-    contributions.service !== undefined ||
+    ("service" in contributions && contributions.service !== undefined) ||
+    ("services" in contributions && (contributions.services?.length ?? 0) > 0) ||
     contributions.pet !== undefined ||
     (contributions.capabilities?.exports.length ?? 0) > 0
   ) {
@@ -67,11 +74,11 @@ export function parsePluginRuntimeSurface(
   value: unknown,
   expectedIdentity?: { readonly id: string; readonly version: string },
 ): {
-  manifest: PortablePluginManifestV8
+  manifest: PortablePluginManifest
   pluginCategories: readonly MarketplacePluginCategory[]
   runtimeSurface: MarketplaceRuntimeSurface
 } {
-  const manifest = parsePortablePluginManifestV8(value, { hostApiMode: "runtime" })
+  const manifest = parsePortablePluginManifest(value, { hostApiMode: "runtime" })
   if (
     expectedIdentity !== undefined &&
     (manifest.id !== expectedIdentity.id || manifest.version !== expectedIdentity.version)

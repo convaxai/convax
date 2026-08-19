@@ -1,8 +1,10 @@
 # Plugin Canvas Capabilities
 
-Convax accepts only `convax.plugin/8`. The portable manifest and strict parser are
-owned by `@convax/plugin-sdk`; Host API ids, `since`, audience, grants, scope,
-effects and stable errors are owned by the code-generated
+Convax accepts the closed `convax.plugin/8` and `convax.plugin/9` manifest
+contracts. V8 keeps its existing singleton-Service bytes and semantics; it is not
+rewritten or interpreted as v9. The portable manifests, strict parsers and generic
+release dispatcher are owned by `@convax/plugin-sdk`; Host API ids, `since`,
+audience, grants, scope, effects and stable errors are owned by the code-generated
 `@convax/plugin-api` catalog. This document explains ownership and transport. It is
 not a second API reference.
 
@@ -27,6 +29,14 @@ Canvas document semantics, revisions, transactions and persistence belong to
 `@convax/canvas` and `@convax/project/node`. Desktop owns installed Plugin identity,
 ActiveSet membership, manifest grants, sender binding and cancellation. Renderer
 owns no permission decision and never persists a document.
+
+V9 Service profiles do not change this Host API or Web transport boundary. Their
+generation, LLM and static runtime args are selected in Main from the exact
+installed `{pluginId, serviceId}`; callers cannot send a companion command, runtime
+args or arbitrary Service selector through Canvas APIs. Agent/Canvas tool references
+remain restricted to top-level generation on the base runtime. Service-scoped
+generation tools use Host-derived Plugin/Service/tool identity only on the existing
+Main generation path.
 
 ## Exact principal
 

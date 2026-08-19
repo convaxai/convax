@@ -10,12 +10,22 @@ on:
       marketplace_version:
         description: Expected @convax/marketplace version
         required: true
-        default: 0.1.1
+        default: 0.2.2
         type: string
       kit_version:
         description: Expected @convax/marketplace-kit version
         required: true
-        default: 0.1.1
+        default: 0.2.3
+        type: string
+      sdk_version:
+        description: Required published @convax/plugin-sdk version
+        required: true
+        default: 0.5.0
+        type: string
+      create_version:
+        description: Expected create-convax-marketplace version
+        required: true
+        default: 0.2.3
         type: string
 
 permissions:
@@ -56,24 +66,34 @@ jobs:
         env:
           MARKETPLACE_VERSION: ${{ inputs.marketplace_version }}
           KIT_VERSION: ${{ inputs.kit_version }}
+          CREATE_VERSION: ${{ inputs.create_version }}
+          SDK_VERSION: ${{ inputs.sdk_version }}
         run: |
           set -euo pipefail
           mkdir -p "$RUNNER_TEMP/npm-release"
           (cd packages/marketplace && bun pm pack --destination "$RUNNER_TEMP/npm-release")
           (cd packages/marketplace-kit && bun pm pack --destination "$RUNNER_TEMP/npm-release")
+          (cd packages/create-convax-marketplace && bun pm pack --destination "$RUNNER_TEMP/npm-release")
           marketplace_tarball="$RUNNER_TEMP/npm-release/convax-marketplace-$MARKETPLACE_VERSION.tgz"
           kit_tarball="$RUNNER_TEMP/npm-release/convax-marketplace-kit-$KIT_VERSION.tgz"
+          create_tarball="$RUNNER_TEMP/npm-release/create-convax-marketplace-$CREATE_VERSION.tgz"
           [ -f "$marketplace_tarball" ]
           [ -f "$kit_tarball" ]
+          [ -f "$create_tarball" ]
           [ "$(tar -xOf "$marketplace_tarball" package/package.json | jq -r '.name + "@" + .version')" = "@convax/marketplace@$MARKETPLACE_VERSION" ]
           [ "$(tar -xOf "$kit_tarball" package/package.json | jq -r '.name + "@" + .version')" = "@convax/marketplace-kit@$KIT_VERSION" ]
+          [ "$(tar -xOf "$create_tarball" package/package.json | jq -r '.name + "@" + .version')" = "create-convax-marketplace@$CREATE_VERSION" ]
           [ "$(tar -xOf "$kit_tarball" package/package.json | jq -r '.dependencies["@convax/marketplace"]')" = "^$MARKETPLACE_VERSION" ]
+          [ "$(tar -xOf "$kit_tarball" package/package.json | jq -r '.dependencies["@convax/plugin-sdk"]')" = "^$SDK_VERSION" ]
+          [ "$(tar -xOf "$create_tarball" package/package.json | jq -r '.dependencies["@convax/marketplace-kit"]')" = "^$KIT_VERSION" ]
           ! tar -xOf "$kit_tarball" package/package.json | grep -Eq 'workspace:|catalog:'
-          sha512sum "$marketplace_tarball" "$kit_tarball" > "$RUNNER_TEMP/npm-release/SHA512SUMS"
+          ! tar -xOf "$create_tarball" package/package.json | grep -Eq 'workspace:|catalog:'
+          sha512sum "$marketplace_tarball" "$kit_tarball" "$create_tarball" > "$RUNNER_TEMP/npm-release/SHA512SUMS"
       - name: Refuse version reuse
         env:
           MARKETPLACE_VERSION: ${{ inputs.marketplace_version }}
           KIT_VERSION: ${{ inputs.kit_version }}
+          CREATE_VERSION: ${{ inputs.create_version }}
         run: |
           set -euo pipefail
           assert_version_available() {
@@ -92,15 +112,24 @@ jobs:
           }
           assert_version_available "@convax/marketplace" "$MARKETPLACE_VERSION"
           assert_version_available "@convax/marketplace-kit" "$KIT_VERSION"
+          assert_version_available "create-convax-marketplace" "$CREATE_VERSION"
+      - name: Require the Plugin SDK dependency to be published first
+        env:
+          SDK_VERSION: ${{ inputs.sdk_version }}
+        run: |
+          set -euo pipefail
+          [ "$(npm view "@convax/plugin-sdk@$SDK_VERSION" version --json | jq -r .)" = "$SDK_VERSION" ]
       - name: Stage packages for maintainer approval
         env:
           NPM_CONFIG_PROVENANCE: "false"
           MARKETPLACE_VERSION: ${{ inputs.marketplace_version }}
           KIT_VERSION: ${{ inputs.kit_version }}
+          CREATE_VERSION: ${{ inputs.create_version }}
         run: |
           set -euo pipefail
           npm stage publish "$RUNNER_TEMP/npm-release/convax-marketplace-$MARKETPLACE_VERSION.tgz" --access public
           npm stage publish "$RUNNER_TEMP/npm-release/convax-marketplace-kit-$KIT_VERSION.tgz" --access public
+          npm stage publish "$RUNNER_TEMP/npm-release/create-convax-marketplace-$CREATE_VERSION.tgz" --access public
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
           name: marketplace-npm-tarballs

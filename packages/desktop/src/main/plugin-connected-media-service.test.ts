@@ -55,6 +55,7 @@ function plugin(
     "canvas.inputs.open",
     "canvas.inputs.close",
   ] as string[],
+  schema: "convax.plugin/8" | "convax.plugin/9" = "convax.plugin/8",
 ) {
   return parseWebPluginManifest({
     capabilities,
@@ -68,7 +69,7 @@ function plugin(
     },
     id: "media-surface",
     name: "Media Surface",
-    schema: "convax.plugin/8",
+    schema,
     version,
   })
 }
@@ -223,7 +224,7 @@ function canvas(): CanvasDocument {
 describe("PluginConnectedMediaService", () => {
   test("uses one monotonic deadline domain for idle refresh, absolute expiry, and capacity cleanup", async () => {
     const document = imageCanvas()
-    const currentPlugin = plugin()
+    const currentPlugin = plugin("1.0.0", undefined, undefined, "convax.plugin/9")
     let monotonicNow = 10_000
     let wallNow = 2_000_000_000_000
     const originalDateNow = Date.now

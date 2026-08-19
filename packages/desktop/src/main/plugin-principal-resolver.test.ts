@@ -1,10 +1,10 @@
 import { describe, expect, test } from "bun:test"
 
 import type { PluginPrincipal } from "../plugin-capability-contracts"
-import type { InstalledPlugin } from "../plugin-api"
+import { parseWebPluginManifest, type InstalledWebPluginSummary, type WebPluginManifestV8 } from "../plugin-contracts"
 import { InstalledPluginPrincipalResolver } from "./plugin-principal-resolver"
 
-function manifest(overrides: Partial<InstalledPlugin> = {}): InstalledPlugin {
+function manifest(overrides: Partial<WebPluginManifestV8> = {}): WebPluginManifestV8 {
   return {
     capabilities: ["canvas.document.read"],
     contributes: { canvas: { renderer: { create: true } } },
@@ -23,7 +23,7 @@ function manifest(overrides: Partial<InstalledPlugin> = {}): InstalledPlugin {
   }
 }
 
-function activeIdentity(plugin = manifest()) {
+function activeIdentity(plugin: InstalledWebPluginSummary = manifest()) {
   return {
     activeRevision: 7,
     activeSetDigest: "b".repeat(64),
@@ -31,6 +31,37 @@ function activeIdentity(plugin = manifest()) {
     plugin,
     snapshotDigest: "c".repeat(64),
   }
+}
+
+function v9WebManifest() {
+  return parseWebPluginManifest({
+    ...manifest(),
+    schema: "convax.plugin/9",
+  })
+}
+
+function v9ToolManifest() {
+  return parseWebPluginManifest({
+    capabilities: ["projects.read"],
+    contributes: {
+      services: [
+        {
+          actions: [],
+          description: "Headless service",
+          id: "primary",
+          name: "Primary",
+          runtime: {},
+        },
+      ],
+    },
+    description: "Canvas tool",
+    hostApi: { major: 3, optional: [], required: ["projects.list"] },
+    id: "canvas-tool",
+    name: "Canvas Tool",
+    runtime: { command: "canvas-tool-mcp", type: "mcp-stdio" },
+    schema: "convax.plugin/9",
+    version: "1.0.0",
+  })
 }
 
 describe("InstalledPluginPrincipalResolver", () => {
@@ -72,6 +103,25 @@ describe("InstalledPluginPrincipalResolver", () => {
     }
   })
 
+  test("issues Web and Tool principals for released v9 manifests", async () => {
+    let current = activeIdentity(v9WebManifest())
+    const resolver = new InstalledPluginPrincipalResolver({
+      async resolveCapabilityIdentity() {
+        return current
+      },
+    })
+
+    expect((await resolver.issue("canvas-tool", "web")).runtime).toBe("web")
+
+    current = activeIdentity(v9ToolManifest())
+    const principal = await resolver.issue("canvas-tool", "tool")
+    expect(principal.runtime).toBe("tool")
+    expect(await resolver.resolve(principal)).toMatchObject({
+      pluginId: "canvas-tool",
+      pluginVersion: "1.0.0",
+    })
+  })
+
   test("rejects legacy manifests and incomplete immutable identity", async () => {
     let current: ReturnType<typeof activeIdentity> | Record<string, unknown> = activeIdentity()
     const resolver = new InstalledPluginPrincipalResolver({
@@ -81,17 +131,13 @@ describe("InstalledPluginPrincipalResolver", () => {
     })
 
     current = { digest: "a".repeat(64), plugin: manifest() }
-    await expect(resolver.issue("canvas-tool", "web")).rejects.toThrow(
-      "not bound to an active immutable snapshot",
-    )
+    await expect(resolver.issue("canvas-tool", "web")).rejects.toThrow("not bound to an active immutable snapshot")
 
     current = {
       ...activeIdentity(),
       plugin: { ...manifest(), schema: "convax.plugin/7" },
     }
-    await expect(resolver.issue("canvas-tool", "web")).rejects.toThrow(
-      "does not expose the capability API",
-    )
+    await expect(resolver.issue("canvas-tool", "web")).rejects.toThrow("does not expose the capability API")
   })
 
   test("checks required APIs while preserving unavailable future optional APIs", async () => {
@@ -125,9 +171,7 @@ describe("InstalledPluginPrincipalResolver", () => {
         required: ["host.context.get", "future.canvas.mutate"],
       },
     }
-    await expect(resolver.issue("canvas-tool", "web")).rejects.toThrow(
-      "future.canvas.mutate: unsupported-host",
-    )
+    await expect(resolver.issue("canvas-tool", "web")).rejects.toThrow("future.canvas.mutate: unsupported-host")
   })
 
   test("keeps Web and Tool identities distinct and rejects every unknown runtime", async () => {
@@ -139,9 +183,7 @@ describe("InstalledPluginPrincipalResolver", () => {
     })
 
     await expect(resolver.issue("canvas-tool", "tool")).rejects.toThrow("Static Plugin")
-    await expect(
-      resolver.issue("canvas-tool", "builtin" as never),
-    ).rejects.toThrow("runtime is unsupported")
+    await expect(resolver.issue("canvas-tool", "builtin" as never)).rejects.toThrow("runtime is unsupported")
 
     plugin = manifest({
       capabilities: ["projects.read"],
@@ -174,8 +216,8 @@ describe("InstalledPluginPrincipalResolver", () => {
       },
     })
 
-    await expect(
-      resolver.issue("canvas-tool", "tool", { ...current, version: "0.9.0" }),
-    ).rejects.toThrow("changed before its capability principal was issued")
+    await expect(resolver.issue("canvas-tool", "tool", { ...current, version: "0.9.0" })).rejects.toThrow(
+      "changed before its capability principal was issued",
+    )
   })
 })

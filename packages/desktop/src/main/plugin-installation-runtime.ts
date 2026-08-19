@@ -1,3 +1,4 @@
+import { randomBytes } from "node:crypto"
 import path from "node:path"
 
 import {
@@ -22,6 +23,7 @@ import {
   pluginSnapshotCanonicalDigest,
   requireDigest,
   type ActivePluginSnapshotReference,
+  type LegacyActivePluginSnapshotReference,
   type InstalledPluginSnapshot,
   type PluginSnapshotDigest,
   type PluginSnapshotGarbageCollectionCandidates,
@@ -97,6 +99,28 @@ function compareText(left: string, right: string) {
   return left === right ? 0 : left < right ? -1 : 1
 }
 
+function newPluginActivationId() {
+  return randomBytes(32).toString("hex")
+}
+
+function activatePluginReferences(
+  references: readonly (ActivePluginSnapshotReference | LegacyActivePluginSnapshotReference)[],
+): ActivePluginSnapshotReference[] {
+  return references.map((reference) =>
+    "activationId" in reference
+      ? reference
+      : {
+          activationId: newPluginActivationId(),
+          pluginId: reference.pluginId,
+          snapshotDigest: reference.snapshotDigest,
+        },
+  )
+}
+
+function referenceActivationId(reference: ActivePluginSnapshotReference | LegacyActivePluginSnapshotReference) {
+  return "activationId" in reference ? reference.activationId : undefined
+}
+
 export interface RetiredHostApiPluginRecovery {
   readonly artifact: {
     readonly sha256: PluginSnapshotDigest
@@ -164,14 +188,20 @@ export class PluginInstallationRuntime {
         // Delegate the exact typed revision conflict to the canonical store.
         await this.#snapshots.compareAndSwapActiveSet(expectedRevision, {
           capabilityTopology: current.activeSet?.descriptor.capabilityTopology ?? emptyCapabilityTopology,
-          plugins: current.activeSet?.descriptor.plugins ?? [],
+          plugins: activatePluginReferences(current.activeSet?.descriptor.plugins ?? []),
         })
         throw runtimeError("Unreachable Active Plugin revision branch")
       }
       const references = new Map(
-        current.activeSet?.descriptor.plugins.map((reference) => [reference.pluginId, reference]) ?? [],
+        activatePluginReferences(current.activeSet?.descriptor.plugins ?? []).map((reference) => [
+          reference.pluginId,
+          reference,
+        ]),
       )
       references.set(snapshot.descriptor.pluginId, {
+        // Every explicit install/update publication is a fresh installation
+        // incarnation, even when immutable package bytes are identical.
+        activationId: newPluginActivationId(),
         pluginId: snapshot.descriptor.pluginId,
         snapshotDigest: snapshot.digest,
       })
@@ -200,7 +230,7 @@ export class PluginInstallationRuntime {
       if (current.revision !== expectedRevision) {
         await this.#snapshots.compareAndSwapActiveSet(expectedRevision, {
           capabilityTopology: current.activeSet?.descriptor.capabilityTopology ?? emptyCapabilityTopology,
-          plugins: current.activeSet?.descriptor.plugins ?? [],
+          plugins: activatePluginReferences(current.activeSet?.descriptor.plugins ?? []),
         })
         throw runtimeError("Unreachable Active Plugin recovery revision branch")
       }
@@ -226,10 +256,11 @@ export class PluginInstallationRuntime {
       })
 
       const incompatibleIds = new Set(recovery.plugins.map((entry) => entry.pluginId))
-      const references = (current.activeSet?.descriptor.plugins ?? []).filter(
+      const references = activatePluginReferences(current.activeSet?.descriptor.plugins ?? []).filter(
         (reference) => !incompatibleIds.has(reference.pluginId),
       )
       references.push({
+        activationId: newPluginActivationId(),
         pluginId: snapshot.descriptor.pluginId,
         snapshotDigest: snapshot.digest,
       })
@@ -259,11 +290,12 @@ export class PluginInstallationRuntime {
       if (current.revision !== expectedRevision) {
         await this.#snapshots.compareAndSwapActiveSet(expectedRevision, {
           capabilityTopology: current.activeSet?.descriptor.capabilityTopology ?? emptyCapabilityTopology,
-          plugins: current.activeSet?.descriptor.plugins ?? [],
+          plugins: activatePluginReferences(current.activeSet?.descriptor.plugins ?? []),
         })
         throw runtimeError("Unreachable Active Plugin revision branch")
       }
-      const next = (current.activeSet?.descriptor.plugins ?? []).filter((reference) => reference.pluginId !== pluginId)
+      const activeReferences = activatePluginReferences(current.activeSet?.descriptor.plugins ?? [])
+      const next = activeReferences.filter((reference) => reference.pluginId !== pluginId)
       if (next.length === (current.activeSet?.descriptor.plugins.length ?? 0)) return this.#selection(current)
       const capabilityTopology = await this.#planCapabilityTopology(next)
       await this.#snapshots.compareAndSwapActiveSet(expectedRevision, { capabilityTopology, plugins: next })
@@ -288,7 +320,7 @@ export class PluginInstallationRuntime {
       if (current.revision !== expectedRevision) {
         await this.#snapshots.compareAndSwapActiveSet(expectedRevision, {
           capabilityTopology: current.activeSet?.descriptor.capabilityTopology ?? emptyCapabilityTopology,
-          plugins: current.activeSet?.descriptor.plugins ?? [],
+          plugins: activatePluginReferences(current.activeSet?.descriptor.plugins ?? []),
         })
         throw runtimeError("Unreachable Active Plugin revision branch")
       }
@@ -318,8 +350,16 @@ export class PluginInstallationRuntime {
         await this.#closures.publish(next, files, companionBytes)
         await this.#closures.validate(next)
       }
-      const references = (current.activeSet?.descriptor.plugins ?? []).map((candidate) =>
-        candidate.pluginId === pluginId ? { pluginId, snapshotDigest: next.digest } : candidate,
+      const references = activatePluginReferences(current.activeSet?.descriptor.plugins ?? []).map((candidate) =>
+        candidate.pluginId === pluginId
+          ? {
+              ...candidate,
+              // Execution consent updates the immutable snapshot inside the
+              // same installation; it is not an uninstall/reinstall boundary.
+              activationId: candidate.activationId,
+              snapshotDigest: next.digest,
+            }
+          : candidate,
       )
       const capabilityTopology = await this.#planCapabilityTopology(references)
       await this.#snapshots.compareAndSwapActiveSet(expectedRevision, { capabilityTopology, plugins: references })
@@ -402,7 +442,13 @@ export class PluginInstallationRuntime {
           throw runtimeError("Pinned Plugin identity does not match its immutable closure")
         }
         this.#rememberIdentity(identity)
-        return this.#closures.createHandle(snapshot, Object.freeze({ ...identity }), plugin, pinned.lease)
+        return this.#closures.createHandle(
+          snapshot,
+          Object.freeze({ ...identity }),
+          plugin,
+          pinned.lease,
+          pinned.activationId,
+        )
       } catch (error) {
         pinned.lease.release()
         throw error
@@ -539,7 +585,7 @@ export class PluginInstallationRuntime {
             version: snapshot.descriptor.version,
           }),
         )
-        return this.#closures.createHandle(snapshot, identity, plugin, lease)
+        return this.#closures.createHandle(snapshot, identity, plugin, lease, referenceActivationId(reference))
       } catch (error) {
         lease.release()
         throw error
@@ -567,16 +613,26 @@ export class PluginInstallationRuntime {
       if (!this.#observedBindings.has(this.#bindingKey(requestedIdentity))) {
         throw runtimeError("Historical Plugin identity was not observed from a trusted ActiveSet pointer")
       }
-      const lease = await this.#snapshots.acquirePluginSnapshotLease(activeSetDigest, pluginId, snapshotDigest)
+      const leasedReference = await this.#snapshots.acquirePluginSnapshotLease(
+        activeSetDigest,
+        pluginId,
+        snapshotDigest,
+      )
       try {
         const snapshot = await this.#snapshots.readInstalledSnapshot(snapshotDigest)
         const plugin = await this.#closures.validate(snapshot)
         if (plugin.id !== pluginId || plugin.version !== identity.pluginVersion) {
           throw runtimeError("Historical Plugin identity does not match its immutable closure")
         }
-        return this.#closures.createHandle(snapshot, requestedIdentity, plugin, lease)
+        return this.#closures.createHandle(
+          snapshot,
+          requestedIdentity,
+          plugin,
+          leasedReference.lease,
+          leasedReference.activationId,
+        )
       } catch (error) {
-        lease.release()
+        leasedReference.lease.release()
         throw error
       }
     })
@@ -627,6 +683,7 @@ export class PluginInstallationRuntime {
                 ),
                 plugin,
                 lease,
+                referenceActivationId(reference),
               ),
             )
           } catch (error) {
@@ -810,7 +867,9 @@ export class PluginInstallationRuntime {
     })
   }
 
-  async #assertSkillNamesUnique(references: readonly ActivePluginSnapshotReference[]) {
+  async #assertSkillNamesUnique(
+    references: readonly (ActivePluginSnapshotReference | LegacyActivePluginSnapshotReference)[],
+  ) {
     const owners = new Map<string, string>()
     for (const reference of references) {
       const snapshot = await this.#snapshots.readInstalledSnapshot(reference.snapshotDigest)
@@ -825,7 +884,7 @@ export class PluginInstallationRuntime {
   }
 
   async #publishedCapabilityContracts(
-    references: readonly ActivePluginSnapshotReference[],
+    references: readonly (ActivePluginSnapshotReference | LegacyActivePluginSnapshotReference)[],
   ): Promise<PublishedPluginCapabilityContract[]> {
     const contracts: PublishedPluginCapabilityContract[] = []
     for (const reference of references) {
@@ -846,7 +905,7 @@ export class PluginInstallationRuntime {
   }
 
   async #planCapabilityTopology(
-    references: readonly ActivePluginSnapshotReference[],
+    references: readonly (ActivePluginSnapshotReference | LegacyActivePluginSnapshotReference)[],
   ): Promise<PluginCapabilityTopology> {
     const result = planPluginCapabilityTopology(await this.#publishedCapabilityContracts(references))
     if (!result.ok) {

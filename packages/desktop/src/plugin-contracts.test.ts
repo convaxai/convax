@@ -1,6 +1,12 @@
 import { describe, expect, test } from "bun:test"
 
-import { hasWebPluginCanvasSurface, parseWebPluginManifest, webPluginManifestSchemaV8 } from "./plugin-contracts"
+import {
+  hasWebPluginCanvasSurface,
+  isSupportedWebPluginManifestSchema,
+  parseWebPluginManifest,
+  webPluginManifestSchemaV8,
+  webPluginManifestSchemaV9,
+} from "./plugin-contracts"
 
 function manifest(overrides: Record<string, unknown> = {}) {
   return {
@@ -37,10 +43,21 @@ describe("Desktop Plugin contract adapter", () => {
     expect(hasWebPluginCanvasSurface(parsed)).toBeTrue()
   })
 
+  test("admits only the exact released v8 and v9 discriminators", () => {
+    const parsed = parseWebPluginManifest(manifest({ schema: "convax.plugin/9" }))
+
+    expect(parsed.schema).toBe(webPluginManifestSchemaV9)
+    expect(hasWebPluginCanvasSurface(parsed)).toBeTrue()
+    expect(isSupportedWebPluginManifestSchema(webPluginManifestSchemaV8)).toBeTrue()
+    expect(isSupportedWebPluginManifestSchema(webPluginManifestSchemaV9)).toBeTrue()
+    expect(isSupportedWebPluginManifestSchema("convax.plugin/7")).toBeFalse()
+    expect(isSupportedWebPluginManifestSchema("convax.plugin/10")).toBeFalse()
+  })
+
   test("does not retain a v1-v7 runtime parser", () => {
     for (let version = 1; version <= 7; version += 1) {
       expect(() => parseWebPluginManifest({ ...manifest(), schema: `convax.plugin/${version}` })).toThrow(
-        "must use convax.plugin/8",
+        "must use convax.plugin/8 or convax.plugin/9",
       )
     }
   })

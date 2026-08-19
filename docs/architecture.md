@@ -391,11 +391,11 @@ capabilities. Concrete 3D, FFmpeg, external-editor, model and vendor behavior be
 to `convax-plugins`; Host code never branches on a concrete Plugin id, vendor or
 model.
 
-`convax.plugin/8` and `convax.package/2` are the admitted manifest and package
-formats. `convax.plugin-host/8` is the only author-facing iframe/Web MessagePort
-ABI; `convax.plugin-capability/3` is restricted to Host-internal renderer/Main and
-verified-sidecar transport. Host API evolution is independent and follows the SemVer
-Catalog in `@convax/plugin-api`.
+`convax.plugin/8` and `convax.plugin/9` are the admitted manifest formats, and
+`convax.package/2` is the admitted package format. `convax.plugin-host/8` is the
+only author-facing iframe/Web MessagePort ABI; `convax.plugin-capability/3` is
+restricted to Host-internal renderer/Main and verified-sidecar transport. Host API
+evolution is independent and follows the SemVer Catalog in `@convax/plugin-api`.
 
 Plugin internationalization is split along the same boundary. `@convax/plugin-sdk`
 owns bounded manifest `i18n` resources, stable message keys, locale validation, and
@@ -463,8 +463,9 @@ installer.
 
 Plugin catalog categories are a bounded Host-derived display projection rather than
 another authoring field. Desktop reparses the exact source-qualified Plugin manifest
-through `@convax/plugin-sdk`, then projects `service` from a Service contribution,
-`video` and `image` from generation tool outputs, and `skill` from owned Skills.
+through `@convax/plugin-sdk`, then projects `service` from the v8 singleton Service
+or non-empty v9 Services, `video` and `image` from top-level or service-scoped
+generation tool outputs, and `skill` from owned Skills.
 `@convax/marketplace` owns that four-value taxonomy and keeps it attached to the same
 representative source as the card's name and description. Renderer may cache and
 filter these values as presentation only: `service`, `video`, and `image` select
@@ -536,14 +537,12 @@ recovering and contract-mismatch remain distinct structured states. The broker k
 only bounded in-flight duplicate state; completed/billable replay safety belongs to
 the provider's durable `operationId`/LRO contract.
 
-Plugin ABI releases roll out in dependency order: publish
-`@convax/plugin-api@2.0.0`, then `@convax/plugin-sdk@0.1.1` and
-`@convax/plugin-ui@0.1.0`, then the breaking
-Marketplace authoring line (`@convax/marketplace` at `0.2.1`, and
-`@convax/marketplace-kit` plus `create-convax-marketplace` at `0.2.2`), and only
-then publish Host/Desktop consumers. The sibling `convax-plugins` repository raises
-its authoring dependencies and republishes `convax.plugin/8` artifacts after those
-Host packages exist; it never publishes v8 artifacts against an unavailable SDK.
+Plugin ABI releases roll out in dependency order: publish any required
+`@convax/plugin-api` Catalog release, then the manifest-capable
+`@convax/plugin-sdk` and authoring packages, and only then Host/Desktop consumers.
+The sibling `convax-plugins` repository raises its authoring dependencies and
+publishes either closed v8 artifacts or v9 artifacts only after the matching Host
+packages exist; it never publishes a manifest release against an unavailable SDK.
 The SDK's immutable Host package Release binds its exact npm tarball to the exact
 Plugin API package/Catalog identity tested at release time, using
 `convax.host-package-release/1`; it is not a Host capability receipt. A concrete
@@ -822,11 +821,15 @@ Electron userData/
     state/installed/<snapshot-digest>.json
                                         immutable validated complete-closure descriptor
     state/active-sets/<active-set-digest>.json
-                                        immutable exact global Plugin selection
+                                        immutable exact global Plugin selection; current v2 references carry
+                                        each Plugin's random per-install activation incarnation
     state/active-pointer.json           sole compare-and-swap ActiveSet pointer
     state/owner-pins.json               owner-scoped exact ActiveSet/snapshot pins
-  plugin-service-authorization-checkpoints/<plugin-id>.json
-                                        private crash-recovery Cookie handoff; never a browser profile
+  plugin-service-authorization-checkpoints/<plugin-id>--<service-id>.json
+                                        exact-Service private crash-recovery Cookie handoff; never a browser profile
+  plugin-service-runtime-profiles/bindings/<profile-binding-digest>/
+                                        persistent private HOME/config/cache/data/cwd for one exact v9 Service profile;
+                                        each sidecar process receives a separate disposable private temp directory
   canvas-external-drags/                short-lived host-owned native drag copies
 
 The two private-key directories contain bounded canonical plaintext records. On
@@ -1510,13 +1513,50 @@ Project file under `Generated/`; the existing Canvas `file` node flow then refer
 that Project file. A failed Canvas commit retains the published output and reports
 the partial success instead of deleting user data.
 
-Executable integrations use only the portable `convax.plugin/8` manifest from
-`@convax/plugin-sdk`. A validated contribution declares generation tools, models,
-Agent/Canvas operations, owned Skills, remote MCP, UI actions, and an optional
-verified companion without changing Host behavior based on Plugin identity.
+Executable integrations use only the portable `convax.plugin/8` or
+`convax.plugin/9` manifest from `@convax/plugin-sdk`. V8 remains a closed accepted
+contract: its optional singleton Service, Plugin-level runtime/generation/LLM,
+validation and Host-facing ids are unchanged and never projected through v9. A
+validated contribution declares generation tools, models, Agent/Canvas operations,
+owned Skills, remote MCP, UI actions, and an optional verified companion without
+changing Host behavior based on Plugin identity.
 `delivery: "return"` and `inputBinding: "direct-incoming"` remain generic tool
 contracts. The manifest's explicit required/optional Host API declaration is checked
 independently from these contributions.
+
+V9 preserves the v8 non-Service contribution plane and one top-level runtime
+command bound to one verified immutable companion artifact. It replaces the
+singleton Service field with an optional array of 1–16 profiles. Every profile has
+a Plugin-local id, display metadata, possibly empty actions, optional generation,
+optional LLM, and optional static runtime args. Effective argv is the base runtime
+args followed by the profile args and contains at most 64 items. Its id differs
+from the owning Plugin id so the base runtime and a nested profile can never alias
+in portable projections. A present Service counts as executable: the top-level
+runtime exists exactly when a Service,
+top-level generation or LLM, or capability export requires it. Main starts a
+separate process per profile and keys its lifecycle, private sidecar state,
+authorization, status/usage, model projection, recovery and cancellation by exact
+`{pluginId, serviceId}`. Sharing artifact bytes never shares a process, credential
+context or mutable state. Service-local tool/model ids may repeat across profiles;
+Host-facing generation ids include Plugin and Service identity. V9 top-level
+generation, LLM and capability exports continue to use the base runtime, while
+Agent/Canvas references continue to resolve only top-level generation and gain no
+Service selector.
+
+Main assigns each installed v9 Plugin a random private activation incarnation in its
+current `convax.active-plugin-set-snapshot/2` reference. The same ActiveSet CAS that
+publishes, updates, or removes the Plugin therefore publishes or removes the
+incarnation atomically. Unrelated Plugin mutations copy the reference unchanged;
+every explicit install/update publication receives a fresh incarnation, including
+an exact-byte republication, while an execution-consent snapshot replacement stays
+inside the same incarnation. A legacy ActiveSet `/1` descriptor is read and hashed
+in its original closed shape for existing v8 installations, and only the next
+explicit CAS writes `/2`; v9 nested Service execution fails closed without a `/2`
+incarnation. Profile HOME/config/cache/data therefore cannot resurrect an
+uninstalled account. An owner-pinned LRO retains the exact old ActiveSet incarnation
+only as authority for that old recovery profile; it never lets a later active install
+or exact reinstall reuse the binding. Reinstallation starts on a new binding, and the
+old directory is collected only after the final recovery owner releases it.
 
 An official Registry entry may bind the declared command to immutable executable
 companions for specific `platform`/`arch` targets. Desktop verifies the deterministic
@@ -1614,7 +1654,7 @@ snapshots, sidecar outputs and every non-Project caller do not inherit this exce
 A return-delivery operation reuses the same verified executable, input staging,
 exact content/source rechecks, cancellation, and at-most-once execution boundary, but
 returns one bounded text result and performs no Canvas resource import or node
-mutation. It cannot be a model. A v8 manifest may expose one such operation
+mutation. It cannot be a model. A supported manifest may expose one such operation
 as a confirmation-only image or video selection action when the tool has no input
 binding, accepts the exact selected media role, and is not part of a multi-step
 action. Desktop admits the action only while Main projects the exact operation as
@@ -1808,7 +1848,7 @@ crosses queue, preparation and sidecar boundaries. Hydration derives active and
 terminal presentation from the persisted run. If startup finds `submitting` or
 `running` without either a matching live Main execution or a complete admitted LRO
 binding, it marks the run `failed` and never repeats a potentially billable call.
-A persisted task id alone is not restart recovery. A recovery-capable v8 tool must
+A persisted task id alone is not restart recovery. A recovery-capable tool must
 provide the complete generic LRO contract and pinned immutable runtime binding;
 partial or legacy implementations remain fail-closed. Canvas exposes one terminal
 failure state; detailed recovery phases stay private to Main and the sidecar
@@ -1820,11 +1860,13 @@ The executable manifest and capability contracts are owned by
 records the current generic execution invariants; concrete integration notes such
 as [`ffmpeg-tool-plugin.md`](ffmpeg-tool-plugin.md) are non-normative examples.
 
-The same executable Tool Plugin may optionally contribute a user-global service
-surface. This does not create a second runtime or provider registry: Desktop reuses
-the already verified MCP sidecar and calls only fixed `service.status`, optional
-read-only `service.usage.list`, and explicitly manifest-authorized `service.*`
-actions. `convax.plugin-service-status/2` is the only
+An executable Tool Plugin may optionally contribute user-global Service surfaces.
+V8 contributes at most the existing singleton on its Plugin-level runtime; v9 may
+contribute multiple independently routed profiles backed by the same verified
+artifact. This does not create a provider registry: Desktop calls only fixed
+`service.status`, optional read-only `service.usage.list`, and explicitly
+manifest-authorized `service.*` actions on the Host-selected profile.
+`convax.plugin-service-status/2` is the only
 accepted status version and requires bounded account, credential-verification,
 current Plan, Billing/Checkout, credit and usage projections; unsupported data
 remains explicitly unavailable. Status v1 is rejected rather than adapted.
@@ -1853,7 +1895,8 @@ in a fresh non-persistent sandboxed Electron session.
 
 Checkout is also a fixed host operation, not a generic Plugin link. Renderer may
 select only a bounded Plan key advertised by the current v2 status. Preload forwards
-that exact Plugin/Plan target, the sidecar receives only `{ plan_key }`, and Main
+that exact `{pluginId, serviceId, planKey}` target, the sidecar receives only
+`{ plan_key }`, and Main
 accepts only `convax.plugin-service-checkout/1` with a bounded opaque Checkout id and
 canonical HTTPS URL. Main opens the URL with the system browser and refreshes status;
 the URL never crosses preload. Returning focus to Desktop refreshes the service
@@ -1862,8 +1905,9 @@ entitlement locally.
 
 Desktop exposes one read-only service catalog to the application menu and Services
 settings. Plugin generation capabilities and model rows are derived from the
-installed manifest. Every LLM contribution declares exactly one `openai` or
-`openrouter` Provider protocol. After starting its Main-only loopback gateway,
+installed manifest. Every present LLM contribution declares exactly one `openai`
+or `openrouter` Provider protocol; a Service without LLM remains valid. After
+starting its Main-only loopback gateway,
 Desktop actively requests that protocol's `/models` catalog, validates it in Main,
 and projects the resulting connected Plugin provider back into its owning Service card.
 Dynamic account, Plan, Billing, credit and aggregate usage data still comes only
@@ -1884,11 +1928,13 @@ discovery gate. Execution is stricter: preparation and dispatch perform bounded 
 status checks and cross the external-call boundary only while the service is
 connected.
 
-The v8 manifest may add one generic LLM contribution without introducing a built-in
-vendor registry. Desktop derives a namespaced OpenCode provider id from the validated
-Plugin contribution, verifies and starts the same leased immutable companion lifecycle, and
-calls only the fixed `llm.gateway.start`. The manifest must declare `protocol: "openai"`
-or `protocol: "openrouter"`; both authoring and runtime fail closed when the protocol
+Either admitted manifest may add one top-level generic LLM contribution, and each
+v9 Service may independently add one, without introducing a built-in vendor
+registry. Desktop derives a namespaced OpenCode provider id from the exact Plugin or
+Plugin/Service contribution, verifies and starts that profile's leased immutable
+companion lifecycle, and calls only the fixed `llm.gateway.start`. When LLM is
+present, the contribution must declare `protocol: "openai"` or
+`protocol: "openrouter"`; both authoring and runtime fail closed when the protocol
 is missing or unknown. Main then requests `/models` through that loopback gateway,
 bounds the bytes and entries, and keeps model ids opaque. OpenRouter discovery
 additionally admits only text-output models for Agent LLM use. Host never infers or
@@ -2131,7 +2177,7 @@ Neither Project nor Workbench imports the other to implement this flow.
 - Opening a Project must not discover project-local `.agents`/`.claude` Skills or
   executable OpenCode extensions. Managed Skill changes refresh volatile OpenCode
   discovery state without replacing durable sessions.
-- Installed v8 Agent MCP declarations are host-validated generic OpenCode
+- Installed v8 or v9 Agent MCP declarations are host-validated generic OpenCode
   configuration inputs, not project discovery. Desktop resolves remote MCP
   configurations, authorized Hook URLs, and Plugin-owned Skill paths from one exact
   leased ActivePluginSet and returns them through one atomic Agent configuration
@@ -2148,7 +2194,7 @@ Neither Project nor Workbench imports the other to implement this flow.
   never carries a native path. Showcase media is separate presentation metadata:
   fixed bundled assets for built-ins or digest-verified Release sidecars for remote
   Skills, loaded lazily and played only while visible.
-- Standalone Skills use an independent managed lifecycle. A v8
+- Standalone Skills use an independent managed lifecycle. A supported manifest's
   `contributes.skills` directory is owned by the declaring Plugin and cannot be
   installed, updated or removed independently.
 - Desktop validates every owned Skill tree and exact name before publishing one
@@ -2356,7 +2402,7 @@ are instead bounded immutable in-memory snapshots: revocation blocks new fetches
 and cancels validation, but a `Response` already constructed from the snapshot
 remains readable.
 The Plugin document CSP admits `convax-connected-media:` in `img-src` only for
-an exact installed v8 declaration of `canvas.inputs.image.open` with its grant;
+an exact installed v8 or v9 declaration of `canvas.inputs.image.open` with its grant;
 the existing audio/video API controls `media-src` independently. Neither
 declaration widens `connect-src`.
 
@@ -2373,7 +2419,8 @@ validation and domain revalidation remain with their owning service.
 
 `convax-pet-asset:` remains owned by the Pet platform and is projected into
 `img-src` only for the exact declared Pet overlay or settings document of a
-validated `convax.plugin/8` snapshot that contributes `convax.pet-host/1` and
+validated `convax.plugin/8` or `convax.plugin/9` snapshot that contributes
+`convax.pet-host/1` and
 holds `pet.custom.manage`. The Plugin document's meta policy and the Host response
 header must both admit the source. Missing contribution, missing grant, legacy
 schema, and unrelated Plugin documents keep the scheme closed; it never widens
@@ -2568,9 +2615,11 @@ on a staged dependency tree or monorepo workspace layout.
 
 The public bridge keeps separate namespaces for Project lifecycle, Project Files,
 Project Canvas, Canvas documents/views, Agent runtime, Plugin management, Plugin
-capabilities, and Plugin Services. Plugin Services accept only an installed Plugin
-id through fixed actions; Checkout additionally accepts one validated Plan key and
-never returns its external URL. Plugin surface creation is one narrow Canvas-namespace
+capabilities, and Plugin Services. Plugin Services accept only an installed
+`{pluginId, serviceId}` target through fixed actions; v8 projects its existing
+Plugin id as the Service id without changing its runtime identity. Checkout
+additionally accepts one validated Plan key and never returns its external URL.
+Plugin surface creation is one narrow Canvas-namespace
 method that accepts only Project, Canvas, and Plugin ids and returns a receipt plus
 the Canvas-created node id.
 The Plugin-capability bridge also carries one narrow sender-scoped locale update.

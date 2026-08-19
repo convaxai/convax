@@ -1,4 +1,4 @@
-// Convax 当前 v8 插件平台。
+// Convax 当前 v8/v9 插件平台。
 //
 // 校验：
 //   npx likec4 validate docs/diagrams
@@ -128,8 +128,8 @@ model {
   pluginSource = system '独立插件源码仓库' {
     description '具体集成唯一源码所有者；发现缺失 Host API 时只能提交结构化请求。'
 
-    package = artifact 'v8 Plugin package' {
-      description '唯一 convax.plugin/8 Manifest、静态资源和声明式 contributions。'
+    package = artifact 'v8/v9 Plugin package' {
+      description '一个已发布 Manifest、静态资源和声明式 contributions；v8 保持闭合，v9 可声明多个 Service profile。'
     }
 
     hostRequest = artifact 'Plugin-to-Host change request' {
@@ -144,8 +144,8 @@ model {
   pluginRuntime = system '已安装 Plugin 完整闭包' {
     description '一个 content-addressed immutable snapshot；各贡献不相互继承权限。'
 
-    manifest = artifact 'convax.plugin/8 Manifest' {
-      description '身份、Host API declaration、P2P import/export 和 contributions 的唯一 portable contract。'
+    manifest = artifact 'convax.plugin/8 or /9 Manifest' {
+      description '身份、Host API declaration、P2P import/export 和 contributions 的 portable contract。'
     }
 
     webFrame = component 'Canvas Web node renderer' {
@@ -182,7 +182,7 @@ model {
       }
 
       sdk = artifact '@convax/plugin-sdk' {
-        description '唯一 v8 Manifest、contribution、P2P schema/version 和 bounded value contract。'
+        description '闭合 v8 与 v9 Manifest、contribution、P2P schema/version 和 bounded value contract。'
       }
 
       generatedRefs = artifact '生成的 types、validators、clients、Docs 与 Skills' {
@@ -388,8 +388,8 @@ deployment {
 
 views {
   view index {
-    title 'Convax v8 插件平台总览'
-    description '唯一 v8 Manifest、Main authority、immutable ActiveSet、Plugin contributions 与外部边界。'
+    title 'Convax v8/v9 插件平台总览'
+    description '闭合 v8、v9 多 Service profile、Main authority、immutable ActiveSet、Plugin contributions 与外部边界。'
     include *
   }
 

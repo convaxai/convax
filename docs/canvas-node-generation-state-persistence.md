@@ -1,7 +1,9 @@
 # Canvas Node Generation: Scheduler–Agent–Supervisor and Long-Running Operations
 
-Status: current design. Plugin authoring uses `convax.plugin/8`, immutable ActiveSet
-snapshots, and code-generated API/Skill references.
+Status: current design. Plugin authoring uses the coexisting `convax.plugin/8` and
+`convax.plugin/9` contracts, immutable ActiveSet snapshots, and code-generated
+API/Skill references. V9 recovery additionally binds the exact Service profile;
+v8 retains its existing Plugin-scoped identity.
 
 This document is the normative design implemented by this change. It applies the
 industry-standard **Scheduler–Agent–Supervisor** pattern to a durable
@@ -401,8 +403,8 @@ inputs belonging to a non-terminal ledger.
 ## 9. Long-Running Operation capability admission
 
 Durable LRO support is an atomic capability, not a loose collection of optional
-booleans. In the current breaking Plugin ABI it is declared by
-`convax.plugin/8` on each generation tool:
+booleans. In the current Plugin ABIs it is declared by `convax.plugin/8` or
+`convax.plugin/9` on each generation tool:
 
 ```json
 {
@@ -429,9 +431,10 @@ initialization and return its stable opaque recovery-binding value.
 Manifest/runtime disagreement or recovery-binding drift fails before submission or
 recovery.
 
-Within v8, tools that omit `recovery` are recovery-unsupported. They continue to
-persist Canvas run state and task receipts when available, but restart marks an
-orphaned active run `failed` and never invokes the tool.
+Within v8 and v9, tools that omit `recovery` are recovery-unsupported. They
+continue to persist Canvas run state and task receipts when available, but restart
+marks an orphaned active run `failed` and never invokes the tool. V8 binds recovery
+to its singleton runtime; v9 binds it to the exact top-level or Service profile.
 
 Convax contains no Plugin-id, provider, model, or vendor branches. A tool either
 satisfies the complete durable LRO contract or it does not.
@@ -792,9 +795,10 @@ Every row asserts:
 
 - Pre-v8 Plugin manifests are rejected at admission and are not normalized into
   the current runtime.
-- Full recovery is admitted only by the exact v8 manifest/runtime contract.
-- V8 tools without the complete LRO declaration may still return structured task
-  receipts, but restart to Canvas `failed`.
+- Full recovery is admitted only by the exact v8 singleton or v9 runtime-profile
+  manifest/runtime contract.
+- V8 or v9 tools without the complete LRO declaration may still return structured
+  task receipts, but restart to Canvas `failed`.
 - `convax.node-generation-run/1` through `/4` are read and explicitly migrated;
   unknown schemas remain untouched.
 - Desktop protocol and `@convax/canvas` public version must be bumped when the
@@ -870,7 +874,7 @@ UI scenario:
 | Canvas domain tests              | schema migration, transition invariants, bounds, clone/delete semantics, generation-specific guard and atomic replacement                                                                                               |
 | Desktop generation-service tests | durable ledger/input ordering, multi-step pending admission before dispatch, at-most-once dispatch, task receipt CAS, restart reattachment, result replay, cancellation, target/reference races and partial publication |
 | Renderer lifecycle tests         | dialogs wait only for admission, cancellation crosses only before the receipt, and an accepted Main-owned generation remains alive across selection change or Canvas unmount/remount                                    |
-| LRO protocol/runtime tests       | v8 all-or-nothing admission, fixed get/wait/cancel/result/acknowledge methods, pinned executable identity, safe opaque receipts and pre-v8 rejection                                                                    |
+| LRO protocol/runtime tests       | v8 singleton and v9 exact-profile all-or-nothing admission, fixed get/wait/cancel/result/acknowledge methods, pinned executable identity, safe opaque receipts and pre-v8 rejection                                     |
 | stdio MCP tests                  | structured lifecycle receipts, compatibility handshake, cancellation, bounded messages, no overall generation/wait timeout and diagnostic non-disclosure                                                                |
 | built Electron smoke             | real Main/IPC/Project persistence CAS race, unrelated edit preservation, guarded success, terminal-state renderer remount, deleted-target late callback rejection and legacy restart interruption                       |
 

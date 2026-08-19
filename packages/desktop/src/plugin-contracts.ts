@@ -1,13 +1,14 @@
 import {
   comparePortablePluginVersions,
   parsePortablePluginId,
-  parsePortablePluginManifestV8,
+  parsePortablePluginManifest,
   parsePortablePluginRelativePath,
   portablePluginCapabilities,
   portablePluginGenerationInputRoles,
   portablePluginGenerationModalities,
   portablePluginManifestFileName,
   portablePluginManifestV8Schema,
+  portablePluginManifestV9Schema,
   portablePluginPetCapabilities,
   portablePluginProjectCanvasCapabilities,
   portablePluginServiceActions,
@@ -35,10 +36,13 @@ import {
   type PortablePluginLlmModelContribution,
   type PortablePluginLocalizedText,
   type PortablePluginManifestV8,
+  type PortablePluginManifestV9,
+  type PortablePluginManifest,
   type PortablePluginMcpStdioRuntime,
   type PortablePluginPetContribution,
   type PortablePluginServiceAction,
   type PortablePluginServiceContribution,
+  type PortablePluginServiceContributionV9,
   type PortablePluginSkillContribution,
   type PortablePluginUiCommand,
   type PortablePluginUiMenuItem,
@@ -47,8 +51,19 @@ import {
 
 export const webPluginManifestFileName = portablePluginManifestFileName
 export const webPluginManifestSchemaV8 = portablePluginManifestV8Schema
+export const webPluginManifestSchemaV9 = portablePluginManifestV9Schema
 
-export type WebPluginManifestSchema = typeof webPluginManifestSchemaV8
+export type WebPluginManifestSchema = typeof webPluginManifestSchemaV8 | typeof webPluginManifestSchemaV9
+
+/**
+ * Narrows an already validated installed-manifest discriminator to the exact
+ * released Plugin ABI set. It is deliberately not a manifest parser: callers
+ * still receive complete manifests only through `parseWebPluginManifest`.
+ */
+export function isSupportedWebPluginManifestSchema(value: unknown): value is WebPluginManifestSchema {
+  return value === webPluginManifestSchemaV8 || value === webPluginManifestSchemaV9
+}
+
 export const webPluginCapabilities = portablePluginCapabilities
 export const webPluginProjectCanvasCapabilities = portablePluginProjectCanvasCapabilities
 export const webPluginPetCapabilities = portablePluginPetCapabilities
@@ -71,6 +86,7 @@ export type WebPluginAgentContribution = PortablePluginAgentContribution
 export type WebPluginSkillContribution = PortablePluginSkillContribution
 export type WebPluginServiceAction = PortablePluginServiceAction
 export type WebPluginServiceContribution = PortablePluginServiceContribution
+export type WebPluginServiceContributionV9 = PortablePluginServiceContributionV9
 export type WebPluginLlmModelContribution = PortablePluginLlmModelContribution
 export type WebPluginLlmContribution = PortablePluginLlmContribution
 export type WebPluginPetContribution = PortablePluginPetContribution
@@ -86,7 +102,9 @@ export type WebPluginCanvasMaterializeSelectionActionContribution =
 export type WebPluginCanvasSelectionActionContribution = PortablePluginCanvasSelectionActionContribution
 export type WebPluginCanvasContribution = PortablePluginCanvasContribution
 export type WebPluginToolbarContribution = PortablePluginUiToolbarItem
-export type WebPluginManifest = PortablePluginManifestV8
+export type WebPluginManifest = PortablePluginManifest
+export type WebPluginManifestV8 = PortablePluginManifestV8
+export type WebPluginManifestV9 = PortablePluginManifestV9
 
 export type {
   PluginCapabilityDeclaration,
@@ -105,17 +123,17 @@ export { validatePortablePluginSegment } from "@convax/plugin-sdk"
  * owned exclusively by @convax/plugin-sdk; Desktop adds no second parser.
  */
 export function parseWebPluginManifest(value: unknown): WebPluginManifest {
-  return parsePortablePluginManifestV8(value, { hostApiMode: "runtime" })
+  return parsePortablePluginManifest(value, { hostApiMode: "runtime" })
 }
 
-/** Contains only values admitted by the canonical v8 parser. */
-export type InstalledWebPluginSummary = PortablePluginManifestV8
+/** Contains only values admitted by the canonical released-manifest parser. */
+export type InstalledWebPluginSummary = PortablePluginManifest
 
 /**
  * Renderer-safe projection of one exact Plugin generation. These fields are
  * routing authority only: they contain no native closure or executable paths.
  */
-export interface ActiveInstalledWebPluginSummary extends InstalledWebPluginSummary {
+export type ActiveInstalledWebPluginSummary = InstalledWebPluginSummary & {
   readonly activeRevision: number
   readonly activeSetDigest: string
   readonly snapshotDigest: string
@@ -137,12 +155,12 @@ export function hasWebPluginCanvasSurface(
 ): plugin is ActiveInstalledWebPluginCanvasSurface
 export function hasWebPluginCanvasSurface(plugin: InstalledWebPluginSummary): plugin is InstalledWebPluginCanvasSurface
 export function hasWebPluginCanvasSurface(
-  plugin: InstalledWebPluginSummary,
+  plugin: InstalledWebPluginSummary | ActiveInstalledWebPluginSummary,
 ): plugin is InstalledWebPluginCanvasSurface {
   return typeof plugin.entry === "string" && plugin.contributes.canvas?.renderer !== undefined
 }
 
-export interface WebPluginCatalogItem extends PortablePluginManifestV8 {
+export type WebPluginCatalogItem = PortablePluginManifest & {
   readonly companionSkillName?: string
   readonly download?: {
     readonly companionBytes: number
@@ -181,6 +199,6 @@ export interface WebPluginClient {
   uninstallPlugin(input: { id: string }): Promise<boolean>
 }
 
-export function toInstalledWebPluginSummary(manifest: PortablePluginManifestV8): InstalledWebPluginSummary {
+export function toInstalledWebPluginSummary(manifest: PortablePluginManifest): InstalledWebPluginSummary {
   return parseWebPluginManifest(manifest)
 }

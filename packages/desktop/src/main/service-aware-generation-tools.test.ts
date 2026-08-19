@@ -3,6 +3,7 @@ import { describe, expect, mock, test } from "bun:test"
 import type { GenerationToolDescription, GenerationToolSummary } from "../generation-contracts"
 import {
   pluginServiceStatusSchema,
+  type PluginServiceTarget,
   type PluginServiceStatus,
   type PluginServiceSummary,
 } from "../plugin-service-contracts"
@@ -34,6 +35,7 @@ function generationTool(pluginId: string, toolId = "generate.image"): Generation
     output: "image",
     pluginId,
     pluginName: pluginId,
+    serviceId: pluginId,
     title: "Generate image",
     toolId,
   }
@@ -55,14 +57,16 @@ function modelVariant(base: GenerationToolSummary, suffix: string, modelName: st
   }
 }
 
-function service(pluginId: string): PluginServiceSummary {
+function service(pluginId: string, serviceId = pluginId): PluginServiceSummary {
   return {
     actions: ["authorize"],
     capabilities: ["image"],
     description: "Image service",
+    llmProviderIds: [],
     models: [{ capability: "image", id: "generate.image", name: "Image Model" }],
     pluginId,
     pluginName: pluginId,
+    serviceId,
     version: "1.0.0",
   }
 }
@@ -71,10 +75,11 @@ function setup(
   input: {
     availabilityTimeoutMs?: number
     expandModelTool?: (tool: GenerationToolSummary, signal?: AbortSignal) => Promise<readonly GenerationToolSummary[]>
-    getStatus?: (pluginId: string, signal?: AbortSignal) => Promise<PluginServiceStatus>
+    getStatus?: (target: PluginServiceTarget, signal?: AbortSignal) => Promise<PluginServiceStatus>
     inspectModelCatalog?: GenerationModelCatalogExpansionPort["inspectModelCatalog"]
     now?: () => number
     refreshAfterMs?: number
+    serviceStatusTarget?: (tool: GenerationToolSummary) => Promise<PluginServiceTarget | null>
     services?: readonly PluginServiceSummary[]
     statuses?: Readonly<Record<string, PluginServiceStatus | Error>>
     tools?: readonly GenerationToolSummary[]
@@ -112,11 +117,12 @@ function setup(
     prepareRecoveryTool,
     prepareTool,
     releaseRecoveryTool,
+    ...(input.serviceStatusTarget ? { serviceStatusTarget: mock(input.serviceStatusTarget) } : {}),
   }
   const getStatus = mock(
     input.getStatus ??
-      (async (pluginId: string) => {
-        const result = input.statuses?.[pluginId] ?? connected
+      (async (target: PluginServiceTarget) => {
+        const result = input.statuses?.[target.pluginId] ?? connected
         if (result instanceof Error) throw result
         return result
       }),
@@ -157,6 +163,22 @@ describe("ServiceAwareGenerationTools", () => {
     const { getStatus, subject } = setup({ services: [], tools: [model, operation] })
 
     expect(await subject.listTools()).toEqual([operation])
+    expect(getStatus).not.toHaveBeenCalled()
+  })
+
+  test("admits v9 top-level models without borrowing a sibling Service status", async () => {
+    const model = generationTool("media-router")
+    const { call, getStatus, prepareTool, subject } = setup({
+      services: [service("media-router", "media-router")],
+      serviceStatusTarget: async () => null,
+      tools: [model],
+    })
+
+    expect(await subject.listTools()).toEqual([model])
+    const prepared = await subject.prepareTool(model)
+    await prepared.call({})
+    expect(prepareTool).toHaveBeenCalledTimes(1)
+    expect(call).toHaveBeenCalledTimes(1)
     expect(getStatus).not.toHaveBeenCalled()
   })
 
@@ -490,6 +512,14 @@ describe("ServiceAwareGenerationTools", () => {
 
     const available = setup()
     expect(await available.subject.isPluginAvailable("remote-images")).toBeTrue()
+
+    const sibling = setup({
+      getStatus: async (target) =>
+        target.serviceId === "xiaoyunque" ? connected : { ...connected, state: "attention" },
+      services: [service("media-router", "xiaoyunque")],
+    })
+    expect(await sibling.subject.isServiceAvailable({ pluginId: "media-router", serviceId: "xiaoyunque" })).toBeTrue()
+    expect(await sibling.subject.isPluginAvailable("media-router")).toBeFalse()
   })
 
   test("keeps Agent provider admission live after warming the display catalog", async () => {
@@ -661,7 +691,7 @@ describe("ServiceAwareGenerationTools", () => {
         active -= 1
         return [tool]
       },
-      services: pluginIds.map(service),
+      services: pluginIds.map((pluginId) => service(pluginId)),
       tools: pluginIds.map((pluginId) => generationTool(pluginId)),
     })
 

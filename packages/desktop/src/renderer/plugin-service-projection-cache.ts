@@ -1,6 +1,8 @@
 import {
+  isPluginServiceId,
   parsePluginServiceStatus,
   parsePluginServiceUsageHistory,
+  pluginServiceTargetKey,
   type PluginServiceStatus,
   type PluginServiceSummary,
   type PluginServiceUsageHistory,
@@ -23,9 +25,9 @@ export interface PluginServiceProjectionStorage {
   setItem(key: string, value: string): void
 }
 
-export const pluginServiceProjectionStorageKey = "convax.desktop.plugin-service-display.v1"
+export const pluginServiceProjectionStorageKey = "convax.desktop.plugin-service-display.v2"
 
-const pluginServiceProjectionSchema = "convax.plugin-service-display-cache/1"
+const pluginServiceProjectionSchema = "convax.plugin-service-display-cache/2"
 const maximumCacheBytes = 512 * 1024
 const maximumServices = 128
 const maximumModelsPerService = 512
@@ -33,6 +35,8 @@ const utf8Encoder = new TextEncoder()
 const serviceActions = new Set<unknown>(webPluginServiceActions)
 const serviceCapabilities = new Set<unknown>(["llm", "text", "image", "video", "audio"])
 const pluginIdPattern = /^[a-z0-9]+(?:-[a-z0-9]+)*$/
+const pluginLlmProviderIdPattern =
+  /^plugin-[a-z0-9]+(?:-[a-z0-9]+)*(?:--service-[a-z0-9]+(?:-[a-z0-9]+)*--provider-[a-z0-9]+(?:-[a-z0-9]+)*|-[a-z0-9]+(?:-[a-z0-9]+)*)$/
 const semanticVersionPattern = /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -69,6 +73,16 @@ function isServiceCapability(value: unknown): value is ServiceCapability {
   return serviceCapabilities.has(value)
 }
 
+function isPluginLlmProviderId(value: unknown): value is string {
+  return (
+    typeof value === "string" &&
+    value === value.trim() &&
+    value.length > 0 &&
+    value.length <= 512 &&
+    pluginLlmProviderIdPattern.test(value)
+  )
+}
+
 function isServiceModel(value: unknown): value is ServiceModelSummary {
   return (
     hasExactKeys(value, ["capability", "id", "name"]) &&
@@ -86,7 +100,17 @@ function parseProjectionEntry(value: unknown): PluginServiceDisplayProjectionEnt
   if (
     !hasExactKeys(
       value,
-      ["actions", "capabilities", "description", "models", "pluginId", "pluginName", "version"],
+      [
+        "actions",
+        "capabilities",
+        "description",
+        "llmProviderIds",
+        "models",
+        "pluginId",
+        "pluginName",
+        "serviceId",
+        "version",
+      ],
       ["status", "usageHistory"],
     )
   ) {
@@ -102,6 +126,10 @@ function parseProjectionEntry(value: unknown): PluginServiceDisplayProjectionEnt
     !value.capabilities.every(isServiceCapability) ||
     new Set(value.capabilities).size !== value.capabilities.length ||
     !isSafeDisplayString(value.description, 2_000) ||
+    !Array.isArray(value.llmProviderIds) ||
+    value.llmProviderIds.length > 16 ||
+    !value.llmProviderIds.every(isPluginLlmProviderId) ||
+    new Set(value.llmProviderIds).size !== value.llmProviderIds.length ||
     !Array.isArray(value.models) ||
     value.models.length > maximumModelsPerService ||
     !value.models.every(isServiceModel) ||
@@ -110,6 +138,7 @@ function parseProjectionEntry(value: unknown): PluginServiceDisplayProjectionEnt
     value.pluginId.length > 128 ||
     !pluginIdPattern.test(value.pluginId) ||
     !isSafeDisplayString(value.pluginName, 160) ||
+    !isPluginServiceId(value.serviceId) ||
     typeof value.version !== "string" ||
     !semanticVersionPattern.test(value.version)
   ) {
@@ -127,9 +156,11 @@ function parseProjectionEntry(value: unknown): PluginServiceDisplayProjectionEnt
     actions: [...value.actions],
     capabilities: [...value.capabilities],
     description: value.description,
+    llmProviderIds: [...value.llmProviderIds],
     models: value.models.map((model) => ({ ...model })),
     pluginId: value.pluginId,
     pluginName: value.pluginName,
+    serviceId: value.serviceId,
     ...(status === undefined ? {} : { status }),
     ...(usageHistory === undefined ? {} : { usageHistory }),
     version: value.version,
@@ -143,7 +174,7 @@ function parseProjection(value: unknown): PluginServiceDisplayProjection | null 
   const services = value.services.map(parseProjectionEntry)
   if (services.some((service) => service === null)) return null
   const parsed = services as PluginServiceDisplayProjectionEntry[]
-  if (new Set(parsed.map(({ pluginId }) => pluginId)).size !== parsed.length) return null
+  if (new Set(parsed.map(pluginServiceTargetKey)).size !== parsed.length) return null
   return { services: parsed }
 }
 

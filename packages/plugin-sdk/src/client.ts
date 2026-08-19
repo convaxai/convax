@@ -47,7 +47,7 @@ import {
   type PluginHostRemoteFailure,
 } from "./host-protocol"
 import { parsePortablePluginLocale, type PortablePluginLocale } from "./localization"
-import { parsePluginManifestV8, type PortablePluginManifestV8 } from "./manifest"
+import { parsePluginManifest, type PortablePluginManifest } from "./manifest"
 
 export * from "./host-protocol"
 
@@ -79,7 +79,7 @@ export interface PluginHostCallOptions {
   readonly signal?: PluginHostAbortSignal
 }
 
-export interface PluginHostClientOptions<Manifest extends PortablePluginManifestV8> {
+export interface PluginHostClientOptions<Manifest extends PortablePluginManifest> {
   readonly manifest: Manifest
   readonly onFatalError?: (error: PluginHostProtocolError) => void
   readonly port: PluginHostMessagePort
@@ -133,19 +133,18 @@ export type PluginCapabilitySchemaValue<Schema extends PluginCapabilitySchema> =
                 }
               : never
 
-type CapabilityDeclarationOf<Manifest extends PortablePluginManifestV8> = NonNullable<
+type CapabilityDeclarationOf<Manifest extends PortablePluginManifest> = NonNullable<
   Manifest["contributes"]["capabilities"]
 >
 
-type CapabilityImportOf<Manifest extends PortablePluginManifestV8> =
+type CapabilityImportOf<Manifest extends PortablePluginManifest> =
   | CapabilityDeclarationOf<Manifest>["imports"]["required"][number]
   | CapabilityDeclarationOf<Manifest>["imports"]["optional"][number]
 
-export type PluginHostImportedCapabilityId<Manifest extends PortablePluginManifestV8> =
-  CapabilityImportOf<Manifest>["id"]
+export type PluginHostImportedCapabilityId<Manifest extends PortablePluginManifest> = CapabilityImportOf<Manifest>["id"]
 
 type CapabilityImportById<
-  Manifest extends PortablePluginManifestV8,
+  Manifest extends PortablePluginManifest,
   Id extends PluginHostImportedCapabilityId<Manifest>,
 > =
   Extract<CapabilityImportOf<Manifest>, { readonly id: Id }> extends never
@@ -153,20 +152,20 @@ type CapabilityImportById<
     : Extract<CapabilityImportOf<Manifest>, { readonly id: Id }>
 
 export type PluginHostCapabilityInput<
-  Manifest extends PortablePluginManifestV8,
+  Manifest extends PortablePluginManifest,
   Id extends PluginHostImportedCapabilityId<Manifest>,
 > = PluginCapabilitySchemaValue<CapabilityImportById<Manifest, Id>["inputSchema"]>
 
 export type PluginHostCapabilityOutput<
-  Manifest extends PortablePluginManifestV8,
+  Manifest extends PortablePluginManifest,
   Id extends PluginHostImportedCapabilityId<Manifest>,
 > = PluginCapabilitySchemaValue<CapabilityImportById<Manifest, Id>["outputSchema"]>
 
-type DeclaredApiId<Manifest extends PortablePluginManifestV8> =
+type DeclaredApiId<Manifest extends PortablePluginManifest> =
   | Manifest["hostApi"]["required"][number]
   | Manifest["hostApi"]["optional"][number]
 
-export type PluginHostDeclaredApiId<Manifest extends PortablePluginManifestV8> =
+export type PluginHostDeclaredApiId<Manifest extends PortablePluginManifest> =
   PluginApiId extends DeclaredApiId<Manifest> ? PluginApiId : Extract<DeclaredApiId<Manifest>, PluginApiId>
 
 export type PluginHostApiCallArguments<Id extends PluginApiId> = [PluginApiParams<Id>] extends [undefined]
@@ -224,7 +223,7 @@ interface PendingRequest {
   readonly resolve: (value: unknown) => void
 }
 
-export interface PluginHostClient<Manifest extends PortablePluginManifestV8> {
+export interface PluginHostClient<Manifest extends PortablePluginManifest> {
   readonly closed: boolean
   callHostApi<Id extends PluginHostDeclaredApiId<Manifest>>(
     method: Id,
@@ -273,7 +272,7 @@ function assertRequestIdPrefix(value: string) {
 }
 
 function requirementFor(
-  manifest: PortablePluginManifestV8,
+  manifest: PortablePluginManifest,
   capabilityId: string,
 ): { readonly import: PluginCapabilityImport; readonly requirement: "required" | "optional" } {
   const declaration = manifest.contributes.capabilities
@@ -300,10 +299,10 @@ function protocolOrCapabilityFailure(failure: PluginHostRemoteFailure) {
   return new PluginHostRemoteError(parsed)
 }
 
-export function createPluginHostClient<const Manifest extends PortablePluginManifestV8>(
+export function createPluginHostClient<const Manifest extends PortablePluginManifest>(
   options: PluginHostClientOptions<Manifest>,
 ): PluginHostClient<Manifest> {
-  const manifest = parsePluginManifestV8(options.manifest)
+  const manifest = parsePluginManifest(options.manifest)
   if (manifest.entry === undefined || !manifest.hostApi.required.includes("host.context.get")) {
     throw new TypeError("Plugin Host Web client requires an entry and required host.context.get negotiation baseline")
   }

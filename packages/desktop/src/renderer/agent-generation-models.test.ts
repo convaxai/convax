@@ -22,6 +22,7 @@ function tool(overrides: Partial<GenerationToolSummary> = {}): GenerationToolSum
     output: "image",
     pluginId: "plugin.example",
     pluginName: "Example Plugin",
+    serviceId: "plugin-example",
     title: "Example Image Model",
     toolId: "image.generate",
     ...overrides,
@@ -49,6 +50,7 @@ describe("Agent generation models", () => {
       output: "video",
       pluginId: "media-tools",
       pluginName: "Media Tools",
+      serviceId: "media-tools",
       title: "Transform video",
       toolId: "transform.video",
     })
@@ -58,9 +60,21 @@ describe("Agent generation models", () => {
 
   test("groups declaratively named models under their generation service", () => {
     const tools = [
-      tool({ modelName: "GPT Image 2", pluginId: "skylark", pluginName: "小云雀生成" }),
-      tool({ id: "skylark:nano", modelName: "Nano Banana Pro 1", pluginId: "skylark", pluginName: "小云雀生成" }),
-      tool({ id: "dreamina:seedream", modelName: "Seedream 4", pluginId: "dreamina", pluginName: "即梦" }),
+      tool({ modelName: "GPT Image 2", pluginId: "skylark", pluginName: "小云雀生成", serviceId: "skylark" }),
+      tool({
+        id: "skylark:nano",
+        modelName: "Nano Banana Pro 1",
+        pluginId: "skylark",
+        pluginName: "小云雀生成",
+        serviceId: "skylark",
+      }),
+      tool({
+        id: "dreamina:seedream",
+        modelName: "Seedream 4",
+        pluginId: "dreamina",
+        pluginName: "即梦",
+        serviceId: "dreamina",
+      }),
     ]
 
     const services = groupAgentGenerationToolsByService(tools, "image")
@@ -82,6 +96,29 @@ describe("Agent generation models", () => {
     ).toBe("小云雀生成 · Seedream 5")
   })
 
+  test("keeps sibling Services from one Plugin in independent model groups", () => {
+    const services = groupAgentGenerationToolsByService(
+      [
+        tool({ pluginId: "shortdrama", pluginName: "小云雀", serviceId: "xiaoyunque" }),
+        tool({ id: "shortdrama/libtv/image", pluginId: "shortdrama", pluginName: "LibTV", serviceId: "libtv" }),
+      ],
+      "image",
+    )
+
+    expect(services.map(({ models, name, target }) => ({ ids: models.map(({ id }) => id), name, target }))).toEqual([
+      {
+        ids: ["plugin.example:image.generate"],
+        name: "小云雀",
+        target: { pluginId: "shortdrama", serviceId: "xiaoyunque" },
+      },
+      {
+        ids: ["shortdrama/libtv/image"],
+        name: "LibTV",
+        target: { pluginId: "shortdrama", serviceId: "libtv" },
+      },
+    ])
+  })
+
   test("fails a remembered choice closed when its installed id or output changes", () => {
     const selection = { id: "plugin.example:image.generate", output: "image" as const }
     expect(findAgentGenerationTool(selection, [tool()])?.title).toBe("Example Image Model")
@@ -94,10 +131,11 @@ describe("Agent generation models", () => {
     const first = tool({ id: "plugin.example:image.first" })
     const second = tool({ id: "plugin.example:image.second" })
     expect(
-      reconcileAgentGenerationToolPreference(
-        { id: "plugin.example:image.removed", output: "image" },
-        [first, second, tool({ id: "plugin.example:video.first", output: "video" })],
-      ),
+      reconcileAgentGenerationToolPreference({ id: "plugin.example:image.removed", output: "image" }, [
+        first,
+        second,
+        tool({ id: "plugin.example:video.first", output: "video" }),
+      ]),
     ).toEqual({ id: first.id, output: "image" })
     expect(reconcileAgentGenerationToolPreference(undefined, [first])).toBeUndefined()
     expect(

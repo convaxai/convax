@@ -1,4 +1,8 @@
-import { type InstalledWebPluginSummary, requireWebPluginId, webPluginManifestSchemaV8 } from "../plugin-contracts"
+import {
+  isSupportedWebPluginManifestSchema,
+  type InstalledWebPluginSummary,
+  requireWebPluginId,
+} from "../plugin-contracts"
 
 export interface InstalledPluginAgentMcpServer {
   enabled: true
@@ -25,7 +29,9 @@ export function installedPluginAgentMcpServer(plugin: InstalledWebPluginSummary)
   pluginId: string
   server: InstalledPluginAgentMcpServer
 } | null {
-  if (plugin.schema !== webPluginManifestSchemaV8 || !plugin.hostApi || !plugin.contributes.agent?.mcp) return null
+  if (!isSupportedWebPluginManifestSchema(plugin.schema) || !plugin.hostApi || !plugin.contributes.agent?.mcp) {
+    return null
+  }
   const contribution = plugin.contributes.agent.mcp
   return {
     name: pluginAgentMcpServerName(plugin.id),

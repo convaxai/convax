@@ -1,8 +1,12 @@
 import { requireWebPluginId } from "../plugin-contracts"
 import {
   pluginServiceIpcChannels,
+  pluginServiceTargetKey,
+  requirePluginServiceId,
+  type PluginServiceCheckoutTarget,
   type PluginServiceStatus,
   type PluginServiceSummary,
+  type PluginServiceTarget,
   type PluginServiceUsageHistory,
 } from "../plugin-service-contracts"
 
@@ -34,8 +38,10 @@ export function parsePluginServiceTarget(input: unknown) {
   const prototype = Object.getPrototypeOf(input)
   if (prototype !== Object.prototype && prototype !== null) throw new Error("Plugin service target is invalid")
   const value = input as Record<string, unknown>
-  if (Object.keys(value).length !== 1 || !("pluginId" in value)) throw new Error("Plugin service target is invalid")
-  return { pluginId: requireWebPluginId(value.pluginId) }
+  if (Object.keys(value).length !== 2 || !("pluginId" in value) || !("serviceId" in value)) {
+    throw new Error("Plugin service target is invalid")
+  }
+  return { pluginId: requireWebPluginId(value.pluginId), serviceId: requirePluginServiceId(value.serviceId) }
 }
 
 export function parsePluginServiceCheckoutTarget(input: unknown) {
@@ -48,8 +54,9 @@ export function parsePluginServiceCheckoutTarget(input: unknown) {
   }
   const value = input as Record<string, unknown>
   if (
-    Object.keys(value).length !== 2 ||
+    Object.keys(value).length !== 3 ||
     !("pluginId" in value) ||
+    !("serviceId" in value) ||
     !("planKey" in value) ||
     typeof value.planKey !== "string" ||
     value.planKey !== value.planKey.trim() ||
@@ -58,7 +65,11 @@ export function parsePluginServiceCheckoutTarget(input: unknown) {
   ) {
     throw new Error("Plugin service Checkout target is invalid")
   }
-  return { planKey: value.planKey, pluginId: requireWebPluginId(value.pluginId) }
+  return {
+    planKey: value.planKey,
+    pluginId: requireWebPluginId(value.pluginId),
+    serviceId: requirePluginServiceId(value.serviceId),
+  }
 }
 
 /** Sender-scoped cancellation, mutation suppression, and read single-flight without an Electron dependency. */
@@ -167,14 +178,14 @@ export class PluginServiceIpcOperations {
 }
 
 export interface PluginServiceExecutor {
-  authorize(pluginId: string, signal?: AbortSignal): Promise<PluginServiceStatus>
-  cancelAuthorization(pluginId: string, signal?: AbortSignal): Promise<PluginServiceStatus>
-  checkout(pluginId: string, planKey: string, signal?: AbortSignal): Promise<PluginServiceStatus>
-  getStatus(pluginId: string, signal?: AbortSignal): Promise<PluginServiceStatus>
-  getUsageHistory(pluginId: string, signal?: AbortSignal): Promise<PluginServiceUsageHistory>
+  authorize(target: PluginServiceTarget, signal?: AbortSignal): Promise<PluginServiceStatus>
+  cancelAuthorization(target: PluginServiceTarget, signal?: AbortSignal): Promise<PluginServiceStatus>
+  checkout(target: PluginServiceCheckoutTarget, signal?: AbortSignal): Promise<PluginServiceStatus>
+  getStatus(target: PluginServiceTarget, signal?: AbortSignal): Promise<PluginServiceStatus>
+  getUsageHistory(target: PluginServiceTarget, signal?: AbortSignal): Promise<PluginServiceUsageHistory>
   listServices(): Promise<readonly PluginServiceSummary[]>
-  reauthorize(pluginId: string, signal?: AbortSignal): Promise<PluginServiceStatus>
-  signOut(pluginId: string, signal?: AbortSignal): Promise<PluginServiceStatus>
+  reauthorize(target: PluginServiceTarget, signal?: AbortSignal): Promise<PluginServiceStatus>
+  signOut(target: PluginServiceTarget, signal?: AbortSignal): Promise<PluginServiceStatus>
 }
 
 export interface PluginServiceIpcTransport<Event extends { sender: PluginServiceIpcSender }> {
@@ -210,17 +221,17 @@ export function registerPluginServiceIpcCore<Event extends { sender: PluginServi
 
   const register = <Result>(
     channel: string,
-    operation: (pluginId: string, signal: AbortSignal) => Promise<Result>,
+    operation: (target: PluginServiceTarget, signal: AbortSignal) => Promise<Result>,
     behavior: "read" | "mutation" = "read",
   ) => {
     transport.handle(channel, async (event, input) => {
       if (!options.isTrustedSender(event)) throw new Error("Plugin service IPC request came from an untrusted renderer")
       if (disposed) throw new Error("Plugin service IPC is disposed")
-      const { pluginId } = parsePluginServiceTarget(input)
-      const operationKey = `${channel}\0${pluginId}`
+      const target = parsePluginServiceTarget(input)
+      const operationKey = `${channel}\0${pluginServiceTargetKey(target)}`
       const run = behavior === "read" ? operations.runShared.bind(operations) : operations.run.bind(operations)
       return run(event.sender, operationKey, async (signal) => {
-        const result = await operation(pluginId, signal)
+        const result = await operation(target, signal)
         if (behavior === "mutation") transport.publishChange()
         return result
       })
@@ -232,30 +243,30 @@ export function registerPluginServiceIpcCore<Event extends { sender: PluginServi
     if (disposed) throw new Error("Plugin service IPC is disposed")
     return executor.listServices()
   })
-  register(pluginServiceIpcChannels.getStatus, (pluginId, signal) => executor.getStatus(pluginId, signal))
-  register(pluginServiceIpcChannels.getUsageHistory, (pluginId, signal) => executor.getUsageHistory(pluginId, signal))
-  register(pluginServiceIpcChannels.authorize, (pluginId, signal) => executor.authorize(pluginId, signal), "mutation")
-  register(
-    pluginServiceIpcChannels.reauthorize,
-    (pluginId, signal) => executor.reauthorize(pluginId, signal),
-    "mutation",
-  )
+  register(pluginServiceIpcChannels.getStatus, (target, signal) => executor.getStatus(target, signal))
+  register(pluginServiceIpcChannels.getUsageHistory, (target, signal) => executor.getUsageHistory(target, signal))
+  register(pluginServiceIpcChannels.authorize, (target, signal) => executor.authorize(target, signal), "mutation")
+  register(pluginServiceIpcChannels.reauthorize, (target, signal) => executor.reauthorize(target, signal), "mutation")
   register(
     pluginServiceIpcChannels.cancelAuthorization,
-    (pluginId, signal) => executor.cancelAuthorization(pluginId, signal),
+    (target, signal) => executor.cancelAuthorization(target, signal),
     "mutation",
   )
   transport.handle(pluginServiceIpcChannels.checkout, async (event, input) => {
     if (!options.isTrustedSender(event)) throw new Error("Plugin service IPC request came from an untrusted renderer")
     if (disposed) throw new Error("Plugin service IPC is disposed")
-    const { planKey, pluginId } = parsePluginServiceCheckoutTarget(input)
-    return operations.run(event.sender, `${pluginServiceIpcChannels.checkout}\0${pluginId}`, async (signal) => {
-      const result = await executor.checkout(pluginId, planKey, signal)
-      transport.publishChange()
-      return result
-    })
+    const target = parsePluginServiceCheckoutTarget(input)
+    return operations.run(
+      event.sender,
+      `${pluginServiceIpcChannels.checkout}\0${pluginServiceTargetKey(target)}`,
+      async (signal) => {
+        const result = await executor.checkout(target, signal)
+        transport.publishChange()
+        return result
+      },
+    )
   })
-  register(pluginServiceIpcChannels.signOut, (pluginId, signal) => executor.signOut(pluginId, signal), "mutation")
+  register(pluginServiceIpcChannels.signOut, (target, signal) => executor.signOut(target, signal), "mutation")
 
   return () => {
     if (disposed) return

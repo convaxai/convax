@@ -27,7 +27,7 @@ import {
 import { runMarketplaceCli } from "./cli"
 
 describe("@convax/marketplace-kit", () => {
-  test("publishes only package/2 Plugins with valid plugin/8 Host API declarations", async () => {
+  test("keeps the v8 starter and publishes valid current Plugin manifests", async () => {
     const root = await mkdtemp(join(tmpdir(), "convax-market-v8-contract-"))
     await createMarketplaceStarter(root, {
       id: "acme-market",
@@ -39,10 +39,12 @@ describe("@convax/marketplace-kit", () => {
     const pluginRoot = join(root, "packages/plugins/example-plugin")
     const packageMetadataPath = join(pluginRoot, "convax-package.json")
     const manifestPath = join(pluginRoot, "package/manifest.json")
+    const workspacePackage = JSON.parse(await readFile(join(root, "package.json"), "utf8"))
     const packageMetadata = JSON.parse(await readFile(packageMetadataPath, "utf8"))
     const manifest = JSON.parse(await readFile(manifestPath, "utf8"))
 
     expect(packageMetadata.schema).toBe("convax.package/2")
+    expect(workspacePackage.devDependencies["@convax/marketplace-kit"]).toBe("^0.2.3")
     expect(manifest).toMatchObject({
       schema: "convax.plugin/8",
       hostApi: { major: 3, required: ["host.context.get"], optional: [] },
@@ -62,6 +64,44 @@ describe("@convax/marketplace-kit", () => {
     })
     await checkMarketplace(root)
 
+    const multiServiceManifest = {
+      ...manifest,
+      schema: "convax.plugin/9",
+      runtime: { type: "mcp-stdio", command: "example-router" },
+      contributes: {
+        ...manifest.contributes,
+        services: [
+          {
+            id: "image-service",
+            name: "Image Service",
+            description: "Image generation service",
+            actions: ["authorize"],
+            runtime: { args: ["--service=image"] },
+          },
+          {
+            id: "video-service",
+            name: "Video Service",
+            description: "Video generation service",
+            actions: [],
+            runtime: { args: ["--service=video"] },
+          },
+        ],
+      },
+    }
+    await Bun.write(manifestPath, `${JSON.stringify(multiServiceManifest, null, 2)}\n`)
+    await checkMarketplace(root)
+    const v9Build = await buildMarketplace({ root, outDir: join(root, "current-v9"), official: false })
+    expect(v9Build.registry.packages[0]?.manifest).toMatchObject({
+      schema: "convax.plugin/9",
+      contributes: {
+        services: [
+          { id: "image-service", runtime: { args: ["--service=image"] } },
+          { id: "video-service", runtime: { args: ["--service=video"] } },
+        ],
+      },
+    })
+    await Bun.write(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`)
+
     await Bun.write(
       packageMetadataPath,
       `${JSON.stringify({ ...packageMetadata, schema: "convax.package/1" }, null, 2)}\n`,
@@ -71,6 +111,7 @@ describe("@convax/marketplace-kit", () => {
 
     for (const [index, invalidManifest] of [
       { ...manifest, schema: "convax.plugin/7" },
+      { ...manifest, schema: "convax.plugin/10" },
       { ...manifest, hostApi: { major: 3, required: ["unknown.api"], optional: [] } },
       {
         ...manifest,
@@ -174,7 +215,7 @@ describe("@convax/marketplace-kit", () => {
       join(source, "manifest.json"),
       `${JSON.stringify(
         {
-          schema: "convax.plugin/8",
+          schema: "convax.plugin/9",
           capabilities: ["projects.read"],
           contributes: {},
           hostApi: { major: 3, required: [], optional: [] },
@@ -768,7 +809,7 @@ describe("@convax/marketplace-kit", () => {
       join(ffmpegPluginRoot, "package/manifest.json"),
       `${JSON.stringify(
         {
-          schema: "convax.plugin/8",
+          schema: "convax.plugin/9",
           capabilities: ["projects.read"],
           hostApi: { major: 3, required: [], optional: [] },
           id: "ffmpeg-tools",

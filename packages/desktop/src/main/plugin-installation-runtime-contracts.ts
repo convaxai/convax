@@ -91,6 +91,8 @@ export interface ActivePluginRuntimeSetHandle extends ActivePluginRuntimeSelecti
 
 export interface ActivePluginRuntimeHandle extends ActiveInstalledPlugin {
   readonly descriptor: InstalledPluginSnapshot["descriptor"]
+  /** Present for v2 ActiveSet references; legacy v1 current and pinned references omit it. */
+  readonly installationActivationId?: PluginSnapshotDigest
   readonly released: boolean
   release(): void
   resolveAsset(relativePath: string): Promise<string>

@@ -104,6 +104,7 @@ const tool: GenerationToolSummary = {
   output: "image",
   pluginId: "example-plugin",
   pluginName: "Example",
+  serviceId: "example-plugin",
   title: "Image",
   toolId: "generate_image",
 }

@@ -16,8 +16,10 @@ export type {
 } from "./plugin-contracts"
 
 export {
+  isSupportedWebPluginManifestSchema as isSupportedPluginManifestSchema,
   parseWebPluginManifest as parsePluginManifest,
   webPluginCapabilities as pluginCapabilities,
   webPluginManifestFileName as pluginManifestFileName,
   webPluginManifestSchemaV8 as pluginManifestSchemaV8,
+  webPluginManifestSchemaV9 as pluginManifestSchemaV9,
 } from "./plugin-contracts"

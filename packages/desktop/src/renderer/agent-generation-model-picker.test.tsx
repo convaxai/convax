@@ -14,6 +14,7 @@ function tool(overrides: Partial<GenerationToolSummary> = {}): GenerationToolSum
     output: "image",
     pluginId: "plugin.example",
     pluginName: "Example Plugin",
+    serviceId: "plugin-example",
     title: "Image Model",
     toolId: "image.generate",
     ...overrides,

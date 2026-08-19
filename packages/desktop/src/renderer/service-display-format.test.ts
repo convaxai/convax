@@ -30,6 +30,7 @@ describe("service display formatting", () => {
       pluginId: "fixture",
       serviceId: "plugin:fixture",
       state: "unknown",
+      target: { pluginId: "fixture", serviceId: "fixture" },
       version: "1.0.0",
     } satisfies PluginServiceCatalogEntry
 

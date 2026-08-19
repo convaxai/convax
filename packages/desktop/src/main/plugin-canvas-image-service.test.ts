@@ -3,16 +3,12 @@ import { createCanvasDocument, type CanvasDocument } from "@convax/canvas/core"
 
 import type { PluginCanvasImageCreateRequest } from "../plugin-canvas-image-contracts"
 import type { PluginPrincipal } from "../plugin-capability-contracts"
-import type { InstalledWebPluginSummary } from "../plugin-contracts"
+import type { InstalledWebPluginSummary, WebPluginManifestV8 } from "../plugin-contracts"
 import {
   PluginCanvasImagePublicationPartialSuccessError,
   PluginCanvasImageService,
 } from "./plugin-canvas-image-service"
-import {
-  canvasCommandResult,
-  canvasOperationReceipt,
-  canvasQueryApplication,
-} from "./canvas-application-test-fixtures"
+import { canvasCommandResult, canvasOperationReceipt, canvasQueryApplication } from "./canvas-application-test-fixtures"
 
 function pngDataUrl(width = 2, height = 1) {
   const bytes = Buffer.alloc(24)
@@ -28,21 +24,21 @@ function document(): CanvasDocument {
     id: "canvas-1",
     nodes: [
       {
-          data: {
-            kind: "plugin.capture-surface",
-            label: "Capture Surface",
-            metadata: {
-              convaxPlugin: {
-                entry: "index.html",
-                id: "capture-surface",
-                version: "1.0.0",
-              },
+        data: {
+          kind: "plugin.capture-surface",
+          label: "Capture Surface",
+          metadata: {
+            convaxPlugin: {
+              entry: "index.html",
+              id: "capture-surface",
+              version: "1.0.0",
             },
           },
-          id: "plugin-node-1",
-          position: { x: 100, y: 60 },
-          style: { height: 640, width: 980 },
-          type: "file",
+        },
+        id: "plugin-node-1",
+        position: { x: 100, y: 60 },
+        style: { height: 640, width: 980 },
+        type: "file",
       },
     ],
   })
@@ -61,7 +57,7 @@ function request(): PluginCanvasImageCreateRequest {
 }
 
 function pluginIdentity(
-  overrides: Partial<InstalledWebPluginSummary> = {},
+  overrides: Partial<WebPluginManifestV8> = {},
   digest = "a".repeat(64),
 ): { digest: string; plugin: InstalledWebPluginSummary } {
   return {
@@ -301,8 +297,7 @@ describe("Plugin Canvas image service", () => {
       plugins: { resolveCapabilityIdentity: async () => pluginIdentity() },
       projects: { publishGenerated },
       resources: {
-        addResources: async () =>
-          canvasCommandResult({ document: canvas, operationId: "plugin-image:capture-1" }),
+        addResources: async () => canvasCommandResult({ document: canvas, operationId: "plugin-image:capture-1" }),
       },
     })
 

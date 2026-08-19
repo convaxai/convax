@@ -17,10 +17,10 @@ import {
 } from "@convax/marketplace"
 import { renderPluginApiReference, type PluginApiId, type PluginToolReference } from "@convax/plugin-api"
 import {
-  parsePluginManifestV8,
+  parsePluginManifest,
   renderPluginCapabilityReference,
   type PluginCapabilityDeclaration,
-  type PortablePluginManifestV8,
+  type PortablePluginManifest,
   type PortablePluginSkillContribution,
 } from "@convax/plugin-sdk"
 import { chmod, lstat, mkdir, open, readdir, readFile, realpath, rename, unlink, writeFile } from "node:fs/promises"
@@ -128,7 +128,7 @@ interface DiscoveredPackage {
   contentRoot: string
   presentation: { name: string; description?: string }
   authoring?: Record<string, unknown>
-  manifest?: PortablePluginManifestV8
+  manifest?: PortablePluginManifest
   server?: Record<string, unknown>
   extension?: ReturnType<typeof parseMcpServerExtension>
   catalogSupported?: boolean
@@ -395,7 +395,7 @@ async function inspectPackage(
     if (metadata && (metadata.kind !== "plugin" || manifest.id !== id || manifest.version !== version)) {
       throw new TypeError("Plugin authoring metadata does not match package manifest")
     }
-    const portableManifest = parsePluginManifestV8(manifest)
+    const portableManifest = parsePluginManifest(manifest)
     assertSegment(id, "Plugin id")
     return {
       kind,
@@ -968,7 +968,7 @@ async function readPackagedProductSelections(
 function registryPluginOwnedSkillNames(entry: RegistryPackage): string[] {
   if (entry.kind !== "plugin") return []
   if (!entry.manifest) throw new TypeError(`packaged Plugin ${entry.id} has no Registry manifest`)
-  const manifest = parsePluginManifestV8(entry.manifest)
+  const manifest = parsePluginManifest(entry.manifest)
   if (manifest.id !== entry.id || manifest.version !== entry.version) {
     throw new TypeError(`packaged Plugin ${entry.id} Registry manifest does not match its identity and version`)
   }
@@ -1180,7 +1180,7 @@ async function packageInventory(
 
 function addGeneratedSkillReferences(
   entries: InventoryEntry[],
-  manifest: PortablePluginManifestV8,
+  manifest: PortablePluginManifest,
   skill: PortablePluginSkillContribution,
 ) {
   const generationTools = new Map(manifest.contributes.generation?.tools.map((tool) => [tool.id, tool]) ?? [])
@@ -2449,7 +2449,7 @@ export async function createMarketplaceStarter(root: string, options: StarterOpt
           "build-index": "convax-marketplace build-index . --out dist",
         },
         devDependencies: {
-          "@convax/marketplace-kit": process.env.CONVAX_MARKETPLACE_KIT_SPEC ?? "^0.2.2",
+          "@convax/marketplace-kit": process.env.CONVAX_MARKETPLACE_KIT_SPEC ?? "^0.2.3",
         },
       },
       null,

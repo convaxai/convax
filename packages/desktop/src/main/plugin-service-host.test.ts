@@ -22,11 +22,15 @@ const summary: PluginServiceSummary = {
   actions: ["sign_out"],
   capabilities: [],
   description: "Account connection",
+  llmProviderIds: [],
   models: [],
   pluginId: "account-tools",
   pluginName: "Account Tools",
+  serviceId: "account-tools",
   version: "1.0.0",
 }
+
+const target = { pluginId: "account-tools", serviceId: "account-tools" } as const
 
 const status = {
   account: { availability: "unavailable" },
@@ -80,7 +84,7 @@ describe("PluginServiceHost", () => {
       onServiceMutation,
     )
 
-    expect(await host.checkout("account-tools", "pro")).toEqual(status)
+    expect(await host.checkout(target, "pro")).toEqual(status)
     expect(calls).toEqual([{ call: "checkout", input: { planKey: "pro" } }, { call: "status" }])
     expect(opened).toEqual(["https://checkout.example.test/session/123?provider=secure"])
     expect(onServiceMutation).toHaveBeenCalledTimes(1)
@@ -97,9 +101,9 @@ describe("PluginServiceHost", () => {
     }
     const host = new PluginServiceHost(runtime)
 
-    expect(await host.getStatus("account-tools")).toEqual(status)
-    expect(callService).toHaveBeenCalledWith("account-tools", "status", undefined)
-    expect(JSON.stringify(await host.getStatus("account-tools"))).not.toContain("secret-must-not-cross-preload")
+    expect(await host.getStatus(target)).toEqual(status)
+    expect(callService).toHaveBeenCalledWith(target, "status", undefined)
+    expect(JSON.stringify(await host.getStatus(target))).not.toContain("secret-must-not-cross-preload")
   })
 
   test("returns bounded usage records and degrades an optional tool failure", async () => {
@@ -121,33 +125,36 @@ describe("PluginServiceHost", () => {
       listServices: async () => [summary],
     })
 
-    await expect(host.getUsageHistory("account-tools")).resolves.toMatchObject({
+    await expect(host.getUsageHistory(target)).resolves.toMatchObject({
       records: [{ amount: 7 }, { amount: 3 }],
     })
     available = false
-    await expect(host.getUsageHistory("account-tools")).resolves.toEqual({
+    await expect(host.getUsageHistory(target)).resolves.toEqual({
       availability: "unavailable",
       schema: pluginServiceUsageSchema,
     })
   })
 
   test("maps host methods to fixed actions and never accepts an action payload", async () => {
-    const calls: Array<{ call: "status" | "usage" | WebPluginServiceAction; pluginId: string }> = []
+    const calls: Array<{
+      call: "status" | "usage" | WebPluginServiceAction
+      target: { pluginId: string; serviceId: string }
+    }> = []
     const onServiceMutation = mock(async () => undefined)
     const runtime: PluginServiceToolRuntime = {
-      async callService(pluginId, call) {
-        calls.push({ call, pluginId })
+      async callService(requestedTarget, call) {
+        calls.push({ call, target: requestedTarget })
         return { structuredContent: status }
       },
       listServices: async () => [summary],
     }
     const host = new PluginServiceHost(runtime, undefined, undefined, undefined, onServiceMutation)
 
-    await host.getStatus("account-tools")
-    await host.signOut("account-tools")
+    await host.getStatus(target)
+    await host.signOut(target)
     expect(calls).toEqual([
-      { call: "status", pluginId: "account-tools" },
-      { call: "sign_out", pluginId: "account-tools" },
+      { call: "status", target },
+      { call: "sign_out", target },
     ])
     expect(onServiceMutation).toHaveBeenCalledTimes(1)
   })
@@ -167,7 +174,7 @@ describe("PluginServiceHost", () => {
       },
     )
 
-    await expect(host.signOut("account-tools")).resolves.toEqual(status)
+    await expect(host.signOut(target)).resolves.toEqual(status)
     await Promise.resolve()
     expect(warning).toHaveBeenCalledTimes(1)
     warning.mockRestore()
@@ -188,7 +195,7 @@ describe("PluginServiceHost", () => {
       onServiceMutation,
     )
 
-    await expect(host.signOut("account-tools")).rejects.toThrow("response was lost")
+    await expect(host.signOut(target)).rejects.toThrow("response was lost")
     expect(onServiceMutation).toHaveBeenCalledTimes(1)
   })
 
@@ -206,7 +213,7 @@ describe("PluginServiceHost", () => {
       onServiceMutation,
     )
 
-    await expect(host.signOut("account-tools")).resolves.toEqual(status)
+    await expect(host.signOut(target)).resolves.toEqual(status)
     expect(onServiceMutation).toHaveBeenCalledTimes(1)
     refresh.resolve()
   })
@@ -241,15 +248,15 @@ describe("PluginServiceHost", () => {
       listServices: async () => [authorizationSummary],
     }
     const browserCalls: unknown[] = []
-    const checkpointCommits: string[] = []
+    const checkpointCommits: Array<{ pluginId: string; serviceId: string }> = []
     const host = new PluginServiceHost(runtime, {
-      async authorize(pluginId, parsed, options) {
+      async authorize(requestedTarget, parsed, options) {
         browserCalls.push({
           action: options.action,
-          pluginId,
           parsed,
           serviceIdentity: options.serviceIdentity,
           snapshotDigest: options.snapshotDigest,
+          target: requestedTarget,
         })
         expect(await options.isCurrent()).toBeTrue()
         return {
@@ -259,23 +266,23 @@ describe("PluginServiceHost", () => {
           schema: pluginServiceBrowserAuthorizationCompletionSchema,
         }
       },
-      async commitPlugin(pluginId) {
-        checkpointCommits.push(pluginId)
+      async commitPlugin(requestedTarget) {
+        checkpointCommits.push(requestedTarget)
       },
       async disposePlugin() {},
     })
 
-    const result = await host.authorize("account-tools")
+    const result = await host.authorize(target)
     expect(result).toEqual(status)
     expect(browserCalls).toEqual([
       expect.objectContaining({
         action: "authorize",
-        pluginId: "account-tools",
         serviceIdentity: expect.stringMatching(/^[a-f0-9]{64}$/),
         snapshotDigest: "b".repeat(64),
+        target,
       }),
     ])
-    expect(checkpointCommits).toEqual(["account-tools"])
+    expect(checkpointCommits).toEqual([target])
     expect(completions).toEqual([
       {
         authorization_id: "request_0123456789abcdef",
@@ -332,7 +339,7 @@ describe("PluginServiceHost", () => {
       completed,
     )
 
-    expect(await host.authorize("account-tools")).toEqual(status)
+    expect(await host.authorize(target)).toEqual(status)
     expect(completed).toHaveBeenCalledTimes(1)
     expect(opened).toEqual([
       "https://nexus.microvoid.io/workspace/convax/auth/sign-in?state=state&code_challenge=challenge",
@@ -382,7 +389,7 @@ describe("PluginServiceHost", () => {
       focused,
     )
 
-    await expect(host.authorize("account-tools")).rejects.toThrow("authorization completion failed")
+    await expect(host.authorize(target)).rejects.toThrow("authorization completion failed")
     expect(focused).not.toHaveBeenCalled()
   })
 
@@ -417,7 +424,7 @@ describe("PluginServiceHost", () => {
       },
     )
 
-    await expect(host.authorize("account-tools")).rejects.toThrow("invalid browser authorization request")
+    await expect(host.authorize(target)).rejects.toThrow("invalid browser authorization request")
     expect(browserCalls).toBe(0)
     expect(calls).toEqual(["authorize", "authorization.cancel"])
   })
@@ -472,9 +479,9 @@ describe("PluginServiceHost", () => {
       async disposePlugin() {},
     })
 
-    await expect(host.authorize("account-tools")).rejects.toThrow("Authorization window failed")
+    await expect(host.authorize(target)).rejects.toThrow("Authorization window failed")
     expect(pending).toBeFalse()
-    expect(await host.authorize("account-tools")).toEqual(status)
+    expect(await host.authorize(target)).toEqual(status)
     expect(calls).toEqual(["authorize", "authorization.cancel", "authorize"])
   })
 
@@ -517,7 +524,7 @@ describe("PluginServiceHost", () => {
       },
     )
 
-    await expect(host.authorize("account-tools")).rejects.toThrow("authorization completion failed: account-tools")
+    await expect(host.authorize(target)).rejects.toThrow("authorization completion failed: account-tools")
     expect(calls).toEqual(["authorize", "authorization.cancel"])
   })
 
@@ -535,17 +542,17 @@ describe("PluginServiceHost", () => {
         async authorize() {
           throw new Error("unused")
         },
-        async clearPlugin(pluginId) {
-          calls.push(`clear:${pluginId}`)
+        async clearPlugin(requestedTarget) {
+          calls.push(`clear:${requestedTarget.pluginId}/${requestedTarget.serviceId}`)
         },
-        async disposePlugin(pluginId) {
-          calls.push(`dispose:${pluginId}`)
+        async disposePlugin(requestedTarget) {
+          calls.push(`dispose:${requestedTarget.pluginId}/${requestedTarget.serviceId}`)
         },
       },
     )
 
-    await host.signOut("account-tools")
-    expect(calls).toEqual(["dispose:account-tools", "clear:account-tools", "sign_out"])
+    await host.signOut(target)
+    expect(calls).toEqual(["dispose:account-tools/account-tools", "clear:account-tools/account-tools", "sign_out"])
   })
 
   test("blocks a new authorization throughout checkpoint clearing and sign-out", async () => {
@@ -563,22 +570,63 @@ describe("PluginServiceHost", () => {
         async authorize() {
           throw new Error("must not open during sign-out")
         },
-        async clearPlugin(pluginId) {
-          calls.push(`clear:${pluginId}`)
+        async clearPlugin(requestedTarget) {
+          calls.push(`clear:${requestedTarget.pluginId}/${requestedTarget.serviceId}`)
           await cleared.promise
         },
-        async disposePlugin(pluginId) {
-          calls.push(`dispose:${pluginId}`)
+        async disposePlugin(requestedTarget) {
+          calls.push(`dispose:${requestedTarget.pluginId}/${requestedTarget.serviceId}`)
         },
       },
     )
 
-    const signingOut = host.signOut("account-tools")
+    const signingOut = host.signOut(target)
     await Promise.resolve()
-    await expect(host.authorize("account-tools")).rejects.toThrow("control action is active")
+    await expect(host.authorize(target)).rejects.toThrow("control action is active")
     cleared.resolve(undefined)
     expect(await signingOut).toEqual(status)
-    expect(calls).toEqual(["dispose:account-tools", "clear:account-tools", "sign_out"])
+    expect(calls).toEqual(["dispose:account-tools/account-tools", "clear:account-tools/account-tools", "sign_out"])
+  })
+
+  test("does not let one service control action block a sibling service from the same Plugin", async () => {
+    const imageTarget = { pluginId: "multi-tools", serviceId: "image-generation" } as const
+    const videoTarget = { pluginId: "multi-tools", serviceId: "video-generation" } as const
+    const clearStarted = deferred<void>()
+    const releaseClear = deferred<void>()
+    const calls: string[] = []
+    const services: PluginServiceSummary[] = [imageTarget, videoTarget].map((serviceTarget) => ({
+      ...summary,
+      actions: ["authorize", "sign_out"],
+      pluginId: serviceTarget.pluginId,
+      serviceId: serviceTarget.serviceId,
+    }))
+    const host = new PluginServiceHost(
+      {
+        async callService(requestedTarget, call) {
+          calls.push(`${requestedTarget.serviceId}:${call}`)
+          return { structuredContent: status }
+        },
+        listServices: async () => services,
+      },
+      {
+        async authorize() {
+          throw new Error("direct status authorization does not open a browser")
+        },
+        async clearPlugin(requestedTarget) {
+          if (requestedTarget.serviceId !== imageTarget.serviceId) return
+          clearStarted.resolve(undefined)
+          await releaseClear.promise
+        },
+        async disposePlugin() {},
+      },
+    )
+
+    const signingOut = host.signOut(imageTarget)
+    await clearStarted.promise
+    await expect(host.authorize(videoTarget)).resolves.toEqual(status)
+    releaseClear.resolve(undefined)
+    await expect(signingOut).resolves.toEqual(status)
+    expect(calls).toEqual(["video-generation:authorize", "image-generation:sign_out"])
   })
 
   test("status refresh never commits an unrelated in-flight authorization checkpoint", async () => {
@@ -594,14 +642,14 @@ describe("PluginServiceHost", () => {
         async authorize() {
           throw new Error("unused")
         },
-        async commitPlugin(pluginId) {
-          calls.push(`commit:${pluginId}`)
+        async commitPlugin(requestedTarget) {
+          calls.push(`commit:${requestedTarget.pluginId}/${requestedTarget.serviceId}`)
         },
         async disposePlugin() {},
       },
     )
 
-    expect(await host.getStatus("account-tools")).toEqual(status)
+    expect(await host.getStatus(target)).toEqual(status)
     expect(calls).toEqual([])
   })
 
@@ -627,7 +675,7 @@ describe("PluginServiceHost", () => {
       },
     )
 
-    const signingOut = host.signOut("account-tools")
+    const signingOut = host.signOut(target)
     await started.promise
     await host.dispose()
     await expect(signingOut).rejects.toMatchObject({ name: "AbortError" })
@@ -676,7 +724,7 @@ describe("PluginServiceHost", () => {
       },
     )
 
-    await expect(host.authorize("account-tools")).rejects.toThrow("sidecar restarted before commit")
+    await expect(host.authorize(target)).rejects.toThrow("sidecar restarted before commit")
     expect(checkpointCalls).toEqual(["captured"])
   })
 
@@ -685,13 +733,13 @@ describe("PluginServiceHost", () => {
       callService: async () => ({ isError: true, structuredContent: status }),
       listServices: async () => [summary],
     })
-    await expect(failed.getStatus("account-tools")).rejects.toThrow("status failed: account-tools")
+    await expect(failed.getStatus(target)).rejects.toThrow("status failed: account-tools")
 
     const invalid = new PluginServiceHost({
       callService: async () => ({ structuredContent: { ...status, accessKey: "do-not-return" } }),
       listServices: async () => [summary],
     })
-    await expect(invalid.getStatus("account-tools")).rejects.toThrow("invalid bounded status: account-tools")
+    await expect(invalid.getStatus(target)).rejects.toThrow("invalid bounded status: account-tools")
   })
 
   test("discards a completed result if the Plugin is updated or uninstalled during the call", async () => {
@@ -701,7 +749,7 @@ describe("PluginServiceHost", () => {
       callService: async () => result.promise,
       listServices: async () => installed,
     })
-    const pending = host.getStatus("account-tools")
+    const pending = host.getStatus(target)
     await Promise.resolve()
     installed = []
     result.resolve({ structuredContent: status })
@@ -715,7 +763,7 @@ describe("PluginServiceHost", () => {
       callService: async () => result.promise,
       listServices: async () => installed,
     })
-    const pending = host.getStatus("account-tools")
+    const pending = host.getStatus(target)
     await Promise.resolve()
     installed = [
       {

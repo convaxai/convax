@@ -24,9 +24,11 @@ function projection(): PluginServiceDisplayProjection {
         actions: ["sign_out"],
         capabilities: ["video"],
         description: "A safe service projection",
+        llmProviderIds: [],
         models: [{ capability: "video", id: "video.seedance", name: "Seedance" }],
         pluginId: "account-tools",
         pluginName: "Account Tools",
+        serviceId: "account-tools",
         status: {
           account: { availability: "available", displayName: "Creator" },
           billing: { availability: "unavailable" },
@@ -65,7 +67,7 @@ test("ignores malformed, oversized, and authority-shaped Service cache entries",
           projection: {
             services: [{ ...projection().services[0], sourceKey: "renderer-must-not-cache" }],
           },
-          schema: "convax.plugin-service-display-cache/1",
+          schema: "convax.plugin-service-display-cache/2",
         }),
       ),
     ),
@@ -77,7 +79,7 @@ test("ignores malformed, oversized, and authority-shaped Service cache entries",
           projection: {
             services: [{ ...projection().services[0], pluginName: "Bearer secret-token-value" }],
           },
-          schema: "convax.plugin-service-display-cache/1",
+          schema: "convax.plugin-service-display-cache/2",
         }),
       ),
     ),
@@ -89,7 +91,7 @@ test("ignores malformed, oversized, and authority-shaped Service cache entries",
           projection: {
             services: [{ ...projection().services[0], pluginName: "AK=credential-shaped-value" }],
           },
-          schema: "convax.plugin-service-display-cache/1",
+          schema: "convax.plugin-service-display-cache/2",
         }),
       ),
     ),
@@ -105,9 +107,38 @@ test("enforces the cache limit in UTF-8 bytes", () => {
     models: [],
     pluginId: `service-${index}`,
     pluginName: `Service ${index}`,
+    serviceId: `service-${index}`,
     status: undefined,
     usageHistory: undefined,
   }))
 
   expect(writePluginServiceProjection(storage(), { services })).toBe(false)
+})
+
+test("rejects the v1 cache and permits sibling services from one Plugin", () => {
+  const value = projection()
+  expect(
+    readPluginServiceProjection(
+      storage(JSON.stringify({ projection: value, schema: "convax.plugin-service-display-cache/1" })),
+    ),
+  ).toBeNull()
+
+  const sibling = {
+    ...value.services[0],
+    llmProviderIds: ["plugin-account-tools--service-video-generation--provider-chat"],
+    serviceId: "video-generation",
+  }
+  const target = storage()
+  expect(writePluginServiceProjection(target, { services: [...value.services, sibling] })).toBe(true)
+  expect(readPluginServiceProjection(target)?.services.map(({ serviceId }) => serviceId)).toEqual([
+    "account-tools",
+    "video-generation",
+  ])
+  expect(readPluginServiceProjection(target)?.services[1]?.llmProviderIds).toEqual(sibling.llmProviderIds)
+  expect(writePluginServiceProjection(storage(), { services: [...value.services, value.services[0]] })).toBe(false)
+  expect(
+    writePluginServiceProjection(storage(), {
+      services: [{ ...value.services[0], llmProviderIds: ["a".repeat(48)] }],
+    }),
+  ).toBe(false)
 })

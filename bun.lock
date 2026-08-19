@@ -160,7 +160,7 @@
     },
     "packages/create-convax-marketplace": {
       "name": "create-convax-marketplace",
-      "version": "0.2.2",
+      "version": "0.2.3",
       "bin": {
         "create-convax-marketplace": "./dist/cli.js",
       },
@@ -219,7 +219,7 @@
     },
     "packages/marketplace": {
       "name": "@convax/marketplace",
-      "version": "0.2.1",
+      "version": "0.2.2",
       "dependencies": {
         "ajv": "8.20.0",
       },
@@ -232,7 +232,7 @@
     },
     "packages/marketplace-kit": {
       "name": "@convax/marketplace-kit",
-      "version": "0.2.2",
+      "version": "0.2.3",
       "bin": {
         "convax-marketplace": "./dist/cli.js",
       },
@@ -263,7 +263,7 @@
     },
     "packages/plugin-sdk": {
       "name": "@convax/plugin-sdk",
-      "version": "0.4.0",
+      "version": "0.5.0",
       "dependencies": {
         "@convax/bounded-value": "workspace:^",
         "@convax/plugin-api": "workspace:^",

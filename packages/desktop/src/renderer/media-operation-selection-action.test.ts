@@ -9,7 +9,7 @@ import {
 } from "@convax/canvas"
 import { canvasProjectionResourceMetadataKey } from "@convax/canvas/collaboration"
 import { projectResourceReferenceKey } from "@convax/project/canvas"
-import type { InstalledWebPluginSummary } from "../plugin-contracts"
+import { parseWebPluginManifest, type WebPluginManifestV8 } from "../plugin-contracts"
 import {
   canRunMediaOperation,
   createMediaOperationGenerateRequest,
@@ -134,7 +134,7 @@ function singleNodeSelection(node: CanvasNode) {
   return createCanvasSelectionActionContext(document, [node.id], [], signal)
 }
 
-function operationPlugin(withSkill = false): InstalledWebPluginSummary {
+function operationPlugin(withSkill = false): WebPluginManifestV8 {
   const localized = (defaultText: string, chinese: string) => ({ default: defaultText, "zh-CN": chinese })
   return {
     capabilities: [],
@@ -199,6 +199,13 @@ function operationPlugin(withSkill = false): InstalledWebPluginSummary {
   }
 }
 
+function v9OperationPlugin() {
+  return parseWebPluginManifest({
+    ...operationPlugin(),
+    schema: "convax.plugin/9",
+  })
+}
+
 function tool(id: string, output: "audio" | "image" | "video") {
   return {
     acceptedInputs: ["reference_video" as const],
@@ -209,7 +216,7 @@ function tool(id: string, output: "audio" | "image" | "video") {
   }
 }
 
-function returnOperationPlugin(): InstalledWebPluginSummary {
+function returnOperationPlugin(): WebPluginManifestV8 {
   const plugin = operationPlugin()
   return {
     ...plugin,
@@ -252,7 +259,7 @@ function returnOperationPlugin(): InstalledWebPluginSummary {
   }
 }
 
-function immediateImageOperationPlugin(): InstalledWebPluginSummary {
+function immediateImageOperationPlugin(): WebPluginManifestV8 {
   return {
     capabilities: [],
     contributes: {
@@ -300,6 +307,7 @@ describe("manifest-driven media operation visibility", () => {
       pluginId: "acme-media",
       steps: [{ output: "image", toolId: "acme-media/frame.extract" }],
     })
+    expect(listInstalledMediaOperationActions([v9OperationPlugin()])).toEqual(actions)
     expect(listInstalledMediaOperationActions([])).toEqual([])
   })
 
@@ -315,7 +323,7 @@ describe("manifest-driven media operation visibility", () => {
     const legacy = {
       ...operationPlugin(),
       schema: "convax.plugin/7",
-    } as unknown as InstalledWebPluginSummary
+    } as unknown as WebPluginManifestV8
     expect(listInstalledMediaOperationActions([legacy])).toEqual([])
   })
 

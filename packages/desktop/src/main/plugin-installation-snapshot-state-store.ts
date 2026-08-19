@@ -41,6 +41,7 @@ import {
   type PluginSnapshotLease,
   type PluginSnapshotOwnerPin,
   type PluginSnapshotOwnerPinLease,
+  type PluginSnapshotReferenceLease,
 } from "./plugin-installation-snapshot-contracts"
 import type { PluginCapabilityTopology } from "./plugin-capability-binding-plan"
 
@@ -56,6 +57,14 @@ function isNodeError(error: unknown, code: string): error is NodeJS.ErrnoExcepti
 
 function compareStrings(left: string, right: string) {
   return left === right ? 0 : left < right ? -1 : 1
+}
+
+function referenceActivationId(reference: {
+  readonly activationId?: string
+  readonly pluginId: string
+  readonly snapshotDigest: string
+}) {
+  return reference.activationId
 }
 
 function sameFileIdentity(left: Awaited<ReturnType<typeof fs.lstat>>, right: Awaited<ReturnType<typeof fs.lstat>>) {
@@ -435,17 +444,17 @@ export class PluginInstallationSnapshotStore {
         throw snapshotError(`Plugin snapshot pin owner is missing or stale: ${ownerKey}`)
       }
       const activeSet = await this.#readActiveSet(pin.activeSetDigest)
-      if (
-        !activeSet.descriptor.plugins.some(
-          (reference) => reference.pluginId === pin.pluginId && reference.snapshotDigest === pin.snapshotDigest,
-        )
-      ) {
+      const reference = activeSet.descriptor.plugins.find(
+        (candidate) => candidate.pluginId === pin.pluginId && candidate.snapshotDigest === pin.snapshotDigest,
+      )
+      if (!reference) {
         throw snapshotError("Plugin snapshot owner pin does not belong to its retained ActiveSet")
       }
       await this.#readInstalledSnapshot(pin.snapshotDigest)
       this.#incrementLease(this.#leasedActiveSets, pin.activeSetDigest)
       this.#incrementLease(this.#leasedSnapshots, pin.snapshotDigest)
       return deepFreeze({
+        ...(referenceActivationId(reference) ? { activationId: referenceActivationId(reference) } : {}),
         lease: new InMemoryPluginSnapshotLease(() => {
           this.#decrementLease(this.#leasedActiveSets, pin.activeSetDigest)
           this.#decrementLease(this.#leasedSnapshots, pin.snapshotDigest)
@@ -502,18 +511,17 @@ export class PluginInstallationSnapshotStore {
     activeSetDigestInput: PluginSnapshotDigest,
     pluginIdInput: string,
     snapshotDigestInput: PluginSnapshotDigest,
-  ): Promise<PluginSnapshotLease> {
+  ): Promise<PluginSnapshotReferenceLease> {
     const activeSetDigest = requireDigest(activeSetDigestInput, "Historical Active Plugin set lease digest")
     const pluginId = requireWebPluginId(pluginIdInput)
     const snapshotDigest = requireDigest(snapshotDigestInput, "Historical Plugin snapshot lease digest")
     return this.#exclusive(async () => {
       await this.#ensureLayout()
       const activeSet = await this.#readActiveSet(activeSetDigest)
-      if (
-        !activeSet.descriptor.plugins.some(
-          (reference) => reference.pluginId === pluginId && reference.snapshotDigest === snapshotDigest,
-        )
-      ) {
+      const reference = activeSet.descriptor.plugins.find(
+        (candidate) => candidate.pluginId === pluginId && candidate.snapshotDigest === snapshotDigest,
+      )
+      if (!reference) {
         throw snapshotError("Plugin snapshot does not belong to the exact historical ActiveSet")
       }
       const snapshot = await this.#readInstalledSnapshot(snapshotDigest)
@@ -522,9 +530,12 @@ export class PluginInstallationSnapshotStore {
       }
       this.#incrementLease(this.#leasedActiveSets, activeSetDigest)
       this.#incrementLease(this.#leasedSnapshots, snapshotDigest)
-      return new InMemoryPluginSnapshotLease(() => {
-        this.#decrementLease(this.#leasedActiveSets, activeSetDigest)
-        this.#decrementLease(this.#leasedSnapshots, snapshotDigest)
+      return deepFreeze({
+        ...(referenceActivationId(reference) ? { activationId: referenceActivationId(reference) } : {}),
+        lease: new InMemoryPluginSnapshotLease(() => {
+          this.#decrementLease(this.#leasedActiveSets, activeSetDigest)
+          this.#decrementLease(this.#leasedSnapshots, snapshotDigest)
+        }),
       })
     })
   }

@@ -51,6 +51,8 @@ const status: PluginServiceStatus = {
   usage: { availability: "unavailable" },
 }
 
+const target = { pluginId: "account-tools", serviceId: "account-tools" }
+
 function executor(overrides: Partial<PluginServiceExecutor> = {}): PluginServiceExecutor {
   return {
     authorize: mock(async () => status),
@@ -81,12 +83,11 @@ describe("Plugin service IPC boundary", () => {
     expect(delivered).toEqual([pluginServiceIpcChannels.changed])
   })
 
-  test("accepts only an exact Plugin id target and defines no generic action channel", () => {
-    expect(parsePluginServiceTarget({ pluginId: "account-tools" })).toEqual({ pluginId: "account-tools" })
-    expect(() => parsePluginServiceTarget({ pluginId: "account-tools", method: "arbitrary.call" })).toThrow(
-      "target is invalid",
-    )
-    expect(() => parsePluginServiceTarget({ pluginId: "../../secret" })).toThrow("kebab-case")
+  test("accepts only an exact Plugin and Service target and defines no generic action channel", () => {
+    expect(parsePluginServiceTarget(target)).toEqual(target)
+    expect(() => parsePluginServiceTarget({ ...target, method: "arbitrary.call" })).toThrow("target is invalid")
+    expect(() => parsePluginServiceTarget({ ...target, pluginId: "../../secret" })).toThrow("kebab-case")
+    expect(() => parsePluginServiceTarget({ ...target, serviceId: "Not Kebab" })).toThrow("kebab-case")
     expect(Object.values(pluginServiceIpcChannels)).toEqual([
       "plugin-service:authorize",
       "plugin-service:authorization-cancel",
@@ -101,18 +102,20 @@ describe("Plugin service IPC boundary", () => {
   })
 
   test("accepts only an exact Plugin id and Plan key for Checkout", () => {
-    expect(parsePluginServiceCheckoutTarget({ planKey: "pro-monthly", pluginId: "account-tools" })).toEqual({
+    expect(parsePluginServiceCheckoutTarget({ ...target, planKey: "pro-monthly" })).toEqual({
       planKey: "pro-monthly",
       pluginId: "account-tools",
+      serviceId: "account-tools",
     })
     expect(() =>
       parsePluginServiceCheckoutTarget({
         checkoutUrl: "https://attacker.example/checkout",
         planKey: "pro-monthly",
         pluginId: "account-tools",
+        serviceId: "account-tools",
       }),
     ).toThrow("Checkout target is invalid")
-    expect(() => parsePluginServiceCheckoutTarget({ planKey: "Pro Monthly", pluginId: "account-tools" })).toThrow(
+    expect(() => parsePluginServiceCheckoutTarget({ ...target, planKey: "Pro Monthly" })).toThrow(
       "Checkout target is invalid",
     )
   })
@@ -160,11 +163,11 @@ describe("Plugin service IPC boundary", () => {
   test("coalesces duplicate status IPC calls without coalescing service mutations", async () => {
     type Event = { sender: TestSender }
     const handlers = new Map<string, (event: Event, input?: unknown) => unknown>()
-    const getStatus = mock(async (_pluginId: string, signal?: AbortSignal) => {
+    const getStatus = mock(async (_target: typeof target, signal?: AbortSignal) => {
       if (!signal) throw new Error("Missing status signal")
       return waitForAbort(signal)
     })
-    const authorize = mock(async (_pluginId: string, signal?: AbortSignal) => {
+    const authorize = mock(async (_target: typeof target, signal?: AbortSignal) => {
       if (!signal) throw new Error("Missing authorization signal")
       return waitForAbort(signal)
     })
@@ -178,15 +181,24 @@ describe("Plugin service IPC boundary", () => {
       },
     )
     const sender = new TestSender(1)
-    const input = { pluginId: "account-tools" }
+    const input = target
     const statusHandler = handlers.get(pluginServiceIpcChannels.getStatus)
     const authorizeHandler = handlers.get(pluginServiceIpcChannels.authorize)
     if (!statusHandler || !authorizeHandler) throw new Error("Missing service handler")
 
     const firstStatus = statusHandler({ sender }, input) as Promise<PluginServiceStatus>
     const secondStatus = statusHandler({ sender }, input) as Promise<PluginServiceStatus>
+    const siblingStatus = statusHandler(
+      { sender },
+      { pluginId: "account-tools", serviceId: "video-generation" },
+    ) as Promise<PluginServiceStatus>
     await Promise.resolve()
-    expect(getStatus).toHaveBeenCalledTimes(1)
+    expect(getStatus).toHaveBeenCalledTimes(2)
+    expect(getStatus).toHaveBeenNthCalledWith(
+      2,
+      { pluginId: "account-tools", serviceId: "video-generation" },
+      expect.any(AbortSignal),
+    )
 
     const firstAuthorization = authorizeHandler({ sender }, input) as Promise<PluginServiceStatus>
     await Promise.resolve()
@@ -201,6 +213,10 @@ describe("Plugin service IPC boundary", () => {
       () => null,
       (error: unknown) => error,
     )
+    const siblingStatusOutcome = siblingStatus.then(
+      () => null,
+      (error: unknown) => error,
+    )
     const authorizationOutcome = firstAuthorization.then(
       () => null,
       (error: unknown) => error,
@@ -208,6 +224,7 @@ describe("Plugin service IPC boundary", () => {
     sender.destroy()
     expect(await firstStatusOutcome).toMatchObject({ name: "AbortError" })
     expect(await secondStatusOutcome).toMatchObject({ name: "AbortError" })
+    expect(await siblingStatusOutcome).toMatchObject({ name: "AbortError" })
     expect(await authorizationOutcome).toMatchObject({ name: "AbortError" })
     dispose()
   })
@@ -251,7 +268,7 @@ describe("Plugin service IPC boundary", () => {
       },
     )
     const sender = new TestSender(1)
-    const invoke = (channel: string, input: Record<string, unknown> = { pluginId: "account-tools" }) => {
+    const invoke = (channel: string, input: Record<string, unknown> = target) => {
       const handler = handlers.get(channel)
       if (!handler) throw new Error(`Missing handler: ${channel}`)
       return handler({ sender }, input)
@@ -270,6 +287,7 @@ describe("Plugin service IPC boundary", () => {
     await invoke(pluginServiceIpcChannels.checkout, {
       planKey: "pro-monthly",
       pluginId: "account-tools",
+      serviceId: "account-tools",
     })
     expect(changes).toEqual(Array.from({ length: 5 }, () => pluginServiceIpcChannels.changed))
 
@@ -297,9 +315,7 @@ describe("Plugin service IPC boundary", () => {
     const handler = handlers.get(pluginServiceIpcChannels.authorize)
     if (!handler) throw new Error("Missing authorize handler")
 
-    await expect(handler({ sender: new TestSender(1) }, { pluginId: "account-tools" })).rejects.toThrow(
-      "authorization failed",
-    )
+    await expect(handler({ sender: new TestSender(1) }, target)).rejects.toThrow("authorization failed")
     expect(changes).toEqual([])
     dispose()
   })

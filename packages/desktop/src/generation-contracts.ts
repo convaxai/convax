@@ -37,6 +37,8 @@ export interface GenerationToolSummary {
   modelName?: string
   pluginId: string
   pluginName: string
+  /** Stable manifest-local Service identity. Legacy v8 tools use their Plugin id. */
+  serviceId: string
   /** Plugin-local dedicated Agent tool id for v3 operations. */
   agentId?: string
   /** Declarative result destination. Omission preserves the legacy Canvas result behavior. */

@@ -2,7 +2,7 @@ import { randomUUID } from "node:crypto"
 import type { CanvasApplicationService } from "@convax/canvas/application"
 
 import {
-  webPluginManifestSchemaV8,
+  isSupportedWebPluginManifestSchema,
   type InstalledWebPluginCanvasSurface,
   type InstalledWebPluginSummary,
 } from "../plugin-contracts"
@@ -49,7 +49,7 @@ export class PluginMaterializationService {
     try {
       const identity = active.identity
       if (
-        active.plugin.schema !== webPluginManifestSchemaV8 ||
+        !isSupportedWebPluginManifestSchema(active.plugin.schema) ||
         !active.plugin.hostApi ||
         !hasActivePluginIdentity(identity)
       ) {

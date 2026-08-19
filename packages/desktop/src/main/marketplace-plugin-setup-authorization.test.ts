@@ -1,9 +1,9 @@
 import { expect, mock, test } from "bun:test"
 
-import type { InstalledWebPluginSummary } from "../plugin-contracts"
+import type { WebPluginManifestV8 } from "../plugin-contracts"
 import { authorizeMarketplacePluginSetup } from "./marketplace-plugin-setup-authorization"
 
-function plugin(overrides: Partial<InstalledWebPluginSummary> = {}): InstalledWebPluginSummary {
+function plugin(overrides: Partial<WebPluginManifestV8> = {}): WebPluginManifestV8 {
   return {
     capabilities: [],
     contributes: {
@@ -35,14 +35,10 @@ test("automatic product-lock setup authorizes only an exact managed Tool compani
   const authorizeTool = mock(async () => "a".repeat(64))
   const authorizeHook = mock(async () => "b".repeat(64))
 
-  const digest = await authorizeMarketplacePluginSetup(
-    plugin(),
-    "automatic-product-lock",
-    {
-      authorizeHook,
-      authorizeTool,
-    },
-  )
+  const digest = await authorizeMarketplacePluginSetup(plugin(), "automatic-product-lock", {
+    authorizeHook,
+    authorizeTool,
+  })
 
   expect(digest).toMatch(/^[a-f0-9]{64}$/)
   expect(authorizeTool).toHaveBeenCalledWith(expect.anything(), { requireManaged: true })
