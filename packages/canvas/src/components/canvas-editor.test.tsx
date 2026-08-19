@@ -48,6 +48,7 @@ let renderedReactFlowOptions:
   | {
       connectionRadius?: number
       multiSelectionKeyCode?: readonly string[] | null
+      onlyRenderVisibleElements?: boolean
       panActivationKeyCode?: string | null
       snapGrid?: readonly [number, number]
       snapToGrid?: boolean
@@ -100,6 +101,7 @@ function MockReactFlow(props: {
   connectionRadius?: number
   edges?: CanvasEdge[]
   multiSelectionKeyCode?: readonly string[] | null
+  onlyRenderVisibleElements?: boolean
   panActivationKeyCode?: string | null
   nodes?: CanvasNode[]
   snapGrid?: readonly [number, number]
@@ -112,6 +114,7 @@ function MockReactFlow(props: {
   renderedReactFlowOptions = {
     connectionRadius: props.connectionRadius,
     multiSelectionKeyCode: props.multiSelectionKeyCode,
+    onlyRenderVisibleElements: props.onlyRenderVisibleElements,
     panActivationKeyCode: props.panActivationKeyCode,
     snapGrid: props.snapGrid,
     snapToGrid: props.snapToGrid,
@@ -268,6 +271,7 @@ const {
   runCanvasReloadScopeEffect,
   settleCanvasReloadFailure,
 } = await import("./canvas-editor")
+const { resolveCanvasOnlyRenderVisibleElements } = await import("./canvas-node-visibility")
 const { getCanvasNodeInsertionItems } = await import("./insertion-items")
 const { createDefaultCanvasFileRendererRegistry, createDefaultCanvasNodeRegistry } = await import("../builtin-registry")
 const { createCanvasServices } = await import("../services")
@@ -370,11 +374,50 @@ describe("CanvasEditor edge port projection", () => {
     expect(renderedReactFlowOptions).toMatchObject({
       connectionRadius: 120,
       multiSelectionKeyCode: null,
+      onlyRenderVisibleElements: true,
       panActivationKeyCode: null,
       snapGrid: [8, 8],
       snapToGrid: true,
       zoomActivationKeyCode: null,
     })
+  })
+
+  test("keeps a selected media composer mounted outside the viewport without disabling normal culling", () => {
+    for (const selectedNodeKind of ["image", "video"] as const) {
+      expect(
+        resolveCanvasOnlyRenderVisibleElements({
+          assistantAvailable: true,
+          configured: true,
+          editorAvailable: true,
+          selectedNodeKind,
+        }),
+      ).toBeFalse()
+    }
+
+    expect(
+      resolveCanvasOnlyRenderVisibleElements({
+        assistantAvailable: true,
+        configured: true,
+        editorAvailable: true,
+        selectedNodeKind: "text",
+      }),
+    ).toBeTrue()
+    expect(
+      resolveCanvasOnlyRenderVisibleElements({
+        assistantAvailable: false,
+        configured: true,
+        editorAvailable: true,
+        selectedNodeKind: "image",
+      }),
+    ).toBeTrue()
+    expect(
+      resolveCanvasOnlyRenderVisibleElements({
+        assistantAvailable: true,
+        configured: false,
+        editorAvailable: true,
+        selectedNodeKind: "image",
+      }),
+    ).toBeFalse()
   })
 
   test("projects handleless and legacy edges onto fixed ports without mutating the document", () => {

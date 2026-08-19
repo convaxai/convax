@@ -206,6 +206,7 @@ import {
 } from "../snapping"
 import { applyReactFlowEdgeSelectionChanges, applyReactFlowNodeSelectionChanges } from "./canvas-selection-sync"
 import { snapCanvasNodePositionChanges } from "./canvas-node-snapping"
+import { resolveCanvasOnlyRenderVisibleElements } from "./canvas-node-visibility"
 import { createCanvasFileNode, type CanvasFileRendererRegistry } from "../file-renderer-registry"
 import {
   assertResourceRef,
@@ -1431,6 +1432,7 @@ function CanvasEditorContent(
     }
   }, [clearPointerMultiSelection, schedulePointerMultiSelectionClear])
   const mutationService = useCanvasService("mutation")
+  const assistantService = useCanvasService("assistant")
   const folderBrowseService = useCanvasService("folderBrowse")
   const hydrationService = useCanvasService("hydration")
   const generateService = useCanvasService("generate")
@@ -1762,6 +1764,16 @@ function CanvasEditorContent(
   const selectedNodeIds = useMemo(() => [...selection.nodeIds], [selection.nodeIds])
   const selectedEdgeIds = useMemo(() => [...selection.edgeIds], [selection.edgeIds])
   const selectionContext = useMemo(() => deriveCanvasSelectionContext(selection), [selection])
+  const selectedNodeKind =
+    selectionContext.kind === "single-node"
+      ? history.document.nodes.find((node) => node.id === selectionContext.nodeId)?.data.kind
+      : undefined
+  const onlyRenderVisibleElements = resolveCanvasOnlyRenderVisibleElements({
+    assistantAvailable: Boolean(assistantService),
+    configured: props.onlyRenderVisibleElements,
+    editorAvailable: !readOnly || hydrating,
+    selectedNodeKind,
+  })
   const selectionProjection = useMemo(
     () =>
       createCanvasSelectionProjection({
@@ -5325,7 +5337,7 @@ function CanvasEditorContent(
                     nodesDraggable={interactionProps.nodesDraggable}
                     nodesFocusable
                     nodeDragThreshold={4}
-                    onlyRenderVisibleElements={props.onlyRenderVisibleElements ?? true}
+                    onlyRenderVisibleElements={onlyRenderVisibleElements}
                     autoPanOnNodeFocus={false}
                     panActivationKeyCode={null}
                     panOnDrag={interactionProps.panOnDrag}
