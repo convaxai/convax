@@ -6,7 +6,9 @@ import { configureElectronMock, resetElectronMock } from "./electron-test-mock"
 import type { PluginManagementInventory } from "./plugin-management-ipc"
 import type { PluginManagementCatalogPort as RemotePluginCatalogPort } from "./plugin-management-ipc"
 
-const { pluginManagementIpcChannels, registerPluginManagementIpc } = await import("./plugin-management-ipc")
+const { pluginManagementIpcChannels, publishPluginManagementChange, registerPluginManagementIpc } = await import(
+  "./plugin-management-ipc"
+)
 
 type InvokeHandler = (event: TestIpcEvent, input?: unknown) => unknown
 type TestIpcEvent = { sender: { id: number } }
@@ -156,6 +158,21 @@ afterEach(() => {
 })
 
 describe("registerPluginManagementIpc v8 snapshot routing", () => {
+  test("publishes an external Plugin activation to every live window", () => {
+    const first = windowFixture()
+    const destroyed = windowFixture({ destroyed: true })
+    const destroyedContents = windowFixture({ webContentsDestroyed: true })
+    const second = windowFixture()
+    windows.push(first, destroyed, destroyedContents, second)
+
+    publishPluginManagementChange()
+
+    expect(first.webContents.send).toHaveBeenCalledWith(pluginManagementIpcChannels.changed)
+    expect(second.webContents.send).toHaveBeenCalledWith(pluginManagementIpcChannels.changed)
+    expect(destroyed.webContents.send).not.toHaveBeenCalled()
+    expect(destroyedContents.webContents.send).not.toHaveBeenCalled()
+  })
+
   test("keeps the preload channel contract stable and rejects untrusted senders", async () => {
     expect(pluginManagementIpcChannels).toEqual({
       agentMcpStatuses: "plugin:agent-mcp-statuses",
