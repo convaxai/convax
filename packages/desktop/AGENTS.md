@@ -225,11 +225,10 @@ contract and its routed references.
   authorization with the immutable snapshot. Integrity or byte mismatch routes to
   exact-source reinstall/update, never a second Plugin setup action. Static Web
   Plugins receive the same exact source/version/artifact-bound authorization.
-- Product-lock recovery bytes are visible only to an explicit quarantined
-  retired-major update after exact retired-source/id/old-version/archive/snapshot/
-  Host-major matching and an exact move to the lock-derived current Official
-  SourceKey. Fresh install and default provisioning cannot consume them; a
-  successful CAS stays inert until restart, and no other source migration is valid.
+- Retired-major recovery may use only an ordinary candidate from the installation's
+  exact SourceKey. Desktop packages no Marketplace product catalog, default
+  installations, or cross-source recovery path; a successful CAS stays inert until
+  restart.
 - Native paths, credentials, cookies, authorization URLs, SourceKeys, snapshot
   digests, executable bindings, transport choices, and raw diagnostics stay in Main.
 - Preserve `contextIsolation`, disabled Node integration, sandboxing, trusted sender

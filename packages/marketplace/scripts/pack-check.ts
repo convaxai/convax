@@ -41,9 +41,8 @@ try {
     `import { BUILTIN_SOURCE_IDENTITY, builtinSourceKey, parseRegistryV2 } from "@convax/marketplace"
 import type { RegistryV2 } from "@convax/marketplace/schemas"
 import { OFFICIAL_SERVER_SCHEMA_SHA256 } from "@convax/marketplace/server-schema"
-import { parseMarketplaceProductPolicy } from "@convax/marketplace/product-lock"
 import { parseBuiltinBundleArchive } from "@convax/marketplace/builtin-archive"
-void [BUILTIN_SOURCE_IDENTITY, builtinSourceKey, parseRegistryV2, OFFICIAL_SERVER_SCHEMA_SHA256, parseMarketplaceProductPolicy, parseBuiltinBundleArchive]
+void [BUILTIN_SOURCE_IDENTITY, builtinSourceKey, parseRegistryV2, OFFICIAL_SERVER_SCHEMA_SHA256, parseBuiltinBundleArchive]
 const registry: RegistryV2 | undefined = undefined
 void registry
 `,

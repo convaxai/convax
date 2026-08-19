@@ -143,7 +143,7 @@ describe("FileMarketplaceStateStore", () => {
     )
     expect(JSON.parse(await readFile(join(root, "index-v1.json"), "utf8"))).toMatchObject({
       revision: 1,
-      schema: "convax.marketplace-state/1",
+      schema: "convax.marketplace-state/2",
     })
   })
 
@@ -166,49 +166,6 @@ describe("FileMarketplaceStateStore", () => {
     await expect(
       store.compareAndSwap(current.revision, (draft) => {
         draft.installations = [install({ sourceKey: sourceB, version: "2.0.0" })]
-      }),
-    ).rejects.toThrow("Installed capability cannot change Marketplace source")
-  })
-
-  test("admits only one exact product-locked Plugin source migration", async () => {
-    const root = await temporaryRoot()
-    const file = join(root, "index-v1.json")
-    const store = new FileMarketplaceStateStore(file, {
-      sourceMigrations: [
-        {
-          fromSourceKey: sourceA,
-          id: "example",
-          kind: "plugin",
-          toSourceKey: sourceB,
-        },
-      ],
-    })
-    await store.update((draft) => {
-      draft.installations.push(install({ kind: "plugin", sourceKey: sourceA }))
-    })
-    await store.update((draft) => {
-      draft.installations = [install({ kind: "plugin", sourceKey: sourceB, version: "2.0.0" })]
-    })
-    expect((await store.read()).installations).toMatchObject([
-      { id: "example", kind: "plugin", sourceKey: sourceB, version: "2.0.0" },
-    ])
-
-    const wrongIdentityStore = new FileMarketplaceStateStore(join(root, "wrong-index-v1.json"), {
-      sourceMigrations: [
-        {
-          fromSourceKey: sourceA,
-          id: "different-plugin",
-          kind: "plugin",
-          toSourceKey: sourceB,
-        },
-      ],
-    })
-    await wrongIdentityStore.update((draft) => {
-      draft.installations.push(install({ kind: "plugin", sourceKey: sourceA }))
-    })
-    await expect(
-      wrongIdentityStore.update((draft) => {
-        draft.installations = [install({ kind: "plugin", sourceKey: sourceB, version: "2.0.0" })]
       }),
     ).rejects.toThrow("Installed capability cannot change Marketplace source")
   })
@@ -270,7 +227,7 @@ describe("FileMarketplaceStateStore", () => {
     expect((await store.read()).revision).toBe(0)
   })
 
-  test("rejects zero record revisions and duplicate provisioning decisions", async () => {
+  test("rejects zero record revisions", async () => {
     const directory = await temporaryRoot()
     const file = join(directory, "state.json")
     const store = new FileMarketplaceStateStore(file)
@@ -281,20 +238,47 @@ describe("FileMarketplaceStateStore", () => {
     state.installations[0].revision = 0
     await writeFile(file, JSON.stringify(state))
     await expect(store.read()).rejects.toThrow("invalid")
+  })
 
-    state.installations[0].revision = 1
-    const decision = {
-      decision: "removed-by-user",
-      identity: { id: "example", kind: "plugin" },
-      marketplaceId: "convax-official",
-      observedPolicyRevision: 1,
-      policyEntryDigest: "b".repeat(64),
-      revision: 1,
-      sourceKey: sourceA,
-    }
-    state.provisioningDecisions = [decision, { ...decision, revision: 2 }]
-    await writeFile(file, JSON.stringify(state))
-    await expect(store.read()).rejects.toThrow("repeats ProvisioningDecision")
+  test("reads v1 state by dropping retired provisioning decisions and writes only v2", async () => {
+    const directory = await temporaryRoot()
+    const file = join(directory, "state.json")
+    await writeFile(
+      file,
+      JSON.stringify({
+        executionGrants: [],
+        installations: [],
+        provisioningDecisions: [
+          {
+            decision: "removed-by-user",
+            identity: { id: "example", kind: "plugin" },
+            marketplaceId: "convax-official",
+            observedPolicyRevision: 1,
+            policyEntryDigest: "b".repeat(64),
+            revision: 1,
+            sourceKey: sourceA,
+          },
+        ],
+        revision: 0,
+        runtimePreferences: [],
+        schema: "convax.marketplace-state/1",
+        transitions: [],
+      }),
+      { mode: 0o600 },
+    )
+    const store = new FileMarketplaceStateStore(file)
+    expect(await store.read()).toEqual({
+      executionGrants: [],
+      installations: [],
+      revision: 0,
+      runtimePreferences: [],
+      schema: "convax.marketplace-state/2",
+      transitions: [],
+    })
+    await store.update(() => undefined)
+    const persisted = JSON.parse(await readFile(file, "utf8"))
+    expect(persisted.schema).toBe("convax.marketplace-state/2")
+    expect(persisted).not.toHaveProperty("provisioningDecisions")
   })
 
   test("rejects transition participant payload or digest tampering", async () => {
@@ -479,10 +463,9 @@ test("empty state shape remains explicit and serializable", () => {
   const state: MarketplaceState = {
     executionGrants: [],
     installations: [],
-    provisioningDecisions: [],
     revision: 0,
     runtimePreferences: [],
-    schema: "convax.marketplace-state/1",
+    schema: "convax.marketplace-state/2",
     transitions: [],
   }
   expect(structuredClone(state)).toEqual(state)

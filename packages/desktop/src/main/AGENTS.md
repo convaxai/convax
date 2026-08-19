@@ -119,7 +119,7 @@ For any matching change, read the full routed reference before planning or editi
 | `agent-*`, `canvas-agent-tools`, `composite-agent-tools`, OpenCode            | [`docs/architecture.md` §7](../../../../docs/architecture.md#7-agent-tools-and-skills) and [`packages/agent-runtime/AGENTS.md`](../../../agent-runtime/AGENTS.md)                                                                                              |
 | Skill discovery/management, Plugin-owned Skills, Hook loading                 | [`docs/plugin-skill-platform.md`](../../../../docs/plugin-skill-platform.md), [`docs/architecture.md` §§7–8](../../../../docs/architecture.md#7-agent-tools-and-skills), and Agent Runtime contract                                                            |
 | Agent MCP, managed MCP, OAuth, stdio runtime                                  | [`docs/architecture.md` “MCP Server runtime boundary”](../../../../docs/architecture.md#mcp-server-runtime-boundary), §§7–8, Agent Runtime, and Marketplace contracts                                                                                          |
-| Marketplace source/cache/install, snapshot closure, ActiveSet, product lock   | [`docs/architecture.md` §§5–6 and §8](../../../../docs/architecture.md#5-persistence-map), [`docs/plugin-skill-platform.md`](../../../../docs/plugin-skill-platform.md), and Marketplace contract                                                              |
+| Marketplace source/cache/install, snapshot closure, ActiveSet                 | [`docs/architecture.md` §§5–6 and §8](../../../../docs/architecture.md#5-persistence-map), [`docs/plugin-skill-platform.md`](../../../../docs/plugin-skill-platform.md), and Marketplace contract                                                              |
 | Plugin Host API, availability, generated Catalog contract                     | [`docs/plugin-host-change-governance.md`](../../../../docs/plugin-host-change-governance.md), Plugin API/SDK package contracts, and [`docs/plugin-skill-platform.md`](../../../../docs/plugin-skill-platform.md)                                               |
 | Plugin installation/runtime, companions, service host, Web asset protocol     | [`docs/architecture.md` §8](../../../../docs/architecture.md#8-plugin-host-boundary), [`docs/plugin-skill-platform.md`](../../../../docs/plugin-skill-platform.md), and [`docs/plugin-canvas-capabilities.md`](../../../../docs/plugin-canvas-capabilities.md) |
 | Plugin capability broker, imports/exports, Host API dispatch                  | [`docs/plugin-canvas-capabilities.md`](../../../../docs/plugin-canvas-capabilities.md), Plugin API/SDK contracts, and [`docs/architecture.md` §8](../../../../docs/architecture.md#8-plugin-host-boundary)                                                     |
@@ -191,22 +191,16 @@ For any matching change, read the full routed reference before planning or editi
   only update path requires a dedicated inspection proving intact pointer, closure,
   authorization, topology, and retired-major-only incompatibility. All other
   mutations stay blocked and repaired bytes remain inert until restart.
-- A packaged recovery artifact may supply bytes to that update only when its exact
-  product-lock binding matches the inspected retired source, Plugin id, old version,
-  archive SHA-256/size, snapshot digest, and retired Host API major, and the candidate
-  matches the lock-derived current Official SourceKey. That exact one-way lineage is
-  the only admitted `InstallRecord` source migration. Never expose it to
-  default/fresh install unless the same exact closure independently carries the
-  `default-install` purpose; never scan for it or infer a match from a directory.
+- Retired-major repair accepts only an ordinary update candidate from the installed
+  record's exact SourceKey. It never scans packaged resources, migrates the source,
+  or infers authority from matching package identity on another Marketplace.
 - Tool Plugin installation/update consent is part of the exact immutable closure and
   snapshot descriptor. Background refresh never expands execution authority.
-  Builtin and product-default are provisioning sources, not general runtime
-  privilege classes. The exact product policy may publish authorization for a
-  locked default Plugin through the normal install transition, but must reject Hook
-  modules and never infer authority from Catalog membership, packaged bytes, or a
-  recovery purpose.
-- Default provisioning must commit each immutable package transition before queuing
-  one non-blocking Main-owned runtime reconciliation. Startup Skill publication must
+  Builtin is an installation source, not a general runtime privilege class. Never
+  infer authority from Catalog membership or packaged bytes. Desktop has no
+  product-selected default provisioning path.
+- Explicit installation must commit each immutable package transition before
+  queuing runtime reconciliation. Skill publication must
   not list or launch OpenCode per entry, and shutdown must not wait for an active
   Agent use to release that queued refresh.
 - A user-confirmed install/update or explicit Local import publishes its exact

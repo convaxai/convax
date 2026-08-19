@@ -25,7 +25,6 @@ import type {
 } from "../marketplace-contracts"
 import type { MarketplaceApplicationPort } from "./marketplace-ipc"
 import type { LocalMarketplacePackage, LocalMarketplaceStore } from "./local-marketplace-store"
-import type { MarketplacePluginSetupMode } from "./marketplace-plugin-setup-authorization"
 import type { NetworkMarketplaceManager } from "./network-marketplace-manager"
 import type { PinnedHttpsFetcher } from "./pinned-https-fetch"
 import { isCapabilityPublicationRecoveryRequiredError } from "./capability-publication-error"
@@ -34,7 +33,6 @@ import {
   type CapabilityMutationCoordinator,
   type CapabilityTransition,
   type InstallRecord,
-  type MarketplaceState,
   capabilityTransitionParticipantDigest,
   projectInstalledCapability,
 } from "./marketplace-state"
@@ -49,7 +47,6 @@ export interface MarketplaceCapabilityInstallerPort {
     options: {
       authorizeExecution: boolean
       previousVersion?: string
-      productDefaultAuthorization?: boolean
       recoverExistingSkillOnly?: boolean
       replaceExistingSkill?: boolean
       startup?: boolean
@@ -78,7 +75,6 @@ export interface MarketplaceCapabilityInstallerPort {
   commitMcpCandidate(identity: { id: string; kind: MarketplaceCapabilityKind }): Promise<void>
   discardMcpCandidate(identity: { id: string; kind: MarketplaceCapabilityKind }): Promise<void>
   hardRefresh(identity: { id: string; kind: MarketplaceCapabilityKind }): Promise<void>
-  scheduleStartupRefresh(identities: readonly { id: string; kind: MarketplaceCapabilityKind }[]): void
   prepareSetup(
     record: InstallRecord,
     pickExecutable: () => Promise<string | null>,
@@ -91,7 +87,7 @@ export interface MarketplaceCapabilityInstallerPort {
   setup(
     record: InstallRecord,
     prepared: { addTarget?: string | null },
-    options: { mode: MarketplacePluginSetupMode },
+    options: { mode: "explicit" },
   ): Promise<{ authorizationContractDigest: string } | null>
   uninstall(identity: { id: string; kind: MarketplaceCapabilityKind }): Promise<void>
   verifyAuthorization(record: InstallRecord, authorizationContractDigest: string): Promise<boolean>
@@ -117,38 +113,13 @@ export interface MarketplaceApplicationServiceOptions {
   ): void
   assertLocalImportAllowed?(): void
   fixedCatalog(): Promise<readonly SourceQualifiedItem[]>
-  fixedSources(): Promise<readonly MarketplaceSettingsSource[]>
   installer: MarketplaceCapabilityInstallerPort
   local?: LocalMarketplaceStore
   localSourceKey?: SourceKey
   network: NetworkMarketplaceManager
   networkFetch: PinnedHttpsFetcher
   pluginRuntimeState?: MarketplacePluginRuntimeState
-  pluginUpdateRecoveryBindings?: ReadonlyMap<
-    string,
-    Readonly<{
-      fromSourceKey: SourceKey
-      toSourceKey: SourceKey
-    }>
-  >
-  defaultInstallPolicy?(identity: {
-    id: string
-    kind: MarketplaceCapabilityKind
-    sourceKey: SourceKey
-    version: string
-  }):
-    | {
-        marketplaceId: string
-        observedPolicyRevision: number
-        policyEntryDigest: string
-        version: string
-      }
-    | undefined
-  prepareFixedArtifact?(
-    item: SourceQualifiedItem,
-  ): Promise<{ artifactBytes: Uint8Array; companionBytes: Readonly<Record<string, Uint8Array>> } | null>
   projectDetails?(item: SourceQualifiedItem): Promise<Pick<MarketplaceCapabilityDetails, "files" | "showcase">>
-  refreshFixedSource?(id: string): Promise<boolean>
   readFixedArtifact(item: SourceQualifiedItem): Promise<Uint8Array>
   reservedBuiltinIdentities?: readonly {
     id: string
@@ -322,63 +293,11 @@ export class MarketplaceApplicationService implements MarketplaceApplicationPort
     return () => this.#listeners.delete(listener)
   }
 
-  #isPluginUpdateSourceMigration(
-    installed: Pick<InstallRecord, "id" | "kind" | "sourceKey">,
-    candidate: Pick<SourceQualifiedItem, "id" | "kind" | "sourceKey">,
-  ) {
-    if (installed.kind !== "plugin" || candidate.kind !== "plugin" || installed.id !== candidate.id) return false
-    const binding = this.#options.pluginUpdateRecoveryBindings?.get(installed.id)
-    return binding?.fromSourceKey === installed.sourceKey && binding.toSourceKey === candidate.sourceKey
-  }
-
   #isCurrentOrRecoverySource(
     installed: Pick<InstallRecord, "id" | "kind" | "sourceKey">,
     candidate: Pick<SourceQualifiedItem, "id" | "kind" | "sourceKey">,
   ) {
-    return installed.sourceKey === candidate.sourceKey || this.#isPluginUpdateSourceMigration(installed, candidate)
-  }
-
-  #clearProvisioningDecision(
-    draft: MarketplaceState,
-    identity: { id: string; kind: MarketplaceCapabilityKind },
-    marketplaceId: string,
-  ) {
-    draft.provisioningDecisions = draft.provisioningDecisions.filter(
-      (decision) =>
-        !(identityKey(decision.identity) === identityKey(identity) && decision.marketplaceId === marketplaceId),
-    )
-  }
-
-  #clearDefaultInstallProvisioningDecision(
-    draft: MarketplaceState,
-    identity: {
-      id: string
-      kind: MarketplaceCapabilityKind
-      sourceKey: SourceKey
-      version: string
-    },
-  ) {
-    const policy = this.#options.defaultInstallPolicy?.(identity)
-    if (policy) this.#clearProvisioningDecision(draft, identity, policy.marketplaceId)
-  }
-
-  #recordProvisioningRemoval(draft: MarketplaceState, record: InstallRecord) {
-    const policy = this.#options.defaultInstallPolicy?.(record)
-    if (!policy) return
-    const previous = draft.provisioningDecisions.find(
-      (decision) =>
-        identityKey(decision.identity) === identityKey(record) && decision.marketplaceId === policy.marketplaceId,
-    )
-    this.#clearProvisioningDecision(draft, record, policy.marketplaceId)
-    draft.provisioningDecisions.push({
-      decision: "removed-by-user",
-      identity: { id: record.id, kind: record.kind },
-      marketplaceId: policy.marketplaceId,
-      observedPolicyRevision: policy.observedPolicyRevision,
-      policyEntryDigest: policy.policyEntryDigest,
-      revision: (previous?.revision ?? 0) + 1,
-      sourceKey: record.sourceKey,
-    })
+    return installed.sourceKey === candidate.sourceKey
   }
 
   async #catalog() {
@@ -627,11 +546,10 @@ export class MarketplaceApplicationService implements MarketplaceApplicationPort
     const activePluginBindings = (await this.#activePluginBindings()).bindings
     const capabilities = await Promise.all(
       state.installations.map(async (record) => {
-        const sourceItem =
-          catalog.find(
-            (candidate) =>
-              candidate.kind === record.kind && candidate.id === record.id && candidate.sourceKey === record.sourceKey,
-          ) ?? catalog.find((candidate) => this.#isPluginUpdateSourceMigration(record, candidate))
+        const sourceItem = catalog.find(
+          (candidate) =>
+            candidate.kind === record.kind && candidate.id === record.id && candidate.sourceKey === record.sourceKey,
+        )
         const grant = state.executionGrants.find(
           (candidate) =>
             identityKey(candidate.identity) === identityKey(record) && candidate.sourceKey === record.sourceKey,
@@ -687,9 +605,6 @@ export class MarketplaceApplicationService implements MarketplaceApplicationPort
           sourceLabel: sourceItem?.marketplaceId ?? "Unavailable source",
           state: runtimeUnavailable || runtimeInactive || pluginOwnedSkill ? "attention" : projected.state,
           updateAvailable,
-          ...(runtimeUnavailable && updateAvailable && this.#options.pluginUpdateRecoveryBindings?.has(record.id)
-            ? { updateRecoveryAvailable: true as const }
-            : {}),
           version: record.version,
         } satisfies MarketplaceInstalledCapability
       }),
@@ -948,7 +863,6 @@ export class MarketplaceApplicationService implements MarketplaceApplicationPort
     options: {
       authorizePluginExecution?: boolean
       deferPostCommitRefresh?: boolean
-      productDefaultAuthorization?: boolean
       startup?: boolean
     } = {},
   ) {
@@ -1047,7 +961,6 @@ export class MarketplaceApplicationService implements MarketplaceApplicationPort
             authorizeExecution: authorizePluginExecution,
             ...(options.startup ? { startup: true } : {}),
             ...(previous ? { previousVersion: previous.version } : {}),
-            ...(options.productDefaultAuthorization ? { productDefaultAuthorization: true } : {}),
             ...(candidate.kind === "skill" && (mutation === "update" || resuming)
               ? { replaceExistingSkill: true }
               : {}),
@@ -1067,13 +980,6 @@ export class MarketplaceApplicationService implements MarketplaceApplicationPort
           publishedAuthorizationContractDigest = publication.authorizationContractDigest
           preparedMcpCandidate = authorizedUpdate
         }
-        if (
-          options.productDefaultAuthorization &&
-          candidate.kind === "plugin" &&
-          !publishedAuthorizationContractDigest
-        ) {
-          throw new Error("Product-default Plugin installation did not publish exact execution authorization")
-        }
         managedSkillPublicationCompleted = candidate.kind === "skill"
         if (preparedMcpCandidate) {
           await this.#options.installer.commitMcpCandidate(candidate)
@@ -1087,7 +993,6 @@ export class MarketplaceApplicationService implements MarketplaceApplicationPort
           }
           draft.installations = draft.installations.filter((entry) => identityKey(entry) !== identityKey(candidate))
           draft.installations.push(next)
-          this.#clearDefaultInstallProvisioningDecision(draft, candidate)
           const previousGrant = draft.executionGrants.find(
             (entry) => identityKey(entry.identity) === identityKey(candidate),
           )
@@ -1229,8 +1134,6 @@ export class MarketplaceApplicationService implements MarketplaceApplicationPort
       return { bytes, kind: "builtin" }
     }
     if (candidate.delivery.kind === "artifact") {
-      const fixed = await this.#options.prepareFixedArtifact?.(candidate)
-      if (fixed) return { kind: "artifact", prepared: fixed }
       const repository = await this.#options.repositoryAuthority(candidate)
       const bytes = await this.#options.networkFetch.fetch(candidate.delivery.url, "release", {
         maxBytes: candidate.delivery.size,
@@ -1314,7 +1217,7 @@ export class MarketplaceApplicationService implements MarketplaceApplicationPort
   async #setup(
     identity: { id: string; kind: MarketplaceCapabilityKind },
     pickExecutable: () => Promise<string | null>,
-    mode: MarketplacePluginSetupMode,
+    mode: "explicit",
   ) {
     this.#options.assertCapabilityMutationAllowed?.(identity)
     const before = await this.#options.state.read()
@@ -1549,9 +1452,8 @@ export class MarketplaceApplicationService implements MarketplaceApplicationPort
           previous: record,
           revision: 1,
         })
-        // The explicit user intent must survive every publication outcome and
-        // product-lock revision, so commit it before removing any installed bytes.
-        this.#recordProvisioningRemoval(draft, record)
+        // The explicit user intent must survive every publication outcome, so
+        // commit it before removing any installed bytes.
       })
       try {
         await this.#advanceTransition(transitionId, "publish")
@@ -1612,10 +1514,6 @@ export class MarketplaceApplicationService implements MarketplaceApplicationPort
   }
 
   async refreshMarketplace(id: string) {
-    if (await this.#options.refreshFixedSource?.(id)) {
-      this.#emit()
-      return
-    }
     await this.#options.network.refresh(id)
   }
 
@@ -1624,24 +1522,18 @@ export class MarketplaceApplicationService implements MarketplaceApplicationPort
   }
 
   async listMarketplaces() {
-    const [fixed, network] = await Promise.all([
-      this.#options.fixedSources(),
-      this.#options.network.listSourceStatuses(),
-    ])
-    return [
-      ...fixed.filter((source) => source.id === "convax-official"),
-      ...network.map(
-        (source): MarketplaceSettingsSource => ({
-          health: source.health,
-          id: source.descriptor.id,
-          label: source.descriptor.name,
-          packageCount: source.packageCount,
-          publisher: source.descriptor.publisher.name,
-          removable: true,
-          repository: `${source.descriptor.repository.owner}/${source.descriptor.repository.name}`,
-        }),
-      ),
-    ]
+    const network = await this.#options.network.listSourceStatuses()
+    return network.map(
+      (source): MarketplaceSettingsSource => ({
+        health: source.health,
+        id: source.descriptor.id,
+        label: source.descriptor.name,
+        packageCount: source.packageCount,
+        publisher: source.descriptor.publisher.name,
+        removable: true,
+        repository: `${source.descriptor.repository.owner}/${source.descriptor.repository.name}`,
+      }),
+    )
   }
 
   async #assertSourcePreflight(item: SourceQualifiedItem) {
@@ -1656,7 +1548,7 @@ export class MarketplaceApplicationService implements MarketplaceApplicationPort
       },
       item,
     )
-    if (outcome === "source-conflict" && (!installed || !this.#isPluginUpdateSourceMigration(installed, item))) {
+    if (outcome === "source-conflict") {
       throw new Error("Installed source cannot change")
     }
   }
@@ -1801,9 +1693,6 @@ export class MarketplaceApplicationService implements MarketplaceApplicationPort
         )
         if (selected) {
           draft.installations.push(selected)
-          if (transition.mutation !== "uninstall") {
-            this.#clearDefaultInstallProvisioningDecision(draft, selected)
-          }
         }
         for (const participant of transition.participants) {
           if (participant.participant === "execution-grant") {
@@ -1836,126 +1725,6 @@ export class MarketplaceApplicationService implements MarketplaceApplicationPort
   async recoverTransitions() {
     const transitions = (await this.#options.state.read()).transitions
     for (const pending of transitions) await this.#recoverTransition(pending.id)
-  }
-
-  async provisionDefaults() {
-    return this.#provisionStartupBatch([
-      (onCommitted) => this.#provisionBuiltins(onCommitted),
-      (onCommitted) => this.#provisionDefaultPackages(onCommitted),
-    ])
-  }
-
-  async provisionBuiltins() {
-    return this.#provisionStartupBatch([(onCommitted) => this.#provisionBuiltins(onCommitted)])
-  }
-
-  async provisionDefaultPackages() {
-    return this.#provisionStartupBatch([(onCommitted) => this.#provisionDefaultPackages(onCommitted)])
-  }
-
-  async #provisionStartupBatch(
-    provisions: readonly ((
-      onCommitted: (identity: { id: string; kind: MarketplaceCapabilityKind }) => void,
-    ) => Promise<void>)[],
-  ) {
-    const failures: unknown[] = []
-    const committed = new Map<string, { id: string; kind: MarketplaceCapabilityKind }>()
-    const onCommitted = (identity: { id: string; kind: MarketplaceCapabilityKind }) => {
-      committed.set(identityKey(identity), { id: identity.id, kind: identity.kind })
-    }
-    for (const provision of provisions) {
-      try {
-        await provision(onCommitted)
-      } catch (error) {
-        failures.push(error)
-      }
-    }
-    if (committed.size > 0) this.#options.installer.scheduleStartupRefresh([...committed.values()])
-    if (failures.length > 0) {
-      throw new AggregateError(failures, "Marketplace default provisioning failed")
-    }
-  }
-
-  async #provisionBuiltins(onCommitted: (identity: { id: string; kind: MarketplaceCapabilityKind }) => void) {
-    const failures: unknown[] = []
-    const builtins = (await this.#options.fixedCatalog()).filter((item) => item.sourceKind === "builtin")
-    for (const item of builtins) {
-      try {
-        const state = await this.#options.state.read()
-        const policy = this.#options.defaultInstallPolicy?.(item)
-        if (policy && (item.marketplaceId !== policy.marketplaceId || item.version !== policy.version)) continue
-        const removed = policy
-          ? state.provisioningDecisions.some(
-              (entry) =>
-                identityKey(entry.identity) === identityKey(item) && entry.marketplaceId === policy.marketplaceId,
-            )
-          : false
-        if (removed) continue
-        if (state.installations.some((entry) => identityKey(entry) === identityKey(item))) continue
-        await this.#installCandidate(item, "install", {
-          deferPostCommitRefresh: true,
-          startup: true,
-        })
-        onCommitted(item)
-      } catch (error) {
-        failures.push(error)
-      }
-    }
-    if (failures.length > 0) {
-      throw new AggregateError(failures, "Builtin Marketplace provisioning failed")
-    }
-  }
-
-  async #provisionDefaultPackages(onCommitted: (identity: { id: string; kind: MarketplaceCapabilityKind }) => void) {
-    if (!this.#options.defaultInstallPolicy) return
-    const failures: unknown[] = []
-    for (const item of await this.#standaloneCatalog()) {
-      try {
-        const policy = this.#options.defaultInstallPolicy(item)
-        if (!policy || item.marketplaceId !== policy.marketplaceId || item.version !== policy.version) continue
-        if (item.kind === "mcp-server") {
-          throw new Error("Product-default installation admits only Plugins and standalone Skills")
-        }
-        const state = await this.#options.state.read()
-        const removed = state.provisioningDecisions.some(
-          (entry) => identityKey(entry.identity) === identityKey(item) && entry.marketplaceId === policy.marketplaceId,
-        )
-        if (removed) continue
-        const installed = state.installations.find((entry) => identityKey(entry) === identityKey(item))
-        if (!installed) {
-          await this.#installCandidate(item, "install", {
-            authorizePluginExecution: item.kind === "plugin",
-            deferPostCommitRefresh: true,
-            ...(item.kind === "plugin" ? { productDefaultAuthorization: true } : {}),
-            startup: true,
-          })
-          onCommitted(item)
-        } else if (installed.sourceKey !== item.sourceKey || installed.version !== item.version) {
-          continue
-        } else if (item.kind === "plugin") {
-          const grant = state.executionGrants.find(
-            (entry) => identityKey(entry.identity) === identityKey(item) && entry.sourceKey === item.sourceKey,
-          )
-          if (
-            !grant ||
-            !(await this.#options.installer.verifyAuthorization(installed, grant.authorizationContractDigest))
-          ) {
-            await this.#installCandidate(item, "update", {
-              authorizePluginExecution: true,
-              deferPostCommitRefresh: true,
-              productDefaultAuthorization: true,
-              startup: true,
-            })
-            onCommitted(item)
-          }
-        }
-      } catch (error) {
-        failures.push(error)
-      }
-    }
-    if (failures.length > 0) {
-      throw new AggregateError(failures, "Official Marketplace default provisioning failed")
-    }
   }
 
   async #installed(kind: MarketplaceCapabilityKind, id: string) {

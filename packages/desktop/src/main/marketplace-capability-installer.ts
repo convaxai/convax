@@ -5,7 +5,6 @@ import type { MarketplaceCapabilityInstallerPort } from "./marketplace-applicati
 import type { LocalMarketplacePackage } from "./local-marketplace-store"
 import type { MarketplaceMcpMetadataStore } from "./marketplace-mcp-metadata"
 import type { CapabilityTransition, InstallRecord } from "./marketplace-state"
-import type { MarketplacePluginSetupMode } from "./marketplace-plugin-setup-authorization"
 import type { MarketplaceArtifactInstaller } from "./marketplace-artifact-installer"
 
 export interface DesktopMarketplaceCapabilityInstallerOptions {
@@ -26,7 +25,7 @@ export interface DesktopMarketplaceCapabilityInstallerOptions {
   ): Promise<void>
   resolveInstalledTransition(transition: CapabilityTransition): Promise<"next" | "previous" | "unknown">
   mcp: MarketplaceMcpMetadataStore
-  authorizePlugin(id: string, mode: MarketplacePluginSetupMode): Promise<string | null>
+  authorizePlugin(id: string, mode: "explicit"): Promise<string | null>
   currentPluginAuthorization(id: string): Promise<string | null>
   verifyPluginAuthorization(id: string, authorizationContractDigest: string): Promise<boolean>
   disablePlugin(id: string): Promise<void>
@@ -34,7 +33,6 @@ export interface DesktopMarketplaceCapabilityInstallerOptions {
   hardRefreshPlugin(id: string): Promise<void>
   publishPluginChange(): void
   refreshPetProvider(id: string): Promise<void>
-  scheduleStartupRefresh(identities: readonly { id: string; kind: "plugin" | "skill" }[]): void
   remote: Pick<MarketplaceArtifactInstaller, "installVerifiedMarketplaceCandidate">
   resolvePackage(item: SourceQualifiedItem): Promise<RegistryPackage>
   uninstallPlugin(id: string): Promise<void>
@@ -68,7 +66,6 @@ export class DesktopMarketplaceCapabilityInstaller implements MarketplaceCapabil
     options: {
       authorizeExecution: boolean
       previousVersion?: string
-      productDefaultAuthorization?: boolean
       recoverExistingSkillOnly?: boolean
       replaceExistingSkill?: boolean
       startup?: boolean
@@ -86,7 +83,6 @@ export class DesktopMarketplaceCapabilityInstaller implements MarketplaceCapabil
         deferExecutionAuthorization: !options.authorizeExecution,
         ...(options.previousVersion ? { expectedInstalledVersion: options.previousVersion } : {}),
         ...(options.startup ? { startup: true } : {}),
-        ...(options.productDefaultAuthorization ? { productDefaultAuthorization: true } : {}),
         ...(options.replaceExistingSkill ? { replaceExistingSkill: true } : {}),
         ...(options.recoverExistingSkillOnly ? { recoverExistingSkillOnly: true } : {}),
       },
@@ -189,11 +185,7 @@ export class DesktopMarketplaceCapabilityInstaller implements MarketplaceCapabil
       : {}
   }
 
-  async setup(
-    record: InstallRecord,
-    prepared: { addTarget?: string | null },
-    options: { mode: MarketplacePluginSetupMode },
-  ) {
+  async setup(record: InstallRecord, prepared: { addTarget?: string | null }, options: { mode: "explicit" }) {
     if (record.kind === "plugin") {
       const authorizationContractDigest = await this.#options.authorizePlugin(record.id, options.mode)
       return authorizationContractDigest ? { authorizationContractDigest } : null
@@ -263,14 +255,6 @@ export class DesktopMarketplaceCapabilityInstaller implements MarketplaceCapabil
       await this.#options.refreshPetProvider(identity.id)
       this.#options.publishPluginChange()
     }
-  }
-
-  scheduleStartupRefresh(identities: readonly { id: string; kind: "mcp-server" | "plugin" | "skill" }[]) {
-    this.#options.scheduleStartupRefresh(
-      identities.flatMap((identity) =>
-        identity.kind === "mcp-server" ? [] : [{ id: identity.id, kind: identity.kind }],
-      ),
-    )
   }
 
   verifyAuthorization(record: InstallRecord, authorizationContractDigest: string) {

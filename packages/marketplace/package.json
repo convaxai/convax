@@ -1,7 +1,7 @@
 {
   "$schema": "https://json.schemastore.org/package.json",
   "name": "@convax/marketplace",
-  "version": "0.2.2",
+  "version": "0.3.0",
   "license": "Apache-2.0",
   "repository": {
     "type": "git",
@@ -37,11 +37,6 @@
       "import": "./dist/server-schema.js",
       "default": "./dist/server-schema.js"
     },
-    "./product-lock": {
-      "types": "./dist/product-lock.d.ts",
-      "import": "./dist/product-lock.js",
-      "default": "./dist/product-lock.js"
-    },
     "./builtin-archive": {
       "types": "./dist/builtin-archive.d.ts",
       "import": "./dist/builtin-archive.js",
@@ -50,7 +45,7 @@
   },
   "scripts": {
     "clean": "rm -rf dist",
-    "build:js": "bun build --production --keep-names --target=node --format=esm --packages=external --sourcemap=linked --root=src --outdir=dist src/index.ts src/schemas.ts src/server-schema.ts src/canonical.ts src/product-lock.ts src/builtin-archive.ts",
+    "build:js": "bun build --production --keep-names --target=node --format=esm --packages=external --sourcemap=linked --root=src --outdir=dist src/index.ts src/schemas.ts src/server-schema.ts src/canonical.ts src/builtin-archive.ts",
     "build:types": "tsc -p tsconfig.build.json",
     "build": "bun run typecheck && bun run clean && bun run build:js && bun run build:types",
     "test": "bun test",

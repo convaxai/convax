@@ -125,7 +125,7 @@ test("Marketplace IPC exposes the dedicated descriptor URL exception and opaque 
   const application = service()
   const dispose = registerMarketplaceIpc(application, () => true)
   const previewToken = `${"p".repeat(64)}.${"s".repeat(43)}`
-  const productLockedConfirmationToken = `${"a".repeat(1_024)}.${"s".repeat(43)}`
+  const confirmationToken = `${"a".repeat(1_024)}.${"s".repeat(43)}`
   await expect(
     handlers.get(marketplaceIpcChannels.previewMarketplace)!(event, {
       url: "https://example.github.io/marketplace.json",
@@ -136,10 +136,10 @@ test("Marketplace IPC exposes the dedicated descriptor URL exception and opaque 
   expect(application.addMarketplace).toHaveBeenCalledWith(previewToken, "1")
   await expect(
     handlers.get(marketplaceIpcChannels.confirmInstall)!(event, {
-      confirmationToken: productLockedConfirmationToken,
+      confirmationToken,
     }),
   ).resolves.toMatchObject({ selectionToken: "s".repeat(24) })
-  expect(application.confirmInstall).toHaveBeenCalledWith(productLockedConfirmationToken, "1")
+  expect(application.confirmInstall).toHaveBeenCalledWith(confirmationToken, "1")
   dispose()
 })
 

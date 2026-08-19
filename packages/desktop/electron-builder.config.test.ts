@@ -75,7 +75,7 @@ describe("Desktop package contents", () => {
       to: "collaboration-protocol",
       filter: ["current.json"],
     })
-    expect(config.extraResources).toContainEqual({
+    expect(config.extraResources).not.toContainEqual({
       from: ".packaging/marketplace-product",
       to: "marketplace-product",
       filter: ["**/*"],

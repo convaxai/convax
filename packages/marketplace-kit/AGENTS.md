@@ -15,13 +15,11 @@ Official Marketplaces. It depends only on the public `@convax/marketplace`,
   Skill archive from the validated manifest. Those generated reference paths are
   reserved and must reject hand-authored shadows.
 - `add-target` is the only supported writer of companion inputs.
-- The Official `catalogs/packaged.json` file selects a bounded generic product
-  byte closure of Plugins and standalone Skills. It does not assign runtime
-  purpose: the Host product lock independently decides whether a selected Plugin
-  is a default install, retired recovery input, or both. Plugin-owned Skills enter
-  only through their owner Plugin closure.
-- Re-staging a product-lock catalog fragment from exact published Official
-  descriptor, Registry, and Showcase bytes must preserve that Registry sequence
-  and metadata Release identity. It may fetch only digest-bound package closure
-  artifacts and must not rebuild or publish Marketplace metadata.
+- A Builtin bundle is an inert, deterministic archive for a host installation that
+  actually depends on those capabilities. This kit does not select Desktop product
+  content, assign default-install policy, or stage a second catalog from a remote
+  Marketplace.
+- External Marketplace packages stay in their published descriptor, Registry,
+  Showcase, and Release lifecycle; authoring tools must not copy a remote catalog
+  into a product-specific distribution channel.
 - Add a failing fixture or temporary-repository test before changing output.

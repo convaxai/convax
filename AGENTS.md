@@ -395,10 +395,10 @@ user directory.
   one global ActiveSet CAS. Runtime principals and leases bind exact revisions,
   ActiveSet digests, and snapshot digests; never reconstruct authority by scanning
   mutable Plugin, Skill, Hook, companion, or authorization directories.
-- Product-lock recovery artifacts are bounded offline inputs only for an explicit
-  retired-major update whose inspected source, id, old version, archive identity,
-  snapshot digest, and Host API major all match. They are never preinstalls,
-  directory-discovered fallbacks, or executable before restart revalidation.
+- Retired-major recovery uses only an ordinary exact-source Marketplace update.
+  Desktop ships no product-selected Marketplace bytes, default installations, or
+  cross-source recovery authority; repaired bytes remain inert until restart
+  revalidation.
 - Plugin contributions and Host API calls are orthogonal and grant no implicit
   authority to each other. Plugin-to-Plugin calls use only the typed Host broker;
   never expose direct objects, direct MessageChannels, service locators, or

@@ -4,16 +4,9 @@ export interface DesktopPackagedSmokeLaunchOptions {
   platform: NodeJS.Platform
 }
 
-export const packagedSmokeOfficialMarketplaceNetworkIsolation =
-  "--host-resolver-rules=MAP convaxai.github.io ^NOTFOUND, MAP github.com ^NOTFOUND"
-
 export function desktopPackagedSmokeLaunchArguments(options: DesktopPackagedSmokeLaunchOptions) {
   return [
     options.executable,
-    // Prove that product-default provisioning consumes packaged bytes. These
-    // exact-host rules fail Official Pages and GitHub Release resolution without
-    // touching the loopback DevTools and OpenCode endpoints used by the harness.
-    packagedSmokeOfficialMarketplaceNetworkIsolation,
     "--remote-debugging-address=127.0.0.1",
     `--remote-debugging-port=${options.debuggerPort}`,
     // The smoke profile must not read or mutate the developer's login Keychain.

@@ -41,28 +41,6 @@ async function assertPackedDependency(tarball: string, name: string, expected: s
   }
 }
 
-async function assertPackedLockInputParser(cliPath: string, cwd: string): Promise<void> {
-  const child = Bun.spawn(
-    [
-      "bun",
-      cliPath,
-      "lock-input",
-      "--catalog",
-      "missing-catalog",
-      "--builtin",
-      "missing-builtin",
-      "--out",
-      "missing-output.json",
-    ],
-    { cwd, stdout: "pipe", stderr: "pipe" },
-  )
-  const [stderr, exitCode] = await Promise.all([new Response(child.stderr).text(), child.exited])
-  if (exitCode === 0) throw new Error("packed lock-input parser unexpectedly accepted missing fixture directories")
-  if (stderr.includes("lock-input requires --catalog, --builtin, and --out")) {
-    throw new Error("packed lock-input bin dropped its first named option")
-  }
-}
-
 const packageRoot = resolve(import.meta.dir, "..")
 const marketplaceRoot = resolve(packageRoot, "../marketplace")
 const boundedValueRoot = resolve(packageRoot, "../bounded-value")
@@ -174,10 +152,6 @@ void [
   )
   await run(["bun", "install", "--ignore-scripts"], consumerRoot)
   await run([join(packageRoot, "node_modules/.bin/tsc"), "-p", "tsconfig.json"], consumerRoot)
-  await assertPackedLockInputParser(
-    join(consumerRoot, "node_modules/@convax/marketplace-kit/dist/cli.js"),
-    consumerRoot,
-  )
 } finally {
   await rm(temporaryRoot, { recursive: true, force: true })
 }

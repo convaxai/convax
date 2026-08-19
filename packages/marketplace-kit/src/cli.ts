@@ -7,8 +7,6 @@ import {
   checkMarketplace,
   changedMarketplaceVersions,
   createMarketplaceTemplate,
-  composeProductLockInput,
-  stagePublishedProductLockCatalog,
   type MarketplacePublishSelection,
   type MarketplaceRemovalSelection,
   type StarterKind,
@@ -109,38 +107,6 @@ export async function runMarketplaceCli(
     await buildBuiltinBundle({ root: rootArgument ?? ".", outDir: option(rest, "--out") ?? "dist/builtin" })
     return
   }
-  if (command === "stage-product-lock-catalog") {
-    if (!rootArgument || rootArgument.startsWith("--")) {
-      throw new TypeError("stage-product-lock-catalog requires a Marketplace root")
-    }
-    const descriptorPath = option(rest, "--descriptor")
-    const registryPath = option(rest, "--registry")
-    const showcasePath = option(rest, "--showcase")
-    const outDir = option(rest, "--out")
-    if (!descriptorPath || !registryPath || !showcasePath || !outDir) {
-      throw new TypeError("stage-product-lock-catalog requires --descriptor, --registry, --showcase, and --out")
-    }
-    await stagePublishedProductLockCatalog({
-      root: rootArgument,
-      outDir,
-      descriptorPath,
-      registryPath,
-      showcasePath,
-      fetchArtifact,
-    })
-    return
-  }
-  if (command === "lock-input") {
-    const lockInputArgs = rootArgument === undefined ? rest : [rootArgument, ...rest]
-    const catalogDir = option(lockInputArgs, "--catalog")
-    const builtinDir = option(lockInputArgs, "--builtin")
-    const outFile = option(lockInputArgs, "--out")
-    if (!catalogDir || !builtinDir || !outFile) {
-      throw new TypeError("lock-input requires --catalog, --builtin, and --out")
-    }
-    await composeProductLockInput({ catalogDir, builtinDir, outFile })
-    return
-  }
   if (command === "add") {
     if (!rootArgument) throw new TypeError("add requires a source directory")
     await addMarketplaceDirectory(option(rest, "--root") ?? ".", rootArgument)
@@ -162,9 +128,7 @@ export async function runMarketplaceCli(
     await addTarget(option(rest, "--root") ?? ".", rootArgument, { target, file })
     return
   }
-  throw new TypeError(
-    "usage: convax-marketplace check|changed|build-index|bundle|stage-product-lock-catalog|lock-input|add|new|add-target",
-  )
+  throw new TypeError("usage: convax-marketplace check|changed|build-index|bundle|add|new|add-target")
 }
 
 if (import.meta.main) {

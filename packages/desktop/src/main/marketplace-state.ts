@@ -41,7 +41,7 @@ export interface RuntimePreference {
   sourceKey: SourceKey
 }
 
-export interface ProvisioningDecision {
+interface LegacyProvisioningDecision {
   decision: "removed-by-user"
   identity: InstalledIdentity
   marketplaceId: string
@@ -89,10 +89,9 @@ export interface CapabilityTransition {
 export interface MarketplaceState {
   executionGrants: ExecutionGrant[]
   installations: InstallRecord[]
-  provisioningDecisions: ProvisioningDecision[]
   revision: number
   runtimePreferences: RuntimePreference[]
-  schema: "convax.marketplace-state/1"
+  schema: "convax.marketplace-state/2"
   transitions: CapabilityTransition[]
 }
 
@@ -129,14 +128,12 @@ const maxStateBytes = 32 * 1024 * 1024
 const maxInstallations = 16_384
 const maxExecutionGrants = 16_384
 const maxRuntimePreferences = 16_384
-const maxProvisioningDecisions = 16_384
 const maxTransitions = 4_096
 const allowedKinds = new Set<MarketplaceItemKind>(["mcp-server", "plugin", "skill"])
 const allowedRuntimeSurfaces = new Set<RuntimeSurface>(["agent", "agent-and-convax", "none"])
 const stateKeys = [
   "executionGrants",
   "installations",
-  "provisioningDecisions",
   "revision",
   "runtimePreferences",
   "schema",
@@ -224,7 +221,7 @@ function isRuntimePreference(value: unknown): value is RuntimePreference {
   )
 }
 
-function isProvisioningDecision(value: unknown): value is ProvisioningDecision {
+function isLegacyProvisioningDecision(value: unknown): value is LegacyProvisioningDecision {
   return (
     isRecord(value) &&
     exactKeys(value, [
@@ -348,11 +345,27 @@ function assertUnique<T>(values: readonly T[], key: (value: T) => string, label:
   }
 }
 
-function validateState(value: unknown): MarketplaceState {
+function normalizeLegacyState(value: unknown): unknown {
+  if (!isRecord(value) || value.schema !== "convax.marketplace-state/1") return value
+  const legacyKeys = [...stateKeys, "provisioningDecisions"]
+  if (
+    !exactKeys(value, legacyKeys) ||
+    !Array.isArray(value.provisioningDecisions) ||
+    value.provisioningDecisions.length > 16_384 ||
+    !value.provisioningDecisions.every(isLegacyProvisioningDecision)
+  ) {
+    throw new Error("Marketplace state is invalid")
+  }
+  const { provisioningDecisions: _retiredDecisions, ...current } = value
+  return { ...current, schema: "convax.marketplace-state/2" }
+}
+
+function validateState(input: unknown): MarketplaceState {
+  const value = normalizeLegacyState(input)
   if (
     !isRecord(value) ||
     !exactKeys(value, stateKeys) ||
-    value.schema !== "convax.marketplace-state/1" ||
+    value.schema !== "convax.marketplace-state/2" ||
     !isNonNegativeInteger(value.revision) ||
     !Array.isArray(value.installations) ||
     value.installations.length > maxInstallations ||
@@ -363,9 +376,6 @@ function validateState(value: unknown): MarketplaceState {
     !Array.isArray(value.runtimePreferences) ||
     value.runtimePreferences.length > maxRuntimePreferences ||
     !value.runtimePreferences.every(isRuntimePreference) ||
-    !Array.isArray(value.provisioningDecisions) ||
-    value.provisioningDecisions.length > maxProvisioningDecisions ||
-    !value.provisioningDecisions.every(isProvisioningDecision) ||
     !Array.isArray(value.transitions) ||
     value.transitions.length > maxTransitions ||
     !value.transitions.every(isTransition)
@@ -383,11 +393,6 @@ function validateState(value: unknown): MarketplaceState {
     (record) => `${identityKey(record.identity)}\0${record.sourceKey}`,
     "RuntimePreference",
   )
-  assertUnique(
-    value.provisioningDecisions,
-    (record) => `${identityKey(record.identity)}\0${record.marketplaceId}`,
-    "ProvisioningDecision",
-  )
   assertUnique(value.transitions, (record) => record.id, "CapabilityTransition")
   const installedByIdentity = new Map(value.installations.map((record) => [identityKey(record), record]))
   for (const record of [...value.executionGrants, ...value.runtimePreferences]) {
@@ -403,45 +408,18 @@ function emptyState(): MarketplaceState {
   return {
     executionGrants: [],
     installations: [],
-    provisioningDecisions: [],
     revision: 0,
     runtimePreferences: [],
-    schema: "convax.marketplace-state/1",
+    schema: "convax.marketplace-state/2",
     transitions: [],
   }
 }
 
-export interface MarketplaceInstalledSourceMigration {
-  readonly fromSourceKey: SourceKey
-  readonly id: string
-  readonly kind: "plugin"
-  readonly toSourceKey: SourceKey
-}
-
-function sourceMigrationKey(input: MarketplaceInstalledSourceMigration) {
-  return `${input.kind}\0${input.id}\0${input.fromSourceKey}\0${input.toSourceKey}`
-}
-
-function assertSourceLocks(
-  previous: MarketplaceState,
-  next: MarketplaceState,
-  allowedSourceMigrations: ReadonlySet<string>,
-) {
+function assertSourceLocks(previous: MarketplaceState, next: MarketplaceState) {
   const previousByIdentity = new Map(previous.installations.map((record) => [identityKey(record), record]))
   for (const record of next.installations) {
     const installed = previousByIdentity.get(identityKey(record))
-    const migrationAllowed =
-      installed?.kind === "plugin" &&
-      record.kind === "plugin" &&
-      allowedSourceMigrations.has(
-        sourceMigrationKey({
-          fromSourceKey: installed.sourceKey,
-          id: record.id,
-          kind: "plugin",
-          toSourceKey: record.sourceKey,
-        }),
-      )
-    if (installed && installed.sourceKey !== record.sourceKey && !migrationAllowed) {
+    if (installed && installed.sourceKey !== record.sourceKey) {
       throw new Error("Installed capability cannot change Marketplace source")
     }
   }
@@ -453,32 +431,10 @@ function stableState(value: MarketplaceState) {
 
 export class FileMarketplaceStateStore {
   readonly #file: string
-  readonly #sourceMigrations: ReadonlySet<string>
   #tail = Promise.resolve()
 
-  constructor(
-    file: string,
-    options: {
-      readonly sourceMigrations?: readonly MarketplaceInstalledSourceMigration[]
-    } = {},
-  ) {
+  constructor(file: string) {
     this.#file = file
-    const sourceMigrations = (options.sourceMigrations ?? []).map((migration) => {
-      if (
-        migration.kind !== "plugin" ||
-        !/^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/.test(migration.id) ||
-        !/^[a-f0-9]{64}$/.test(migration.fromSourceKey) ||
-        !/^[a-f0-9]{64}$/.test(migration.toSourceKey) ||
-        migration.fromSourceKey === migration.toSourceKey
-      ) {
-        throw new Error("Marketplace installed source migration is invalid")
-      }
-      return sourceMigrationKey(migration)
-    })
-    if (new Set(sourceMigrations).size !== sourceMigrations.length) {
-      throw new Error("Marketplace installed source migrations must be unique")
-    }
-    this.#sourceMigrations = new Set(sourceMigrations)
   }
 
   async read(): Promise<MarketplaceState> {
@@ -509,7 +465,7 @@ export class FileMarketplaceStateStore {
       await mutate(next)
       next.revision = previous.revision + 1
       const validated = validateState(next)
-      assertSourceLocks(previous, validated, this.#sourceMigrations)
+      assertSourceLocks(previous, validated)
       await this.#write(validated)
       return structuredClone(validated)
     })
