@@ -9,7 +9,9 @@ their own scope.
 ## Repository shape
 
 - `packages/desktop`: private Electron application and composition root.
-- `packages/agent-runtime`: host-agnostic OpenCode integration.
+- `packages/agent-runtime`: host-agnostic Agent integration; the current product
+  OpenCode adapter and isolated DSH adoption-gate Host adapter coexist only during
+  the bounded cutover.
 - `packages/canvas`, `packages/project`, `packages/project-files`, and
   `packages/workbench`: product domain and coordination packages.
 - `packages/bounded-value`, `packages/uri`, and `packages/collaboration`: pure
@@ -102,7 +104,7 @@ the contract instead of choosing the more convenient interpretation.
 | Host API, Catalog release, schema, API availability, generated Plugin API docs           | [`docs/plugin-host-change-governance.md`](docs/plugin-host-change-governance.md), [`packages/plugin-api/AGENTS.md`](packages/plugin-api/AGENTS.md), and [`docs/plugin-skill-platform.md`](docs/plugin-skill-platform.md)                                                             |
 | Plugin manifest, contribution, inter-Plugin export/import, SDK authoring                 | [`packages/plugin-sdk/AGENTS.md`](packages/plugin-sdk/AGENTS.md), [`docs/plugin-skill-platform.md`](docs/plugin-skill-platform.md), and [`docs/plugin-canvas-capabilities.md`](docs/plugin-canvas-capabilities.md)                                                                   |
 | Plugin document styling, semantic tokens, sandbox-safe UI foundations                    | [`packages/plugin-ui/AGENTS.md`](packages/plugin-ui/AGENTS.md) and the Plugin SDK contract                                                                                                                                                                                           |
-| Agent, OpenCode, Skill, Hook, Agent tool, protected path                                 | [`docs/architecture.md` §§7–8](docs/architecture.md#7-agent-tools-and-skills), [`docs/plugin-skill-platform.md`](docs/plugin-skill-platform.md), and [`packages/agent-runtime/AGENTS.md`](packages/agent-runtime/AGENTS.md)                                                          |
+| Agent, OpenCode, DSH, Skill, Hook, Agent tool, protected path                            | [`docs/architecture.md` §§7–8](docs/architecture.md#7-agent-tools-and-skills), [`docs/plugin-skill-platform.md`](docs/plugin-skill-platform.md), and [`packages/agent-runtime/AGENTS.md`](packages/agent-runtime/AGENTS.md)                                                          |
 | MCP, Agent MCP, remote server, OAuth, managed stdio                                      | [`docs/architecture.md` “MCP Server runtime boundary”](docs/architecture.md#mcp-server-runtime-boundary), §§7–8, and the Agent Runtime/Desktop Main contracts                                                                                                                        |
 | Collaboration, Yjs, ProjectIndex, Canvas shard, PeerJS, checkpoint, causal floor         | [`docs/architecture.md` §§2–6](docs/architecture.md#2-terms), the single current protocol descriptor, and the Canvas/Collaboration/Project/Desktop/API contracts                                                                                                                     |
 | Marketplace, Registry, SourceKey, install, snapshot, ActiveSet, provisioning, recovery   | [`docs/architecture.md` §§5–6](docs/architecture.md#5-persistence-map), [`docs/plugin-skill-platform.md`](docs/plugin-skill-platform.md), and the Marketplace/Desktop Main contracts                                                                                                 |
@@ -261,7 +263,7 @@ selector or runtime fallback.
 | `@convax/plugin-api`        | Headless Plugin Host API catalog, API SemVer/history, availability contracts, generated validators/types/client metadata, and deterministic human/Skill reference generation inputs                                         | Desktop state, Plugin identity policy, concrete handlers, filesystem/network adapters                               |
 | `@convax/plugin-sdk`        | Headless `convax.plugin/8` manifest/contribution and localization ABI, Plugin-to-Plugin export/import contracts, bounded-value schema integration, SemVer matching, and deterministic Plugin/Skill reference inputs         | ActiveSet selection, runtime binding, leases, grants, execution, IPC, I/O, concrete Plugins                         |
 | `@convax/plugin-ui`         | Browser-safe semantic tokens and minimal interaction foundations for sandboxed Plugin documents                                                                                                                             | React, Desktop appearance state, Host transport, or concrete Plugin composition                                     |
-| `@convax/agent-runtime`     | Generic OpenCode adapter, sessions, resources, tool-provider bridge, protected-path enforcement                                                                                                                             | Convax Project/Canvas/UI policy or imports from other Convax packages                                               |
+| `@convax/agent-runtime`     | Generic Agent contracts, current OpenCode adapter, DSH Host ApiProxy adapter/carrier, sessions, resources and tool-provider bridge                                                                                          | Convax Project/Canvas/UI policy, Electron process ownership, or imports from other Convax packages                  |
 | `@convax/marketplace`       | Marketplace refs, public schemas, canonical source identity, strict validation, bounded Plugin-category display taxonomy, Catalog aggregation and source-conflict rules                                                     | Filesystem/network adapters, Electron/UI, concrete packages, installation or execution                              |
 | `@convax/marketplace-kit`   | Deterministic authoring-time package, Registry, Showcase, bundle and companion metadata generation                                                                                                                          | Desktop runtime, concrete marketplace content, credentials, or executing package bytes                              |
 | `create-convax-marketplace` | Authoring-time scaffold CLI backed by `@convax/marketplace-kit`                                                                                                                                                             | Runtime Marketplace state, publishing credentials, or a second validator                                            |
@@ -299,7 +301,9 @@ docs ──> no Convax package
 
 - Import another package only through an exported package subpath.
 - Never use a relative path that escapes a package.
-- Only `@convax/agent-runtime` may import `opencode-ai` or `@opencode-ai/*`.
+- Only `@convax/agent-runtime` may import `opencode-ai`, `@opencode-ai/*`, or
+  `@deepseek-ai/*`. DSH process ownership and Project binding remain Desktop
+  Main concerns exposed through host-neutral ports.
 - Node-only exports such as `@convax/project/node` and
   `@convax/agent-runtime/node` are Desktop Main adapters, never Renderer imports.
 - A graph change is an architecture decision. Update this file, canonical

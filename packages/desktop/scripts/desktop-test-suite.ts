@@ -3,9 +3,11 @@ import { parseDesktopTestShard, selectDesktopTestShard } from "./desktop-test-sh
 const isolatedModuleMockTests = [
   "electron.vite.config.test.ts",
   "src/main/canvas-external-media-drag-ipc.test.ts",
+  "src/main/electron-peerjs-transport-host.test.ts",
   "src/main/electron-plugin-service-browser-authorization.test.ts",
   "src/main/main-window-controls-ipc.test.ts",
   "src/main/plugin-capability-ipc.test.ts",
+  "src/main/plugin-surface-ipc.test.ts",
   "src/main/workspace-system-status-ipc.test.ts",
   "src/renderer/canvas-card-conversation-panel-interaction.test.tsx",
   "src/renderer/pet-settings-host.test.tsx",

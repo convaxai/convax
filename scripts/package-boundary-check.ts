@@ -325,8 +325,7 @@ requireContractMarkers("apps/api/AGENTS.md", collaborationGovernanceContracts[7]
   "registered-scope service registry is bounded advisory anti-rollback/discovery",
   "both a content certificate",
 ])
-if (!(await Bun.file(apiManifestPath).exists()))
-  throw new Error("apps/api/package.json is required")
+if (!(await Bun.file(apiManifestPath).exists())) throw new Error("apps/api/package.json is required")
 if (
   desktopComposition.includes("RemoteCapabilityRegistryClient") ||
   desktopComposition.includes("registry/v1/index.json") ||
@@ -568,9 +567,12 @@ for (const workspacePackage of packages) {
     }
     if (
       workspacePackage.name !== "@convax/agent-runtime" &&
-      (specifier === "opencode-ai" || specifier.startsWith("opencode-ai/") || specifier.startsWith("@opencode-ai/"))
+      (specifier === "opencode-ai" ||
+        specifier.startsWith("opencode-ai/") ||
+        specifier.startsWith("@opencode-ai/") ||
+        specifier.startsWith("@deepseek-ai/"))
     ) {
-      throw new Error(`${sourcePath}: OpenCode imports must stay behind @convax/agent-runtime`)
+      throw new Error(`${sourcePath}: Agent backend imports must stay behind @convax/agent-runtime`)
     }
     if (nodeBuiltinSpecifiers.has(specifier) && !canImportNodeBuiltins(workspacePackage.name, sourcePath)) {
       throw new Error(`${sourcePath}: Node built-in ${specifier} is outside an approved Node adapter directory`)
@@ -665,7 +667,10 @@ for (const workspacePackage of packages) {
 
   if (workspacePackage.name !== "@convax/agent-runtime") {
     const forbiddenDependency = Object.keys(runtimeDependencies).find(
-      (dependency) => dependency === "opencode-ai" || dependency.startsWith("@opencode-ai/"),
+      (dependency) =>
+        dependency === "opencode-ai" ||
+        dependency.startsWith("@opencode-ai/") ||
+        dependency.startsWith("@deepseek-ai/"),
     )
     if (forbiddenDependency) {
       throw new Error(`${workspacePackage.name}: ${forbiddenDependency} must stay behind @convax/agent-runtime`)

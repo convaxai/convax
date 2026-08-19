@@ -50,6 +50,11 @@ contract and its routed references.
 - Main owns Electron/native I/O, Project Node adapters, authoritative repositories,
   ActiveSet and installed capability authority, Agent runtime composition, trusted
   IPC, and the signed packaged-application update lifecycle.
+- The DSH adoption gate uses one utility process and one independently issued Host
+  MCP capability per live Project. Main owns the Project registry, MessagePort
+  transfer, startup deadline, revocation and forced termination; Agent Runtime owns
+  only the host-neutral official Host ApiProxy adapter. This gate is not a product
+  backend router or an OpenCode fallback.
 - Preload exposes a narrow typed bridge. It owns no durable or business state.
 - Renderer owns presentation, controller composition, fallible projections, and
   user preferences. It never imports Node or Electron.
@@ -63,6 +68,10 @@ contract and its routed references.
   Electron and Node built-ins may remain external, the ASAR must not contain or
   depend on `node_modules`, and Main stays CommonJS so Electron Vite cannot inject
   its ESM compatibility shim into dependency-bundled source strings.
+- The explicit DSH adoption-gate artifact may additionally stage one exact DSH
+  child-only `node_modules` closure outside ASAR. Ordinary Main/Preload never resolve
+  packages from it. The app-owned Bun executable is a separate resource and must not
+  be sourced from an Agent backend binary.
 - Main also composes the PeerJS data plane, its independently bound channels,
   user-managed private identity-key files, Project-scoped writer coordination, and
   typed ports to collaboration, Project, Canvas, and control-plane owners. It never

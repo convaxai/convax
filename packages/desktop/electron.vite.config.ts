@@ -7,6 +7,7 @@ import type { Plugin } from "vite"
 import { resolveDesktopBuildFeatureFlags } from "./build-feature-flags"
 
 const desktopBuildFeatureFlags = resolveDesktopBuildFeatureFlags(process.env)
+const dshAdoptionGateBuild = process.env.CONVAX_DSH_ADOPTION_GATE === "true"
 
 const dependencyPathPattern = /[\\/]node_modules[\\/]/
 const workspaceDistPathPattern = /[\\/]packages[\\/][^\\/]+[\\/]dist(?:[\\/]|$)/
@@ -31,6 +32,21 @@ export function workspaceDistFullReloadPlugin(): Plugin {
       // misclassify their minified exports as component families across builds.
       this.environment.hot.send({ path: "*", type: "full-reload" })
       return []
+    },
+  }
+}
+
+/** Inline DSH package attribution because the staged utility closure has no dependency-relative package.json. */
+export function dshAdoptionGatePackageMetadataPlugin(): Plugin {
+  return {
+    name: "dsh-adoption-gate-package-metadata",
+    transform(code, id) {
+      if (!id.includes("@deepseek-ai")) return
+      const transformed = code.replace(
+        /createRequire\(import\.meta\.url\)\((["'])\.\.\/package\.json\1\)/gu,
+        '({ version: "0.1.0-rc.7" })',
+      )
+      return transformed === code ? undefined : { code: transformed, map: null }
     },
   }
 }
@@ -95,6 +111,7 @@ function runtimeModuleLoads(code: string) {
 export function assertPackagedRuntimeBundle(
   bundle: Record<string, SandboxedPreloadOutput>,
   surface: "Main" | "Preload",
+  allowedComputedImportEntries: readonly string[] = [],
 ) {
   const emittedFiles = new Set(Object.keys(bundle))
   for (const [fileName, output] of Object.entries(bundle)) {
@@ -105,6 +122,7 @@ export function assertPackagedRuntimeBundle(
       ...(output.code ? runtimeModuleLoads(output.code) : []),
     ].filter(
       (specifier) =>
+        !(specifier === "<dynamic import>" && allowedComputedImportEntries.includes(fileName)) &&
         !emittedFiles.has(specifier) &&
         !specifier.startsWith(".") &&
         !isDesktopHostExternalImport(specifier),
@@ -117,12 +135,15 @@ export function assertPackagedRuntimeBundle(
   }
 }
 
-export function packagedRuntimeBoundaryPlugin(surface: "Main" | "Preload"): Plugin {
+export function packagedRuntimeBoundaryPlugin(
+  surface: "Main" | "Preload",
+  allowedComputedImportEntries: readonly string[] = [],
+): Plugin {
   return {
     name: `convax-packaged-${surface.toLowerCase()}-runtime-boundary`,
     apply: "build",
     generateBundle(_options, bundle) {
-      assertPackagedRuntimeBundle(bundle, surface)
+      assertPackagedRuntimeBundle(bundle, surface, allowedComputedImportEntries)
     },
   }
 }
@@ -164,13 +185,22 @@ export const desktopRendererInputs = {
   index: "src/renderer/index.html",
 } as const
 
+export function desktopMainInputs(includeDshAdoptionGate: boolean) {
+  return includeDshAdoptionGate
+    ? { index: "src/main/index.ts", "dsh-project-process-smoke": "src/main/dsh-project-process-smoke.ts" }
+    : "src/main/index.ts"
+}
+
 export default defineConfig({
   main: {
-    plugins: [packagedRuntimeBoundaryPlugin("Main")],
+    plugins: [
+      ...(dshAdoptionGateBuild ? [dshAdoptionGatePackageMetadataPlugin()] : []),
+      packagedRuntimeBoundaryPlugin("Main", dshAdoptionGateBuild ? ["dsh-project-process-smoke.cjs"] : []),
+    ],
     build: {
       externalizeDeps: false,
       rollupOptions: {
-        input: "src/main/index.ts",
+        input: desktopMainInputs(dshAdoptionGateBuild),
         output: {
           entryFileNames: "[name].cjs",
           format: "cjs",

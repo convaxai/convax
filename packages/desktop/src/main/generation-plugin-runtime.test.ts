@@ -694,10 +694,7 @@ describe("GenerationPluginRuntime", () => {
       authorization_id: "request_0123456789abcdef",
       schema: "convax.plugin-service-external-authorization-completion/1",
     })
-    expect(clients[0]!.calls.map(({ name }) => name)).toEqual([
-      "service.authorize",
-      "service.authorization.complete",
-    ])
+    expect(clients[0]!.calls.map(({ name }) => name)).toEqual(["service.authorize", "service.authorization.complete"])
     expect(clients[0]!.closed).toBe(0)
   })
 
@@ -2009,19 +2006,19 @@ describe("GenerationPluginRuntime", () => {
         size: 20,
       }),
       {
-        bunRuntime: { command: "/app/resources/opencode/bin/opencode", env: { BUN_BE_BUN: "1" } },
+        bunRuntime: { command: "/app/resources/bun/bin/bun", env: {} },
       },
     )
 
     await setupResult.runtime.callTool("image-tools/generate.image", {})
 
-    expect(setupResult.options[0]!.command).toBe("/app/resources/opencode/bin/opencode")
+    expect(setupResult.options[0]!.command).toBe("/app/resources/bun/bin/bun")
     expect(setupResult.options[0]!.args).toEqual([
       "/plugin-installations/closures/snapshot/companion/entrypoint",
       "serve",
       "--stdio",
     ])
-    expect(setupResult.options[0]!.env).toMatchObject({ BUN_BE_BUN: "1" })
+    expect(setupResult.options[0]!.env).not.toHaveProperty("BUN_BE_BUN")
   })
 
   test("fails closed when a lease-bound convax-bun companion has no app-owned Bun runtime", async () => {

@@ -6,6 +6,8 @@ import desktopViteConfig, {
   assertSandboxedPreloadBundle,
   desktopPreloadInputs,
   desktopRendererInputs,
+  desktopMainInputs,
+  dshAdoptionGatePackageMetadataPlugin,
   isWorkspaceDistPath,
   workspaceDistFullReloadPlugin,
 } from "./electron.vite.config"
@@ -90,6 +92,19 @@ describe("Desktop Main dependency packaging", () => {
     ).toThrow("@convax/marketplace, <dynamic import>")
   })
 
+  test("admits computed imports only for an explicitly named DSH adoption-gate entry", () => {
+    const bundle = {
+      "dsh-project-process-smoke.cjs": {
+        code: "import(runtimePluginUrl)",
+        imports: [],
+        isEntry: true,
+        type: "chunk" as const,
+      },
+    }
+    expect(() => assertPackagedRuntimeBundle(bundle, "Main")).toThrow("<dynamic import>")
+    expect(() => assertPackagedRuntimeBundle(bundle, "Main", ["dsh-project-process-smoke.cjs"])).not.toThrow()
+  })
+
   test("allows only emitted chunks plus Electron and Node host modules", () => {
     expect(() =>
       assertPackagedRuntimeBundle(
@@ -110,6 +125,15 @@ describe("Desktop Main dependency packaging", () => {
   test("bundles collaboration with its Main consumers so Electron loads one Yjs instance", () => {
     if (typeof desktopViteConfig === "function") throw new Error("Expected a static Electron Vite config")
     expect(desktopViteConfig.main?.build?.externalizeDeps).toBe(false)
+  })
+
+  test("adds the DSH smoke entry only to the explicit adoption-gate build", () => {
+    expect(desktopMainInputs(false)).toBe("src/main/index.ts")
+    expect(desktopMainInputs(true)).toEqual({
+      index: "src/main/index.ts",
+      "dsh-project-process-smoke": "src/main/dsh-project-process-smoke.ts",
+    })
+    expect(dshAdoptionGatePackageMetadataPlugin().name).toBe("dsh-adoption-gate-package-metadata")
   })
 })
 

@@ -21,15 +21,15 @@ describe("Desktop packaged runtime composition", () => {
     ).toBeUndefined()
   })
 
-  test("reuses the packaged OpenCode executable as the app-owned Bun CLI", () => {
+  test("uses an independently staged app-owned Bun CLI", () => {
     const resourcesDirectory = join("Applications", "Convax.app", "Contents", "Resources")
     expect(desktopBunRuntime({ isPackaged: true, platform: "darwin", resourcesDirectory })).toEqual({
-      command: join(resourcesDirectory, "opencode", "bin", "opencode"),
-      env: { BUN_BE_BUN: "1" },
+      command: join(resourcesDirectory, "bun", "bin", "bun"),
+      env: {},
     })
     expect(desktopBunRuntime({ isPackaged: true, platform: "win32", resourcesDirectory })).toEqual({
-      command: join(resourcesDirectory, "opencode", "bin", "opencode.exe"),
-      env: { BUN_BE_BUN: "1" },
+      command: join(resourcesDirectory, "bun", "bin", "bun.exe"),
+      env: {},
     })
     expect(
       desktopBunRuntime({
@@ -39,8 +39,8 @@ describe("Desktop packaged runtime composition", () => {
         resourcesDirectory: "unused",
       }),
     ).toEqual({
-      command: join("/repo/packages/desktop", ".packaging", "runtime", "opencode", "bin", "opencode"),
-      env: { BUN_BE_BUN: "1" },
+      command: join("/repo/packages/desktop", ".packaging", "runtime", "bun", "bin", "bun"),
+      env: {},
     })
   })
 })

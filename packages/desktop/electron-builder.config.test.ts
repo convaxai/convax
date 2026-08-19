@@ -85,6 +85,11 @@ describe("Desktop package contents", () => {
       to: "opencode",
       filter: ["**/*"],
     })
+    expect(config.extraResources).toContainEqual({
+      from: ".packaging/runtime/bun",
+      to: "bun",
+      filter: ["**/*"],
+    })
   })
 
   test("hardens the packaged Electron executable around its integrity-checked ASAR", () => {

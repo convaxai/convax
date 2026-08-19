@@ -16,6 +16,9 @@ authority and lifecycle coordination, not reusable domain semantics.
 - Installed Marketplace/Plugin/Skill/MCP authority, immutable Plugin closures,
   ActiveSet selection and leases, verified executable lifecycle, and Agent runtime
   configuration.
+- DSH adoption-gate Project process registry, private MessagePort transfer,
+  Project-keyed runtime roots, Host MCP capability issuance/revocation, startup
+  deadline, graceful close, and forced child termination.
 - Main-owned cancellation, recovery, sender binding, and runtime disposal.
 
 ## Baseline rules
@@ -28,6 +31,9 @@ authority and lifecycle coordination, not reusable domain semantics.
 - Keep packaged Main as one self-contained CommonJS dependency bundle. Only Electron
   and Node built-ins may remain external; a bare package import or packaged
   `node_modules` dependency is a build failure.
+- Keep DSH Cordis dynamic imports inside the explicit adoption-gate entry and resolve
+  them only from the staged child runtime closure. Product Main must not import that
+  closure. Package the app-owned Bun executable independently from OpenCode.
 - Call domain packages through exported typed ports. Do not implement Canvas,
   Project, Workbench, Marketplace-schema, or Agent-runtime invariants in Main.
 - Main's Canvas application service/repository is the sole authoritative document

@@ -198,8 +198,7 @@ export class ManagedMcpRuntimeManager {
       this.#bunRuntime &&
       (!path.isAbsolute(this.#bunRuntime.command) ||
         this.#bunRuntime.command.includes("\0") ||
-        Object.keys(this.#bunRuntime.env).length !== 1 ||
-        this.#bunRuntime.env.BUN_BE_BUN !== "1")
+        Object.keys(this.#bunRuntime.env).length !== 0)
     ) {
       throw new Error("Managed MCP app-owned Bun runtime is invalid")
     }
@@ -259,7 +258,8 @@ export class ManagedMcpRuntimeManager {
         throw new Error("Managed MCP executable changed while its launch snapshot was created")
       }
       await fs.chmod(snapshot, 0o700)
-      const isBunCompanion = bytes.subarray(0, Buffer.byteLength(bunCompanionHeader)).toString("utf8") === bunCompanionHeader
+      const isBunCompanion =
+        bytes.subarray(0, Buffer.byteLength(bunCompanionHeader)).toString("utf8") === bunCompanionHeader
       if (isBunCompanion && !this.#bunRuntime) throw new Error("Managed MCP app-owned Bun runtime is unavailable")
       const client = new StdioMcpClient({
         args: isBunCompanion ? [snapshot, ...publication.launch.args] : [...publication.launch.args],

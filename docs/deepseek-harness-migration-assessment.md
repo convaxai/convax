@@ -1,10 +1,16 @@
 # DeepSeek Harness migration assessment
 
-Status: accepted target design; implementation-ready after the two Go/No-Go proofs
-in section 13. This document is not the current runtime contract and does not by
-itself authorize removing OpenCode from a release.
+Status: accepted target design; the macOS arm64 adoption-gate implementation has
+passed both Go/No-Go proofs in section 13. Product cutover remains M3 work, so this
+document does not by itself authorize removing the current OpenCode product path.
 
 Research date: 2026-08-18.
+
+Implementation proof date: 2026-08-19.
+
+The executable proof is intentionally separate from the product entry. The packaged
+gate contains no OpenCode runtime, while the ordinary Desktop product continues to
+use its current OpenCode composition until M3 changes the public runtime path.
 
 ## 1. Decision
 
@@ -399,6 +405,27 @@ The implementation is acceptable only if it also demonstrates:
 Remote MCP OAuth, OpenCode session import/Data Fixer, OpenCode Hook ABI
 compatibility, automatic crash recovery, hot profile replacement, and an additional
 Convax control-plane protocol are not Go/No-Go gates.
+
+### Recorded implementation evidence
+
+The implementation on this branch pins DSH `0.1.0-rc.7`, stages its exact dependency
+closure and a separate app-owned Bun, and builds a dedicated Electron entry whose
+resources contain DSH but no OpenCode directory. On macOS arm64, the packaged entry
+reported `DSH_PROJECT_ISOLATION_POC_OK` after:
+
+- creating two concurrent Project children and separate sessions;
+- carrying official Host ApiProxy request, response, event-stream, cancellation,
+  and reverse approval traffic over private Electron MessagePorts;
+- isolating cwd, persona, Skills, tool declarations, Host MCP bearer capabilities,
+  provider routes, sessions, persisted event logs, and event subscriptions;
+- rejecting cross-Project session-history lookup and keeping bearer-token tool
+  discovery scoped to the issuing Project; and
+- closing, reopening, and reading each Project's own durable session state.
+
+The staged DSH closure is approximately 271 MiB and the independent Bun artifact is
+approximately 60 MiB on this platform. Size reduction, Windows/Linux proof, product
+IPC cutover, automatic crash recovery, Remote MCP OAuth, and Hook ABI replacement
+remain explicit M3 or later work.
 
 ## 14. Canonical architecture impact
 

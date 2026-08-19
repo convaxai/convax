@@ -11,19 +11,14 @@ export function desktopBunRuntime(input: {
   resourcesDirectory: string
 }) {
   const command = input.isPackaged
-    ? join(
-        input.resourcesDirectory,
-        "opencode",
-        "bin",
-        (input.platform ?? process.platform) === "win32" ? "opencode.exe" : "opencode",
-      )
+    ? join(input.resourcesDirectory, "bun", "bin", (input.platform ?? process.platform) === "win32" ? "bun.exe" : "bun")
     : join(
         input.applicationDirectory ?? process.cwd(),
         ".packaging",
         "runtime",
-        "opencode",
+        "bun",
         "bin",
-        (input.platform ?? process.platform) === "win32" ? "opencode.exe" : "opencode",
+        (input.platform ?? process.platform) === "win32" ? "bun.exe" : "bun",
       )
-  return { command, env: { BUN_BE_BUN: "1" } } as const
+  return { command, env: {} } as const
 }

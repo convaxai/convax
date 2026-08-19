@@ -1,6 +1,17 @@
 # Agent Runtime Package Contract
 
-This is the only package allowed to depend on `opencode-ai` or `@opencode-ai/*`.
+This is the only package allowed to depend on `opencode-ai`, `@opencode-ai/*`, or
+`@deepseek-ai/*`. The ordinary product still uses the OpenCode adapter while the
+bounded DSH adoption gate is proved; there is no backend router or fallback path.
+
+The DSH integration owns only host-neutral Cordis boot, official Host ApiProxy
+projection, its transport-neutral MessagePort carrier contract, generic process
+inputs, and deterministic child disposal. It must not import Electron, redeclare DSH
+business envelopes, or learn Convax Project/Canvas/Plugin semantics. Desktop Main
+owns one independently issued child and Host MCP capability per live Project. The
+closed gate profile disables ambient roots and high-authority native tools. Remote
+MCP OAuth, OpenCode history conversion, and the OpenCode Hook ABI are not silently
+emulated.
 
 The runtime remains host-agnostic. Callers inject scope ids, directories, structured
 resources, prompt instructions, protected paths, tool providers, and server names.

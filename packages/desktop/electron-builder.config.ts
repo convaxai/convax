@@ -88,6 +88,11 @@ export function createElectronBuilderConfig(environment: NodeJS.ProcessEnv = pro
         to: "opencode",
         filter: ["**/*"],
       },
+      {
+        from: ".packaging/runtime/bun",
+        to: "bun",
+        filter: ["**/*"],
+      },
     ],
     asar: true,
     npmRebuild: false,

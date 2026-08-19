@@ -19,6 +19,21 @@
       "import": "./dist/node/index.js",
       "default": "./dist/node/index.js"
     },
+    "./node/deepseek-harness-agent-runtime": {
+      "types": "./dist/node/deepseek-harness-agent-runtime.d.ts",
+      "import": "./dist/node/deepseek-harness-agent-runtime.js",
+      "default": "./dist/node/deepseek-harness-agent-runtime.js"
+    },
+    "./node/host-message-port-carrier": {
+      "types": "./dist/node/host-message-port-carrier.d.ts",
+      "import": "./dist/node/host-message-port-carrier.js",
+      "default": "./dist/node/host-message-port-carrier.js"
+    },
+    "./node/local-tool-server": {
+      "types": "./dist/node/local-tool-server.d.ts",
+      "import": "./dist/node/local-tool-server.js",
+      "default": "./dist/node/local-tool-server.js"
+    },
     "./node/protected-path-plugin": {
       "types": "./dist/node/protected-path-plugin.d.ts",
       "import": "./dist/node/protected-path-plugin.js",
@@ -27,7 +42,7 @@
   },
   "scripts": {
     "clean": "rm -rf dist",
-    "build:js": "bun build --production --keep-names --target=node --format=esm --packages=external --external='@convax/*' --sourcemap=linked --root=src --outdir=dist src/index.ts src/node/index.ts src/node/protected-path-plugin.ts",
+    "build:js": "for entry in src/index.ts src/node/index.ts src/node/deepseek-harness-agent-runtime.ts src/node/host-message-port-carrier.ts src/node/local-tool-server.ts src/node/project-tool-approval-plugin.ts src/node/protected-path-plugin.ts; do bun build --production --keep-names --target=node --format=esm --packages=external --external='@convax/*' --sourcemap=linked --root=src --outdir=dist \"$entry\"; done",
     "build:types": "tsc -p tsconfig.build.json",
     "build": "bun run clean && bun run build:js && bun run build:types",
     "test": "bun test",
@@ -36,6 +51,18 @@
     "prepublishOnly": "bun run typecheck && bun run test"
   },
   "dependencies": {
+    "@deepseek-ai/cordis": "4.0.1",
+    "@deepseek-ai/dsh-agent-presets": "0.1.0-rc.7",
+    "@deepseek-ai/dsh-app-boot": "0.1.0-rc.7",
+    "@deepseek-ai/dsh-base": "0.1.0-rc.7",
+    "@deepseek-ai/dsh-credentials": "0.1.0-rc.7",
+    "@deepseek-ai/dsh-host-apiproxy": "0.1.0-rc.7",
+    "@deepseek-ai/dsh-llm": "0.1.0-rc.7",
+    "@deepseek-ai/dsh-mcp-client": "0.1.0-rc.7",
+    "@deepseek-ai/dsh-persona": "0.1.0-rc.7",
+    "@deepseek-ai/dsh-session": "0.1.0-rc.7",
+    "@deepseek-ai/dsh-skill-filesystem": "0.1.0-rc.7",
+    "@deepseek-ai/dsh-tool-skill": "0.1.0-rc.7",
     "@opencode-ai/sdk": "1.18.1",
     "opencode-ai": "1.18.1"
   },
