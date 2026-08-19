@@ -40,16 +40,16 @@ def repository_root(requested: str) -> Path:
     return Path(run_git(candidate, "rev-parse", "--show-toplevel")).resolve()
 
 
-def default_remote_ref(repo: Path) -> str:
-    run_git(repo, "fetch", "origin", "--prune")
-    symbolic = run_git(repo, "symbolic-ref", "--quiet", "--short", "refs/remotes/origin/HEAD", check=False)
-    if symbolic.startswith("origin/"):
-        return symbolic
+def default_remote_base(repo: Path) -> tuple[str, str]:
     advertised = run_git(repo, "ls-remote", "--symref", "origin", "HEAD")
     for line in advertised.splitlines():
         match = re.fullmatch(r"ref: refs/heads/([^\s]+)\s+HEAD", line)
         if match:
-            return f"origin/{match.group(1)}"
+            branch = match.group(1)
+            remote_ref = f"refs/remotes/origin/{branch}"
+            run_git(repo, "fetch", "origin", "--prune", f"+refs/heads/{branch}:{remote_ref}")
+            commit = run_git(repo, "rev-parse", "--verify", f"{remote_ref}^{{commit}}")
+            return f"origin/{branch}", commit
     raise RuntimeError("origin does not advertise a default branch")
 
 
@@ -145,7 +145,7 @@ def rollback_created_worktree(source: Path, target: Path, branch: str) -> list[s
 
 def prepare(arguments: argparse.Namespace) -> dict[str, object]:
     source = repository_root(arguments.repo)
-    base = default_remote_ref(source)
+    base, base_commit = default_remote_base(source)
     task_slug = slugify(arguments.task)
     session_id = arguments.id or generated_identity(source, arguments.task)
     if not re.fullmatch(r"[a-z0-9][a-z0-9-]{0,31}", session_id):
@@ -171,7 +171,7 @@ def prepare(arguments: argparse.Namespace) -> dict[str, object]:
     env_files = local_environment_files(source)
 
     root.mkdir(parents=True, exist_ok=True)
-    run_git(source, "worktree", "add", "-b", branch, str(target), base)
+    run_git(source, "worktree", "add", "-b", branch, str(target), base_commit)
     try:
         for relative in env_files:
             destination = target / relative
@@ -183,6 +183,7 @@ def prepare(arguments: argparse.Namespace) -> dict[str, object]:
         session_directory.mkdir(parents=True, exist_ok=True)
         manifest = {
             "base": base,
+            "baseCommit": base_commit,
             "branch": branch,
             "copiedEnvFiles": [path.as_posix() for path in env_files],
             "id": session_id,
