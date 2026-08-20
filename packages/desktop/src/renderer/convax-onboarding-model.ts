@@ -1,15 +1,18 @@
 import type { PluginServiceCatalogEntry, ServiceCatalogSnapshot } from "./service-catalog-controller"
 
-export const convaxOnboardingStorageKey = "convax.desktop.onboarding.v1"
-const maxConvaxOnboardingStorageBytes = 256
-const convaxOnboardingProgressKeys = new Set(["completed", "step", "version"])
+export const convaxOnboardingStorageKey = "convax.desktop.onboarding.v2"
+export const legacyConvaxOnboardingStorageKey = "convax.desktop.onboarding.v1"
+const maxConvaxOnboardingStorageBytes = 320
+const convaxOnboardingProgressKeys = new Set(["completed", "deferred", "step", "version"])
+const legacyConvaxOnboardingProgressKeys = new Set(["completed", "step", "version"])
 
 export type ConvaxOnboardingStep = "account" | "plan" | "ready"
 
 export interface ConvaxOnboardingProgress {
   completed: boolean
+  deferred: boolean
   step: ConvaxOnboardingStep
-  version: 1
+  version: 2
 }
 
 export interface ConvaxOnboardingStorage {
@@ -25,7 +28,31 @@ export type ConvaxOnboardingServiceResolution =
 export type ConvaxOnboardingRoute = "account" | "complete" | "plan" | "ready"
 
 export function defaultConvaxOnboardingProgress(): ConvaxOnboardingProgress {
-  return { completed: false, step: "account", version: 1 }
+  return { completed: false, deferred: false, step: "account", version: 2 }
+}
+
+function isConvaxOnboardingStep(value: unknown): value is ConvaxOnboardingStep {
+  return value === "account" || value === "plan" || value === "ready"
+}
+
+function readLegacyConvaxOnboardingProgress(serialized: string | null): ConvaxOnboardingProgress {
+  if (serialized === null || serialized.length > maxConvaxOnboardingStorageBytes) {
+    return defaultConvaxOnboardingProgress()
+  }
+  const value = JSON.parse(serialized) as unknown
+  if (!value || typeof value !== "object" || Array.isArray(value)) return defaultConvaxOnboardingProgress()
+  const keys = Object.keys(value)
+  if (
+    keys.length !== legacyConvaxOnboardingProgressKeys.size ||
+    keys.some((key) => !legacyConvaxOnboardingProgressKeys.has(key))
+  ) {
+    return defaultConvaxOnboardingProgress()
+  }
+  const candidate = value as { completed?: unknown; step?: unknown; version?: unknown }
+  if (candidate.version !== 1 || typeof candidate.completed !== "boolean" || !isConvaxOnboardingStep(candidate.step)) {
+    return defaultConvaxOnboardingProgress()
+  }
+  return { completed: candidate.completed, deferred: false, step: candidate.step, version: 2 }
 }
 
 export function readConvaxOnboardingProgress(
@@ -33,9 +60,10 @@ export function readConvaxOnboardingProgress(
 ): ConvaxOnboardingProgress {
   try {
     const serialized = storage.getItem(convaxOnboardingStorageKey)
-    if (serialized === null || serialized.length > maxConvaxOnboardingStorageBytes) {
-      return defaultConvaxOnboardingProgress()
+    if (serialized === null) {
+      return readLegacyConvaxOnboardingProgress(storage.getItem(legacyConvaxOnboardingStorageKey))
     }
+    if (serialized.length > maxConvaxOnboardingStorageBytes) return defaultConvaxOnboardingProgress()
     const value = JSON.parse(serialized) as unknown
     if (!value || typeof value !== "object" || Array.isArray(value)) return defaultConvaxOnboardingProgress()
     const keys = Object.keys(value)
@@ -47,13 +75,14 @@ export function readConvaxOnboardingProgress(
     }
     const candidate = value as Partial<ConvaxOnboardingProgress>
     if (
-      candidate.version !== 1 ||
+      candidate.version !== 2 ||
       typeof candidate.completed !== "boolean" ||
-      (candidate.step !== "account" && candidate.step !== "plan" && candidate.step !== "ready")
+      typeof candidate.deferred !== "boolean" ||
+      !isConvaxOnboardingStep(candidate.step)
     ) {
       return defaultConvaxOnboardingProgress()
     }
-    return { completed: candidate.completed, step: candidate.step, version: 1 }
+    return { completed: candidate.completed, deferred: candidate.deferred, step: candidate.step, version: 2 }
   } catch {
     return defaultConvaxOnboardingProgress()
   }
@@ -127,6 +156,10 @@ export function nextConvaxOnboardingProgress(
   return { ...progress, completed: false, step }
 }
 
+export function deferConvaxOnboarding(progress: ConvaxOnboardingProgress): ConvaxOnboardingProgress {
+  return { ...progress, completed: false, deferred: true }
+}
+
 export function completeConvaxOnboarding(progress: ConvaxOnboardingProgress): ConvaxOnboardingProgress {
-  return { ...progress, completed: true, step: "ready" }
+  return { ...progress, completed: true, deferred: false, step: "ready" }
 }

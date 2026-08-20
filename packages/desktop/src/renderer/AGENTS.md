@@ -103,7 +103,10 @@ or durable domain authority.
   empty. Select exactly one account surface from generic authorization plus Checkout
   actions, fail closed on ambiguity, and keep live Service status authoritative for
   account, Plan, Credits, Checkout offers and entitlement. Persist only the bounded
-  presentation step/completion flag; existing Projects bypass the flow.
+  presentation step/completion/deferred flags. Deferral enters the ordinary product
+  without completing onboarding and exposes a bottom-left resume task; only an
+  explicit resume may cover an existing Project. Existing Projects bypass automatic
+  presentation.
 - Seed Agent and generation model pickers from one last-complete strictly validated
   projection across cold windows, retain it while the current catalogs refresh, and
   group models under expandable Service rows. Cache entries are display-only; exact

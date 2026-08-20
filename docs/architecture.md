@@ -764,7 +764,7 @@ boundary checker fails closed until those admissions are complete.
 | Plugin-owned Skill selection and provenance                           | Desktop main                                             | Immutable ActiveSet closure paths enter Agent Runtime through a generic port                                       |
 | Installed Plugin snapshots and ActiveSet                              | Desktop main                                             | One global CAS pointer; exact snapshot leases bind all runtime use                                                 |
 | Plugin Service status and usage display                               | Installed sidecar through Desktop main                   | Renderer may retain only a disposable last-complete safe projection                                                |
-| First-run account onboarding progress                                 | Desktop Renderer preference                              | Bounded local progress only; account, Plan, Credits, Checkout and entitlement remain live Service authority        |
+| First-run account onboarding progress                                 | Desktop Renderer preference                              | Bounded step/completion/deferred UI only; live Service status remains authoritative                                |
 | Available/downloaded Desktop application update                       | Desktop Main update controller plus signed remote feed   | Feed metadata and updater cache are not Project, Plugin, or renderer authority                                     |
 
 A recovery preference such as “last Canvas for Project X” is not canonical state.
@@ -1319,23 +1319,35 @@ Project registry initializes
   -> a connected Free account may start one advertised Checkout or continue Free
   -> Checkout cancellation, failure, closure, unknown state or provider delay keeps
      the current Plan usable and never grants a local entitlement
-  -> Ready reuses Create Project / Open Project; successful Project entry marks the
+  -> every presented step may be deferred without becoming complete; ordinary Home
+     opens and a bottom-left task retains the live current step and bounded progress
+  -> the task remains non-blocking after Project entry and reopens onboarding only
+     through an explicit user action; it never changes Project or Workbench state
+  -> Ready reuses Create Project / Open Project, or finishes against an already
+     active Project; successful entry from that presented final step marks the
      bounded renderer preference complete
 ```
 
-The progress record is a closed, bounded `{version, step, completed}` Renderer
-preference. It contains no account identity, email, token, credential, Plan or
-entitlement fact; malformed, oversized, future-version, unavailable-storage and
-authority-shaped values fail soft to the Account step. Account and billing state
-remain sidecar-owned live status, while credentials and authorization URLs stay
-outside Renderer and Preload.
+The v2 progress record is a closed, bounded
+`{version, step, completed, deferred}` Renderer preference. `deferred` is only the
+presentation choice that the incomplete flow should remain a task; it is not an
+account or Project fact. A strict v1 record migrates with `deferred: false`. The
+record contains no account identity, email, token, credential, Plan or entitlement
+fact; malformed, oversized, future-version, unavailable-storage and authority-shaped
+values fail soft to the Account step. Account and billing state remain sidecar-owned
+live status, while credentials and authorization URLs stay outside Renderer and
+Preload.
 
 The Account page explains Local Project, Canvas and Agent, the local-data boundary,
 and that password entry happens only in the system browser. The Plan page consumes
 only the current service status and advertised Checkout Plan keys. Subscription is
 recommended but optional: closing or canceling Checkout, or selecting Continue with
-Free, advances without changing the live Plan. The final page reuses the ordinary
-Project Home operations rather than introducing a tutorial-only Project path.
+Free, advances without changing the live Plan. Deferring either page renders the
+ordinary product immediately and retains a compact task at the bottom-left. The task
+label and progress are projections of the bounded step plus current live Service
+status. The final page reuses the ordinary Project Home operations rather than
+introducing a tutorial-only Project path; explicit resumption over an active Project
+uses a presentation overlay and returns to that same Project after completion.
 
 Plan and Credits are display projections only. When the v2 status does not carry a
 price or benefit list, Renderer directs the user to the secure Checkout for those

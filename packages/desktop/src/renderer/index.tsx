@@ -79,7 +79,8 @@ import {
   type AppearancePreferences,
 } from "./appearance-preferences"
 import { resolveCanvasAppearancePalette } from "./appearance-themes"
-import { ConvaxOnboarding } from "./convax-onboarding"
+import { ConvaxOnboarding, ConvaxOnboardingTaskCard } from "./convax-onboarding"
+import { readConvaxOnboardingProgress, type ConvaxOnboardingProgress } from "./convax-onboarding-model"
 import {
   shouldMountResizeHandle,
   startCapturedPointerDrag,
@@ -263,6 +264,10 @@ function App() {
   )
   const [appearancePreferences, setAppearancePreferences] = useState(() => readAppearancePreferences(localStorage))
   const [appearanceSaveState, setAppearanceSaveState] = useState<"error" | "idle" | "saved">("idle")
+  const [convaxOnboardingProgress, setConvaxOnboardingProgress] = useState(() =>
+    readConvaxOnboardingProgress(localStorage),
+  )
+  const [convaxOnboardingOverlayOpen, setConvaxOnboardingOverlayOpen] = useState(false)
   const [desktopSurface, setDesktopSurface] = useState(createDesktopSurfaceState)
   const [commandPaletteOpen, setCommandPaletteOpen] = useState(false)
   const [projectTitlebarEntryHost, setProjectTitlebarEntryHost] = useState<HTMLDivElement | null>(null)
@@ -458,6 +463,11 @@ function App() {
   const effectivePrimaryDesktopSurface = projectBootstrapView.kind === "opening" ? primaryDesktopSurface : "home"
   const activeProject = projectSnapshot.projects.find((project) => project.id === projectSnapshot.activeProjectId)
   const activeProjectId = activeProject?.id
+  const showDeferredOnboardingTask = convaxOnboardingProgress.deferred && !convaxOnboardingProgress.completed
+  const handleConvaxOnboardingProgressChange = useCallback((progress: ConvaxOnboardingProgress) => {
+    setConvaxOnboardingProgress(progress)
+    if (progress.completed) setConvaxOnboardingOverlayOpen(false)
+  }, [])
   const projectResetCandidate = projectSnapshot.pendingRecoveryProjectId
     ? projectSnapshot.projects.find(
         (project) =>
@@ -2149,7 +2159,18 @@ function App() {
       filesController={projectFilesController}
       filesLabel={locale === "zh-CN" ? "项目文件" : "Project files"}
       footerActions={
-        <ApplicationMenu locale={locale} onOpenSettings={openSettings} services={serviceCatalogSnapshot} />
+        <div className="grid min-w-0 gap-2">
+          {showDeferredOnboardingTask ? (
+            <ConvaxOnboardingTaskCard
+              activeProject
+              locale={locale}
+              onResume={() => setConvaxOnboardingOverlayOpen(true)}
+              progress={convaxOnboardingProgress}
+              serviceSnapshot={serviceCatalogSnapshot}
+            />
+          ) : null}
+          <ApplicationMenu locale={locale} onOpenSettings={openSettings} services={serviceCatalogSnapshot} />
+        </div>
       }
       headerActions={
         <button
@@ -2343,6 +2364,7 @@ function App() {
                   <ConvaxOnboarding
                     locale={locale}
                     onEnterProject={enterHomeProject}
+                    onProgressChange={handleConvaxOnboardingProgressChange}
                     onProjectSelectionStart={() => {
                       startupAutoRestoreEnabledRef.current = false
                       setStartupEntryFailure(null)
@@ -2375,7 +2397,9 @@ function App() {
               </div>
             ) : (
               <WorkspaceShell
-                blocked={Boolean(settingsSection || activeMediaOperationDialog || sharingProjectId)}
+                blocked={Boolean(
+                  settingsSection || activeMediaOperationDialog || sharingProjectId || convaxOnboardingOverlayOpen,
+                )}
                 resizing={Boolean(workbenchLayoutSnapshot.resize)}
                 utilityMode={workspaceUtilityDrawer.mode}
                 workspaceRef={mountWorkspaceShell}
@@ -2598,6 +2622,29 @@ function App() {
                 {notification ? <Toast notification={notification} /> : null}
               </WorkspaceShell>
             )}
+            {convaxOnboardingOverlayOpen && showDeferredOnboardingTask && !settingsSection ? (
+              <div className="absolute inset-0 z-[80]" data-convax-onboarding-overlay="true">
+                <ConvaxOnboarding
+                  forceOpen
+                  locale={locale}
+                  onDismiss={() => setConvaxOnboardingOverlayOpen(false)}
+                  onEnterProject={enterHomeProject}
+                  onProgressChange={handleConvaxOnboardingProgressChange}
+                  onProjectSelectionStart={() => {
+                    startupAutoRestoreEnabledRef.current = false
+                    setStartupEntryFailure(null)
+                    setStartupRecoveryError(null)
+                  }}
+                  onRefreshServices={() => serviceCatalogController.refresh()}
+                  onServiceAction={(target, action) => serviceCatalogController.perform(target, action)}
+                  onServiceCheckout={(target, planKey) => serviceCatalogController.checkout(target, planKey)}
+                  projectController={projectController}
+                  reducedMotion={appearancePreferences.reducedMotion}
+                  serviceSnapshot={serviceCatalogSnapshot}
+                  storage={localStorage}
+                />
+              </div>
+            ) : null}
             {activeMediaOperationDialog && !settingsSection ? (
               <MediaOperationDialog
                 key={`${activeMediaOperationDialog.context.document.id}:${activeMediaOperationDialog.action.pluginId}:${activeMediaOperationDialog.action.id}`}
