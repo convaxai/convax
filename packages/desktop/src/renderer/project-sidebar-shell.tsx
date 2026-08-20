@@ -5,6 +5,7 @@ import { ProjectSidebarTrigger } from "./project-sidebar-trigger"
 
 export interface ProjectSidebarShellProps {
   children: ReactNode
+  collapseLabel?: string
   entryLabel: string
   entryPortal?: Element | null
   onOpenChange(open: boolean): void
@@ -58,16 +59,10 @@ export function ProjectSidebarShell(props: ProjectSidebarShellProps) {
     previousOpenRef.current = props.open
     if (props.open) {
       dispatchHover("pin")
-      if (wasOpen) return
-      const frame = window.requestAnimationFrame(() =>
-        panelRef.current?.querySelector<HTMLElement>("[data-project-sidebar-close]")?.focus({ preventScroll: true }),
-      )
-      return () => window.cancelAnimationFrame(frame)
+      return
     }
     if (!wasOpen) return
     dispatchHover(entryPointerInsideRef.current ? "unpin-inside-entry" : "unpin-outside-entry")
-    const frame = window.requestAnimationFrame(() => triggerRef.current?.focus({ preventScroll: true }))
-    return () => window.cancelAnimationFrame(frame)
   }, [props.open])
 
   useEffect(() => {
@@ -136,6 +131,7 @@ export function ProjectSidebarShell(props: ProjectSidebarShellProps) {
       {props.entryPortal
         ? createPortal(
             <ProjectSidebarEntry
+              collapseLabel={props.collapseLabel}
               entryLabel={props.entryLabel}
               hoverOpen={hoverReveal}
               onHoverClose={() => {
@@ -148,9 +144,9 @@ export function ProjectSidebarShell(props: ProjectSidebarShellProps) {
                 cancelHoverClose()
                 dispatchHover("entry-enter")
               }}
-              onOpen={() => {
-                dispatchHover("pin")
-                props.onOpenChange(true)
+              onOpenChange={(open) => {
+                if (open) dispatchHover("pin")
+                props.onOpenChange(open)
               }}
               open={props.open}
               triggerRef={triggerRef}
@@ -160,6 +156,7 @@ export function ProjectSidebarShell(props: ProjectSidebarShellProps) {
         : null}
       {props.entryPortal === undefined ? (
         <ProjectSidebarEntry
+          collapseLabel={props.collapseLabel}
           entryLabel={props.entryLabel}
           hoverOpen={hoverReveal}
           onHoverClose={() => {
@@ -172,9 +169,9 @@ export function ProjectSidebarShell(props: ProjectSidebarShellProps) {
             cancelHoverClose()
             dispatchHover("entry-enter")
           }}
-          onOpen={() => {
-            dispatchHover("pin")
-            props.onOpenChange(true)
+          onOpenChange={(open) => {
+            if (open) dispatchHover("pin")
+            props.onOpenChange(open)
           }}
           open={props.open}
           triggerRef={triggerRef}
@@ -185,19 +182,21 @@ export function ProjectSidebarShell(props: ProjectSidebarShellProps) {
 }
 
 function ProjectSidebarEntry({
+  collapseLabel,
   entryLabel,
   hoverOpen,
   onHoverClose,
   onHoverOpen,
-  onOpen,
+  onOpenChange,
   open,
   triggerRef,
 }: {
+  collapseLabel?: string
   entryLabel: string
   hoverOpen: boolean
   onHoverClose(): void
   onHoverOpen(): void
-  onOpen(): void
+  onOpenChange(open: boolean): void
   open: boolean
   triggerRef: React.RefObject<HTMLButtonElement | null>
 }) {
@@ -212,7 +211,13 @@ function ProjectSidebarEntry({
       }}
       onPointerLeave={onHoverClose}
     >
-      <ProjectSidebarTrigger hidden={open} label={entryLabel} onOpen={onOpen} ref={triggerRef} />
+      <ProjectSidebarTrigger
+        collapseLabel={collapseLabel}
+        label={entryLabel}
+        onOpenChange={onOpenChange}
+        open={open}
+        ref={triggerRef}
+      />
     </aside>
   )
 }

@@ -58,7 +58,7 @@ function installTestWindow() {
 
 describe("ProjectSidebarTrigger", () => {
   test("opens from a quiet titlebar entry without rendering floating chrome", () => {
-    const markup = renderToStaticMarkup(<ProjectSidebarTrigger onOpen={mock(() => undefined)} />)
+    const markup = renderToStaticMarkup(<ProjectSidebarTrigger onOpenChange={mock(() => undefined)} />)
 
     expect(markup).toContain("data-project-sidebar-entry")
     expect(markup).toContain('aria-label="Open project sidebar"')
@@ -69,38 +69,35 @@ describe("ProjectSidebarTrigger", () => {
     expect(markup).not.toContain("h-full")
   })
 
-  test("does not reopen from the pointer release that just collapsed the sidebar", async () => {
+  test("toggles immediately from its fixed titlebar position", async () => {
     const testWindow = installTestWindow()
-    const onOpen = mock(() => undefined)
+    const onOpenChange = mock((_open: boolean) => undefined)
     let root: Root | undefined
     try {
       const container = document.createElement("div")
       document.body.append(container)
       root = createRoot(container)
-      await act(async () => root?.render(<ProjectSidebarTrigger onOpen={onOpen} />))
+      await act(async () => root?.render(<ProjectSidebarTrigger onOpenChange={onOpenChange} />))
       const button = container.querySelector<HTMLButtonElement>('button[aria-label="Open project sidebar"]')!
 
-      act(() => button.click())
-      expect(onOpen).not.toHaveBeenCalled()
-
-      await act(async () => testWindow.runFrames())
-      act(() => button.click())
-      expect(onOpen).toHaveBeenCalledTimes(1)
+      await act(async () => button.click())
+      expect(onOpenChange).toHaveBeenCalledTimes(1)
+      expect(onOpenChange).toHaveBeenCalledWith(true)
     } finally {
       await act(async () => root?.unmount())
       await testWindow.restore()
     }
   })
 
-  test("hides the titlebar entry while the pinned sidebar owns its close action", () => {
-    const markup = renderToStaticMarkup(<ProjectSidebarTrigger hidden label="Atlas" onOpen={() => undefined} />)
+  test("stays visible as the close toggle while the sidebar is pinned", () => {
+    const markup = renderToStaticMarkup(<ProjectSidebarTrigger label="Atlas" onOpenChange={() => undefined} open />)
 
     expect(markup).not.toContain(">Atlas</span>")
-    expect(markup).toContain('title="Open Atlas"')
-    expect(markup).toContain('data-project-sidebar-entry-state="hidden"')
-    expect(markup).toContain('aria-label="Open project sidebar"')
-    expect(markup).toContain("lucide-panel-left-open")
-    expect(markup).toContain("invisible opacity-0")
+    expect(markup).toContain('title="Collapse project sidebar"')
+    expect(markup).toContain('data-project-sidebar-entry-state="open"')
+    expect(markup).toContain('aria-label="Collapse project sidebar"')
+    expect(markup).toContain("lucide-panel-left-close")
+    expect(markup).not.toContain("invisible opacity-0")
     expect(markup).not.toContain("bg-surface-raised")
   })
 })

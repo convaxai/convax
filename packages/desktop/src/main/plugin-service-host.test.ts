@@ -71,7 +71,7 @@ describe("PluginServiceHost", () => {
       listServices: async () => [checkoutSummary],
     }
     const opened: string[] = []
-    const onServiceMutation = mock(async () => undefined)
+    const onServiceMutation = mock(async (_pluginId: string) => undefined)
     const host = new PluginServiceHost(
       runtime,
       undefined,
@@ -88,6 +88,7 @@ describe("PluginServiceHost", () => {
     expect(calls).toEqual([{ call: "checkout", input: { planKey: "pro" } }, { call: "status" }])
     expect(opened).toEqual(["https://checkout.example.test/session/123?provider=secure"])
     expect(onServiceMutation).toHaveBeenCalledTimes(1)
+    expect(onServiceMutation).toHaveBeenCalledWith("account-tools")
   })
 
   test("returns only a validated structured status and ignores raw MCP text", async () => {
@@ -140,7 +141,7 @@ describe("PluginServiceHost", () => {
       call: "status" | "usage" | WebPluginServiceAction
       target: { pluginId: string; serviceId: string }
     }> = []
-    const onServiceMutation = mock(async () => undefined)
+    const onServiceMutation = mock(async (_pluginId: string) => undefined)
     const runtime: PluginServiceToolRuntime = {
       async callService(requestedTarget, call) {
         calls.push({ call, target: requestedTarget })
@@ -157,6 +158,7 @@ describe("PluginServiceHost", () => {
       { call: "sign_out", target },
     ])
     expect(onServiceMutation).toHaveBeenCalledTimes(1)
+    expect(onServiceMutation).toHaveBeenCalledWith("account-tools")
   })
 
   test("does not report a completed service mutation as failed when Agent refresh fails", async () => {
@@ -181,7 +183,7 @@ describe("PluginServiceHost", () => {
   })
 
   test("refreshes host projections after a potentially mutating service call fails", async () => {
-    const onServiceMutation = mock(async () => undefined)
+    const onServiceMutation = mock(async (_pluginId: string) => undefined)
     const host = new PluginServiceHost(
       {
         callService: async () => {
@@ -197,6 +199,7 @@ describe("PluginServiceHost", () => {
 
     await expect(host.signOut(target)).rejects.toThrow("response was lost")
     expect(onServiceMutation).toHaveBeenCalledTimes(1)
+    expect(onServiceMutation).toHaveBeenCalledWith("account-tools")
   })
 
   test("does not delay a completed service mutation while Agent refresh is busy", async () => {

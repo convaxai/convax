@@ -248,6 +248,21 @@ For any matching change, read the full routed reference before planning or editi
   HTTPS origin and allowlisted cookies, one fixed completion action, and a bounded
   Main-only recovery checkpoint bound to the exact Plugin snapshot. No browser
   profile, URL, request, or cookie crosses IPC.
+- Public-client Authorization Code + PKCE is owned by the verified companion and
+  opens only in the system browser. Direct external Resource Server access requires
+  a short-lived Access Token whose audience is that exact resource or an explicitly
+  bound first-party Application trust domain; arbitrary or unbound Application
+  Tokens, ID Tokens and Refresh Credentials are rejected. Main and Renderer never
+  receive or persist the OAuth transaction or credentials.
+- When an upstream Application preconfigures a first-party resource integration,
+  one Application login may silently use the same Application Access Token with its
+  integration-owned capability scope. Main must not add a second resource
+  login/connect flow or expose the server-side integration Management binding; an
+  existing valid companion credential proceeds directly to status and execution.
+- Any automatic Resource Server Application creation is a server-to-server,
+  idempotent integration-control-plane transition. Main, Renderer and companion do
+  not submit product configuration, observe its Management credential or persist the
+  resulting Resource Server Application id.
 - Treat the payload-free v8 `disconnect` envelope as lifecycle control for only the
   exact MessagePort connection. Close that existing renderer/Main connection and
   await its fixed disconnect so frame-owned work and media sessions are revoked;
