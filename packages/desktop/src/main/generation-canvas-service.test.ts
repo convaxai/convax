@@ -1889,6 +1889,7 @@ describe("GenerationCanvasService", () => {
     await fs.mkdir(digestDirectory, { mode: 0o700 })
     const resultDigest = await generationRecoveryResultDigest(pngResult, digestDirectory)
     const acknowledgements: unknown[] = []
+    let waits = 0
     const recovery: PreparedGenerationRecovery = {
       async acknowledge(input) {
         acknowledgements.push(input)
@@ -1900,9 +1901,8 @@ describe("GenerationCanvasService", () => {
       executionBindingDigest: "a".repeat(64),
       async get() {
         return {
-          resultDigest,
           schema: "convax.generation-lro-snapshot/1",
-          status: "succeeded",
+          status: "running",
           taskId: "task_recoverable_123",
         }
       },
@@ -1912,6 +1912,7 @@ describe("GenerationCanvasService", () => {
       },
       runtimeAuthorizationDigest: "e".repeat(64),
       async wait() {
+        waits += 1
         return {
           resultDigest,
           schema: "convax.generation-lro-snapshot/1",
@@ -1961,6 +1962,7 @@ describe("GenerationCanvasService", () => {
       }),
     ])
     expect(acknowledgements).toHaveLength(1)
+    expect(waits).toBe(1)
   })
 
   test("does not supervise a live prepared operation during Canvas reconciliation", async () => {
@@ -2038,11 +2040,7 @@ describe("GenerationCanvasService", () => {
 
       await harness.service.reconcileCanvas({ canvasId: "canvas-one", scopeId: "project-one" }, actor)
 
-      expect(harness.runRequests.interruptInactive).toHaveLength(1)
-      expect(harness.runRequests.interruptInactive[0]?.liveRuns).toContainEqual({
-        nodeId: harness.pendingNodeId,
-        operationId: "operation-one",
-      })
+      expect(harness.runRequests.interruptInactive).toHaveLength(0)
       expect(harness.runRequests.finish).toEqual([])
       expect(harness.calls).toEqual([])
       expect(await operations.list()).toEqual([expect.objectContaining({ phase: "prepared" })])
@@ -2232,11 +2230,7 @@ describe("GenerationCanvasService", () => {
 
     try {
       await expect(reconciliation).resolves.toMatchObject({ failedNodeIds: [] })
-      expect(harness.runRequests.interruptInactive).toHaveLength(1)
-      expect(harness.runRequests.interruptInactive[0]?.liveRuns).toContainEqual({
-        nodeId: owner.id,
-        operationId: "operation-one",
-      })
+      expect(harness.runRequests.interruptInactive).toHaveLength(0)
     } finally {
       controller.abort("Test cleanup")
       releaseRunStart()

@@ -1,5 +1,5 @@
 import { Button, cn, Tooltip } from "@convax/ui"
-import { Bot, ChevronRight, History, PanelRightOpen, Plus } from "lucide-react"
+import { Bot, ChevronRight, History, PanelRightClose, PanelRightOpen, Plus } from "lucide-react"
 import { forwardRef, type ReactNode } from "react"
 import type { AgentCompactStatus, AgentCompactStatusKind } from "./agent-panel-state"
 import { WorkspaceUtilityCollapseButton } from "./workspace-utility-drawer"
@@ -42,30 +42,31 @@ function AgentIdentity(props: { className?: string; status: AgentCompactStatus; 
 
 export const AgentDrawerTrigger = forwardRef<
   HTMLButtonElement,
-  { hidden?: boolean; onOpen(): void; status: AgentCompactStatus }
+  { closeLabel?: string; onClose?(): void; onOpen(): void; open?: boolean; status: AgentCompactStatus }
 >(function AgentDrawerTrigger(props, ref) {
+  const actionLabel = props.open ? (props.closeLabel ?? "Collapse agent panel") : "Open agent"
   return (
     <div
-      aria-hidden={props.hidden || undefined}
-      className={cn(
-        "pointer-events-auto transition-[opacity,visibility] duration-150 motion-reduce:transition-none",
-        props.hidden && "pointer-events-none invisible opacity-0",
-      )}
+      className="pointer-events-auto"
       data-agent-drawer-entry
-      data-agent-drawer-entry-state={props.hidden ? "hidden" : "visible"}
-      inert={props.hidden || undefined}
+      data-agent-drawer-entry-state={props.open ? "open" : "closed"}
     >
       <span aria-live="polite" className="sr-only" role="status">
         Agent status: {props.status.label}
       </span>
       <button
-        aria-label="Open agent"
+        aria-label={actionLabel}
         className="relative grid size-8 place-items-center rounded-md text-text-tertiary outline-none transition-[background-color,color,transform] duration-100 ease-out [@media(hover:hover)]:hover:bg-surface-inset [@media(hover:hover)]:hover:text-text-primary active:scale-[0.96] focus-visible:ring-2 focus-visible:ring-focus-ring motion-reduce:transition-none"
-        onClick={() => props.onOpen()}
+        onClick={() => (props.open ? props.onClose?.() : props.onOpen())}
         ref={ref}
+        title={actionLabel}
         type="button"
       >
-        <PanelRightOpen aria-hidden className="size-4" />
+        {props.open ? (
+          <PanelRightClose aria-hidden className="size-4" />
+        ) : (
+          <PanelRightOpen aria-hidden className="size-4" />
+        )}
       </button>
     </div>
   )

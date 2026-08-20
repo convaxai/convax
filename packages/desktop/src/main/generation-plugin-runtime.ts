@@ -292,6 +292,7 @@ interface CachedPluginRuntime {
   capabilityOperations: Map<string, PluginCapabilityNestedOperation>
   capabilityReferences: number
   capabilityRetired: boolean
+  closed: boolean
   executableSnapshot: GenerationPluginExecutableSnapshot
   fingerprint: string
   plugin: InstalledWebPluginSummary
@@ -300,6 +301,7 @@ interface CachedPluginRuntime {
   runtimeKey: string
   serviceId: string
   sourceBinding: GenerationRecoveryExecutableBinding
+  toolsRequestRevision: number
 }
 
 interface PrivatePluginProfileDirectories {
@@ -1520,6 +1522,7 @@ export class GenerationPluginRuntime implements PluginCapabilityRuntimeInspectio
     const inspected: readonly InspectedGenerationModel[] = selectedModels.flatMap(({ expected, selected }) => {
       const definition = availableTools.get(selected.tool.id)
       if (!definition) {
+        if (selected.plugin.service !== undefined) return []
         throw new Error(`Generation Plugin ${pluginId} did not expose its declared MCP tool: ${selected.tool.id}`)
       }
       const projection = projectGenerationToolInputSchema(expected.id, definition.inputSchema)
@@ -1541,12 +1544,14 @@ export class GenerationPluginRuntime implements PluginCapabilityRuntimeInspectio
       selectedModels.some(({ expected, selected }) => {
         const currentTool = current.generation?.tools.find(({ id }) => id === selected.tool.id)
         const currentDefinition = runtime.availableTools?.get(selected.tool.id)
+        const observedDefinition = availableTools.get(selected.tool.id)
+        if (!currentTool) return true
+        if (!currentDefinition || !observedDefinition) {
+          return currentDefinition !== observedDefinition || current.service === undefined
+        }
         return (
-          !currentTool ||
-          !currentDefinition ||
           toolContractFingerprint(toolSummary(current, currentTool)) !== toolContractFingerprint(expected) ||
-          toolDefinitionFingerprint(currentDefinition) !==
-            toolDefinitionFingerprint(availableTools.get(selected.tool.id)!)
+          toolDefinitionFingerprint(currentDefinition) !== toolDefinitionFingerprint(observedDefinition)
         )
       })
     ) {
@@ -2373,6 +2378,7 @@ export class GenerationPluginRuntime implements PluginCapabilityRuntimeInspectio
         capabilityOperations: new Map(),
         capabilityReferences: 0,
         capabilityRetired: false,
+        closed: false,
         client,
         executableSnapshot: {
           dispose: cleanupProfileLaunch,
@@ -2386,6 +2392,7 @@ export class GenerationPluginRuntime implements PluginCapabilityRuntimeInspectio
         runtimeKey: profile.runtimeKey,
         serviceId: profile.serviceId,
         sourceBinding: structuredClone(record.sourceBinding),
+        toolsRequestRevision: 0,
       }
       this.#recoveryRuntimes.set(record.executionBindingDigest, runtime)
       const availableTools = await this.#availableTools(runtime, signal, true)
@@ -2460,7 +2467,7 @@ export class GenerationPluginRuntime implements PluginCapabilityRuntimeInspectio
     }
   }
 
-  disposePlugin(pluginId: string) {
+  disposePlugin(pluginId: string, options: { force?: boolean } = {}) {
     let disposed = false
     for (const [runtimeKey, starting] of this.#starting) {
       if (starting.pluginId !== pluginId) continue
@@ -2476,9 +2483,18 @@ export class GenerationPluginRuntime implements PluginCapabilityRuntimeInspectio
     for (const [runtimeKey, runtime] of this.#cache) {
       if (runtime.pluginId !== pluginId) continue
       this.#cache.delete(runtimeKey)
-      this.#retireRuntime(runtime)
+      if (options.force) this.#closeRuntime(runtime, true)
+      else this.#retireRuntime(runtime)
       disposed = true
     }
+    return disposed
+  }
+
+  async disposePluginAndWait(pluginId: string) {
+    const priorClosures = new Set(this.#closingRuntimes)
+    const disposed = this.disposePlugin(pluginId, { force: true })
+    const closures = [...this.#closingRuntimes].filter((closing) => !priorClosures.has(closing))
+    if (closures.length > 0) await Promise.allSettled(closures)
     return disposed
   }
 
@@ -2851,6 +2867,7 @@ export class GenerationPluginRuntime implements PluginCapabilityRuntimeInspectio
         capabilityOperations,
         capabilityReferences: 0,
         capabilityRetired: currentFingerprint === null,
+        closed: false,
         client,
         executableSnapshot: {
           dispose() {},
@@ -2879,6 +2896,7 @@ export class GenerationPluginRuntime implements PluginCapabilityRuntimeInspectio
           sha256: companion.sha256,
           size: companion.size,
         },
+        toolsRequestRevision: 0,
       }
       if (currentFingerprint !== null) {
         const prior = this.#cache.get(provider.pluginId)
@@ -3155,6 +3173,7 @@ export class GenerationPluginRuntime implements PluginCapabilityRuntimeInspectio
           capabilityOperations,
           capabilityReferences: 0,
           capabilityRetired: false,
+          closed: false,
           ...(canvasCapabilities ? { canvasCapabilities } : {}),
           client,
           executableSnapshot,
@@ -3165,6 +3184,7 @@ export class GenerationPluginRuntime implements PluginCapabilityRuntimeInspectio
           runtimeKey: plugin.runtimeKey,
           serviceId: plugin.serviceId,
           sourceBinding,
+          toolsRequestRevision: 0,
         }
         const prior = this.#cache.get(plugin.runtimeKey)
         if (prior) this.#closeRuntime(prior)
@@ -3203,12 +3223,13 @@ export class GenerationPluginRuntime implements PluginCapabilityRuntimeInspectio
 
   async #availableTools(runtime: CachedPluginRuntime, signal?: AbortSignal, refresh = false) {
     if (runtime.availableTools && !refresh) return runtime.availableTools
+    const requestRevision = ++runtime.toolsRequestRevision
     const tools = await runtime.client.listTools(signal)
     const names = tools.map((tool) => tool.name)
     if (new Set(names).size !== names.length) throw new Error("Generation Plugin MCP server exposed duplicate tool ids")
     const available = new Map(tools.map((tool) => [tool.name, tool])) as ReadonlyMap<string, McpToolDefinition>
-    runtime.availableTools = available
-    return runtime.availableTools
+    if (runtime.toolsRequestRevision === requestRevision) runtime.availableTools = available
+    return available
   }
 
   async #reconcileRecoveryPins() {
@@ -3260,10 +3281,13 @@ export class GenerationPluginRuntime implements PluginCapabilityRuntimeInspectio
   }
 
   #closeRuntime(runtime: CachedPluginRuntime, force = false) {
+    if (runtime.closed) return
     if (!force && runtime.capabilityReferences > 0) {
       runtime.capabilityRetired = true
       return
     }
+    runtime.closed = true
+    runtime.capabilityRetired = true
     if (this.#cache.get(runtime.runtimeKey) === runtime) this.#cache.delete(runtime.runtimeKey)
     if (
       runtime.activeHandle &&

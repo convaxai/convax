@@ -1519,7 +1519,16 @@ function startApplication() {
     const pluginServiceBrowserAuthorization = createElectronPluginServiceBrowserAuthorizationBroker(
       pluginServiceAuthorizationCheckpoints,
     )
-    const pluginServiceExternalAuthorization = createElectronPluginServiceExternalAuthorizationBroker()
+    const pluginServiceExternalAuthorization = createElectronPluginServiceExternalAuthorizationBroker(
+      packagedSmoke
+        ? {
+            packagedSmoke: {
+              socketPath: join(userDataDirectory, "auth.sock"),
+              userDataDirectory,
+            },
+          }
+        : undefined,
+    )
     let refreshAgentConfiguration: (() => Promise<void>) | undefined
     let refreshGenerationCatalogAfterServiceMutation: (() => void) | undefined
     const pluginServices = new PluginServiceHost(
@@ -1527,7 +1536,8 @@ function startApplication() {
       pluginServiceBrowserAuthorization,
       pluginServiceExternalAuthorization,
       createElectronPluginServiceCheckoutNavigation(),
-      async () => {
+      async (pluginId) => {
+        await generationRuntime.disposePluginAndWait(pluginId)
         refreshGenerationCatalogAfterServiceMutation?.()
         await refreshAgentConfiguration?.()
       },

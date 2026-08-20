@@ -1,34 +1,30 @@
-import { PanelLeftOpen } from "lucide-react"
-import { forwardRef, useEffect, useState } from "react"
+import { PanelLeftClose, PanelLeftOpen } from "lucide-react"
+import { forwardRef } from "react"
 
 export const ProjectSidebarTrigger = forwardRef<
   HTMLButtonElement,
-  { hidden?: boolean; label?: string; onOpen: () => void }
->(function ProjectSidebarTrigger({ hidden = false, label = "Project", onOpen }, ref) {
-  const [interactive, setInteractive] = useState(false)
-
-  useEffect(() => {
-    const frame = window.requestAnimationFrame(() => setInteractive(true))
-    return () => window.cancelAnimationFrame(frame)
-  }, [])
-
+  { collapseLabel?: string; label?: string; onOpenChange: (open: boolean) => void; open?: boolean }
+>(function ProjectSidebarTrigger(
+  { collapseLabel = "Collapse project sidebar", label = "Project", onOpenChange, open = false },
+  ref,
+) {
+  const actionLabel = open ? collapseLabel : "Open project sidebar"
   return (
     <div
-      aria-hidden={hidden || undefined}
-      className={`pointer-events-auto transition-[opacity,visibility] duration-150 motion-reduce:transition-none${hidden ? " pointer-events-none invisible opacity-0" : ""}`}
+      className="pointer-events-auto"
       data-project-sidebar-entry
-      data-project-sidebar-entry-state={hidden ? "hidden" : "visible"}
-      inert={hidden || undefined}
+      data-project-sidebar-entry-state={open ? "open" : "closed"}
     >
       <button
-        aria-label="Open project sidebar"
-        className={`grid size-8 place-items-center rounded-md text-text-tertiary outline-none transition-[background-color,color,transform] duration-100 ease-out [@media(hover:hover)]:hover:bg-surface-inset [@media(hover:hover)]:hover:text-text-primary active:scale-[0.96] focus-visible:ring-2 focus-visible:ring-focus-ring motion-reduce:transition-none${interactive ? "" : " pointer-events-none"}`}
-        onClick={interactive ? onOpen : undefined}
+        aria-label={actionLabel}
+        className="grid size-8 place-items-center rounded-md text-text-tertiary outline-none transition-[background-color,color,transform] duration-100 ease-out [@media(hover:hover)]:hover:bg-surface-inset [@media(hover:hover)]:hover:text-text-primary active:scale-[0.96] focus-visible:ring-2 focus-visible:ring-focus-ring motion-reduce:transition-none"
+        data-project-sidebar-close={open || undefined}
+        onClick={() => onOpenChange(!open)}
         ref={ref}
-        title={`Open ${label}`}
+        title={open ? collapseLabel : `Open ${label}`}
         type="button"
       >
-        <PanelLeftOpen aria-hidden className="size-4" />
+        {open ? <PanelLeftClose aria-hidden className="size-4" /> : <PanelLeftOpen aria-hidden className="size-4" />}
       </button>
     </div>
   )

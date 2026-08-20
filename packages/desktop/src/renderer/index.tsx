@@ -30,17 +30,7 @@ import {
   WorkbenchLayoutController,
   WorkbenchLayoutParts,
 } from "@convax/workbench"
-import {
-  CheckCircle2,
-  FileOutput,
-  Info,
-  Layers3,
-  MessageSquarePlus,
-  PanelLeftClose,
-  TriangleAlert,
-  Users,
-  XCircle,
-} from "lucide-react"
+import { CheckCircle2, FileOutput, Info, Layers3, MessageSquarePlus, TriangleAlert, Users, XCircle } from "lucide-react"
 import {
   useCallback,
   useEffect,
@@ -180,11 +170,7 @@ import { WorkspaceShell } from "./workspace-shell"
 import { resolveWorkspaceLayout, workspaceShellMetrics } from "./workspace-layout-model"
 import { WorkspaceResizeHandle } from "./workspace-resize-handle"
 import { WorkspaceEntryCoordinator, waitForMountedWorkspaceTarget } from "./workspace-entry"
-import {
-  WorkspaceUtilityCollapseButton,
-  WorkspaceUtilityDrawer,
-  type WorkspaceUtilityActiveMode,
-} from "./workspace-utility-drawer"
+import { WorkspaceUtilityDrawer, type WorkspaceUtilityActiveMode } from "./workspace-utility-drawer"
 import {
   closedWorkspaceUtilityDrawer,
   openAgentUtility,
@@ -2166,28 +2152,16 @@ function App() {
         <ApplicationMenu locale={locale} onOpenSettings={openSettings} services={serviceCatalogSnapshot} />
       }
       headerActions={
-        <div className="flex items-center gap-1">
-          <button
-            aria-label={locale === "zh-CN" ? "分享项目" : "Share Project"}
-            className="grid size-6 shrink-0 place-items-center rounded text-muted-foreground outline-none transition-colors duration-100 hover:bg-accent hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring/40 motion-reduce:transition-none"
-            data-project-share=""
-            onClick={() => setSharingProjectId(activeProject.id)}
-            title={locale === "zh-CN" ? "分享项目" : "Share Project"}
-            type="button"
-          >
-            <Users className="size-3.5" />
-          </button>
-          <button
-            aria-label={locale === "zh-CN" ? "折叠项目侧栏" : "Collapse project sidebar"}
-            className="grid size-6 shrink-0 place-items-center rounded text-muted-foreground outline-none transition-colors duration-100 hover:bg-accent hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring/40 motion-reduce:transition-none"
-            data-project-sidebar-close=""
-            onClick={() => workbenchLayoutController.setPartVisible(WorkbenchLayoutParts.PrimarySidebar, false)}
-            title={locale === "zh-CN" ? "折叠项目侧栏" : "Collapse project sidebar"}
-            type="button"
-          >
-            <PanelLeftClose className="size-3.5" />
-          </button>
-        </div>
+        <button
+          aria-label={locale === "zh-CN" ? "分享项目" : "Share Project"}
+          className="grid size-6 shrink-0 place-items-center rounded text-muted-foreground outline-none transition-colors duration-100 hover:bg-accent hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring/40 motion-reduce:transition-none"
+          data-project-share=""
+          onClick={() => setSharingProjectId(activeProject.id)}
+          title={locale === "zh-CN" ? "分享项目" : "Share Project"}
+          type="button"
+        >
+          <Users className="size-3.5" />
+        </button>
       }
       hideWhenNoProject
       onFileActivate={handleProjectFileActivate}
@@ -2312,8 +2286,10 @@ function App() {
             rightAction={
               effectivePrimaryDesktopSurface === "workspace" && activeProjectId ? (
                 <AgentDrawerTrigger
-                  hidden={secondarySidebar.visible}
+                  closeLabel={locale === "zh-CN" ? "折叠助手面板" : "Collapse agent panel"}
+                  onClose={closeWorkspaceUtility}
                   onOpen={() => openAgentDrawer(agentTitlebarTriggerRef.current)}
+                  open={secondarySidebar.visible}
                   ref={agentTitlebarTriggerRef}
                   status={agentCompactStatus}
                 />
@@ -2401,6 +2377,7 @@ function App() {
               >
                 {activeProject ? (
                   <ProjectSidebarShell
+                    collapseLabel={locale === "zh-CN" ? "折叠项目侧栏" : "Collapse project sidebar"}
                     entryLabel={activeProject.name}
                     entryPortal={settingsSection ? null : projectTitlebarEntryHost}
                     onOpenChange={(open) =>
@@ -2517,7 +2494,7 @@ function App() {
                   )}
                 </section>
                 <WorkspaceUtilityDrawer
-                  agent={({ closeLabel, modeNavigation, onClose }) => (
+                  agent={({ modeNavigation }) => (
                     <div className="size-full min-h-0" ref={conversationShortcutScopeRef}>
                       <RendererErrorBoundary
                         name="Agent panel"
@@ -2525,7 +2502,6 @@ function App() {
                           <div className="flex size-full min-h-0 flex-col">
                             <header className="flex h-10 shrink-0 items-center gap-2 border-b border-border-subtle px-2.5">
                               {modeNavigation}
-                              <WorkspaceUtilityCollapseButton label={closeLabel} onClose={onClose} />
                             </header>
                             <div className="grid min-h-0 flex-1 place-items-center p-4 text-center" role="alert">
                               <div>
@@ -2576,9 +2552,7 @@ function App() {
                           projectId={activeProjectId}
                           projectName={activeProject?.name}
                           ref={mountAgentPanel}
-                          utilityCloseLabel={closeLabel}
                           utilityNavigation={modeNavigation ?? undefined}
-                          utilityOnClose={onClose}
                         />
                       </RendererErrorBoundary>
                     </div>

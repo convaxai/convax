@@ -441,8 +441,9 @@ describe("generation IPC", () => {
       if (signal) capturedSignals.push(signal)
       return rejectWhenAborted(signal)
     })
+    const cancel = mock(async () => undefined)
     const dispose = registerGenerationIpc(
-      { describeTool: async () => description, generate, listTools: async () => [] },
+      { cancel, describeTool: async () => description, generate, listTools: async () => [] },
       { isTrustedSender: () => true },
     )
     const owner = new TestSender(1)
@@ -458,9 +459,11 @@ describe("generation IPC", () => {
     const otherRejection = rejectionMessage(otherPending)
     await invoke(generationIpcChannels.cancel, { operationId: request.operationId }, otherOwner)
     expect(await otherRejection).toContain("canceled")
+    expect(cancel).not.toHaveBeenCalled()
     expect(capturedSignals[0]?.aborted).toBeFalse()
     await invoke(generationIpcChannels.cancel, { operationId: request.operationId }, owner)
     expect(await ownerRejection).toContain("canceled")
+    expect(cancel).toHaveBeenCalledWith({ operationId: request.operationId })
     expect(generate).toHaveBeenCalledTimes(2)
     expect(owner.listenerCount("destroyed")).toBe(0)
     expect(otherOwner.listenerCount("destroyed")).toBe(0)

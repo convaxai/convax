@@ -1500,19 +1500,28 @@ export class GenerationCanvasService {
     if (!activeNodes.length) {
       return { failedNodeIds: [], operationReceipt: null, projection: structuredClone(snapshot.projection) }
     }
-    const liveRuns = [...this.#executions.values()].flatMap((execution) => {
+    const observedLiveRuns = [...this.#executions.values()].flatMap((execution) => {
       const target = execution.state.target
       return !execution.state.settled && target?.scopeId === ref.scopeId && target.canvasId === ref.canvasId
         ? [{ nodeId: target.nodeId, operationId: target.operationId }]
         : []
     })
-    liveRuns.push(
+    observedLiveRuns.push(
       ...[...this.#supervisions.values()].flatMap(({ target }) =>
         target.scopeId === ref.scopeId && target.canvasId === ref.canvasId
           ? [{ nodeId: target.nodeId, operationId: target.operationId }]
           : [],
       ),
     )
+    const liveRuns = [...new Map(observedLiveRuns.map((run) => [`${run.nodeId}\0${run.operationId}`, run])).values()]
+    const liveRunKeys = new Set(liveRuns.map((run) => `${run.nodeId}\0${run.operationId}`))
+    const hasInactiveRun = activeNodes.some((node) => {
+      const run = getCanvasNodeGenerationRun(node)!
+      return !liveRunKeys.has(`${node.id}\0${run.operationId}`)
+    })
+    if (!hasInactiveRun) {
+      return { failedNodeIds: [], operationReceipt: null, projection: structuredClone(snapshot.projection) }
+    }
     const result = await this.#runs.interruptInactive({
       actor,
       canvasId: ref.canvasId,
@@ -2795,7 +2804,7 @@ export class GenerationCanvasService {
       )
       let recoveryResultDigest: string | undefined
       if (operationLedger && preparedTool.recovery && this.#operations) {
-        const recoveryState = await preparedTool.recovery.get(
+        let recoveryState = await preparedTool.recovery.get(
           {
             operationId: operationLedger.operationId,
             requestDigest: operationLedger.requestDigest,
@@ -2803,7 +2812,21 @@ export class GenerationCanvasService {
           },
           signal,
         )
+        for (let observation = 0; recoveryState.status === "submitted" || recoveryState.status === "running"; ) {
+          await lifecycleObserver({ type: "submitted", taskId: recoveryState.taskId })
+          recoveryState = await preparedTool.recovery.wait(
+            {
+              operationId: operationLedger.operationId,
+              requestDigest: operationLedger.requestDigest,
+              taskId: recoveryState.taskId,
+            },
+            signal,
+          )
+          await waitForGenerationRecoveryObservation(observation)
+          observation += 1
+        }
         if (recoveryState.status !== "succeeded") {
+          if (toolResult.isError) throw new GenerationToolReportedError(toolResult.content)
           throw new Error("Recoverable generation returned without a durable succeeded result")
         }
         recordedTaskId = recoveryState.taskId
@@ -3033,6 +3056,13 @@ export class GenerationCanvasService {
                 phase: "accepted",
                 taskId: recoveryTerminal.taskId,
               })
+              this.#ensureStoredSupervision(operationLedger, actor, false)
+              throw error
+            }
+            if (externalStarted && (recoveryTerminal.status === "absent" || recoveryTerminal.status === "prepared")) {
+              // Dispatch authorization crossed the durable boundary, but the
+              // sidecar has not yet persisted provider acceptance. Preserve
+              // the exact stored request so supervision can safely replay it.
               this.#ensureStoredSupervision(operationLedger, actor, false)
               throw error
             }
