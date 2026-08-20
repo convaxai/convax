@@ -108,6 +108,7 @@ import { FileLocalMarketplaceImportTransition, LocalMarketplaceStore } from "./l
 import { CapabilityMutationCoordinator, FileMarketplaceStateStore } from "./marketplace-state"
 import { DesktopMarketplaceCapabilityInstaller } from "./marketplace-capability-installer"
 import { MarketplaceApplicationService } from "./marketplace-application-service"
+import { assertMarketplacePluginSetupPolicy } from "./marketplace-plugin-setup-authorization"
 import { projectMarketplaceCapabilityDetails, unpackVerifiedMarketplaceArtifact } from "./marketplace-detail-projection"
 import {
   MarketplaceLegacyMigration,
@@ -2073,19 +2074,7 @@ function startApplication() {
         const current = await pluginInstallations.readActive()
         const plugin = current.plugins.find((entry) => entry.plugin.id === id)?.plugin
         if (!plugin) throw new Error("Installed Plugin is unavailable")
-        if (mode === "automatic-product-lock" && plugin.hooks) {
-          throw new Error("Automatic Plugin setup cannot authorize executable Hook modules")
-        }
-        if (
-          mode === "automatic-product-lock" &&
-          (("service" in plugin.contributes && plugin.contributes.service !== undefined) ||
-            ("services" in plugin.contributes && (plugin.contributes.services?.length ?? 0) > 0) ||
-            (plugin.contributes.capabilities?.exports.length ?? 0) > 0 ||
-            (plugin.contributes.capabilities?.imports.optional.length ?? 0) > 0 ||
-            (plugin.contributes.capabilities?.imports.required.length ?? 0) > 0)
-        ) {
-          throw new Error("Automatic Plugin setup cannot authorize extra runtime authority")
-        }
+        assertMarketplacePluginSetupPolicy(plugin, mode)
         if (mode === "automatic-product-lock" && !plugin.runtime) {
           throw new Error("Automatic Plugin setup requires an immutable managed companion")
         }
