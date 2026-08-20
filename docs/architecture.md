@@ -168,7 +168,7 @@ flowchart TB
 
   subgraph Desktop["@convax/desktop · Electron composition root"]
     subgraph Entry["Runtime entry surfaces"]
-      Renderer["Renderer UI<br/>React and controllers"]
+      Renderer["Renderer UI<br/>React, controllers, first-run onboarding"]
       Preload["Preload<br/>typed window.convax bridge"]
       Agent["Agent / OpenCode"]
       PluginRuntime["Plugin iframe, sidecar, Skill, Hook"]
@@ -262,7 +262,7 @@ flowchart TB
   subgraph State["State and persistence"]
     UserData["Electron userData<br/>bindings, user-managed private key files, Marketplace, grants, immutable Plugin closures<br/>isolated per identified development task"]
     ProjectRoot["Project root / .convax<br/>identity, final-frame objects/journals/heads, checkpoints/floors, managed assets"]
-    LocalStorage["Browser localStorage<br/>preferences, recovery and disposable Marketplace / Service / model display caches"]
+    LocalStorage["Browser localStorage<br/>preferences, onboarding progress, recovery<br/>and disposable Marketplace / Service / model display caches"]
     UpdaterCache["Electron updater cache<br/>verified partial/downloaded package · disposable"]
   end
 
@@ -764,6 +764,7 @@ boundary checker fails closed until those admissions are complete.
 | Plugin-owned Skill selection and provenance                           | Desktop main                                             | Immutable ActiveSet closure paths enter Agent Runtime through a generic port                                       |
 | Installed Plugin snapshots and ActiveSet                              | Desktop main                                             | One global CAS pointer; exact snapshot leases bind all runtime use                                                 |
 | Plugin Service status and usage display                               | Installed sidecar through Desktop main                   | Renderer may retain only a disposable last-complete safe projection                                                |
+| First-run account onboarding progress                                 | Desktop Renderer preference                              | Bounded local progress only; account, Plan, Credits, Checkout and entitlement remain live Service authority        |
 | Available/downloaded Desktop application update                       | Desktop Main update controller plus signed remote feed   | Feed metadata and updater cache are not Project, Plugin, or renderer authority                                     |
 
 A recovery preference such as “last Canvas for Project X” is not canonical state.
@@ -859,7 +860,8 @@ Packaged app Resources/
   default-capabilities/                 build-verified remote first-install seed;
                                         never built-in provenance or executable-in-place
 
-browser localStorage                    per-user Workbench/renderer preferences plus bounded
+browser localStorage                    per-user Workbench/renderer preferences, bounded first-run
+                                        onboarding progress, plus bounded
                                         disposable Marketplace, Plugin Service and model catalog
                                         display projections
 
@@ -1296,6 +1298,53 @@ other Main runtimes have completed the shared shutdown drain. A preparation or
 installer-start failure keeps or relaunches the currently installed version and
 reports a bounded native error. Project data, installed Plugin closures, preferences,
 and user content remain outside the replaceable application bundle.
+
+### First-run account onboarding
+
+First-run onboarding is a Desktop Renderer composition over the existing Project
+startup route and Plugin Service projection. It is not Project state, a new account
+owner, a billing authority, or a Plugin-specific runtime path.
+
+```text
+Project registry initializes
+  -> any available registered Project bypasses account onboarding and restores locally
+  -> an empty successful registry reads bounded renderer onboarding progress
+  -> Renderer selects exactly one installed Plugin Service whose declared actions
+     contain authorization and Checkout
+  -> zero candidates shows a retryable provisioning state; multiple candidates fail
+     closed instead of choosing by Plugin id, vendor, display name or ordering
+  -> authorize/reauthorize uses the existing Main-owned system-browser flow
+  -> the live v2 Service status alone proves connected account, current Plan,
+     Credits, Checkout offers and subscription state
+  -> a connected Free account may start one advertised Checkout or continue Free
+  -> Checkout cancellation, failure, closure, unknown state or provider delay keeps
+     the current Plan usable and never grants a local entitlement
+  -> Ready reuses Create Project / Open Project; successful Project entry marks the
+     bounded renderer preference complete
+```
+
+The progress record is a closed, bounded `{version, step, completed}` Renderer
+preference. It contains no account identity, email, token, credential, Plan or
+entitlement fact; malformed, oversized, future-version, unavailable-storage and
+authority-shaped values fail soft to the Account step. Account and billing state
+remain sidecar-owned live status, while credentials and authorization URLs stay
+outside Renderer and Preload.
+
+The Account page explains Local Project, Canvas and Agent, the local-data boundary,
+and that password entry happens only in the system browser. The Plan page consumes
+only the current service status and advertised Checkout Plan keys. Subscription is
+recommended but optional: closing or canceling Checkout, or selecting Continue with
+Free, advances without changing the live Plan. The final page reuses the ordinary
+Project Home operations rather than introducing a tutorial-only Project path.
+
+Plan and Credits are display projections only. When the v2 status does not carry a
+price or benefit list, Renderer directs the user to the secure Checkout for those
+live facts rather than hard-coding them.
+
+Signing in does not upload, synchronize, share, enroll, or change collaboration
+authority for a local Project. Existing local Projects remain openable and editable
+while offline, signed out, or unsubscribed, subject only to their independent local
+Project authority and recovery state.
 
 ### Project creation and opening
 

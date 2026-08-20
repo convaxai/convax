@@ -79,6 +79,7 @@ import {
   type AppearancePreferences,
 } from "./appearance-preferences"
 import { resolveCanvasAppearancePalette } from "./appearance-themes"
+import { ConvaxOnboarding } from "./convax-onboarding"
 import {
   shouldMountResizeHandle,
   startCapturedPointerDrag,
@@ -145,7 +146,6 @@ import { ProjectCanvasWorkbenchCoordinator, runProjectCanvasResourceRelink } fro
 import { projectCanvasSidebarNodes, sameProjectCanvasNodeProjection } from "./project-canvas-sidebar-projection"
 import { createProjectFolderBrowseService } from "./project-folder-browse-service"
 import { revealProjectFileOnCanvas } from "./project-file-canvas-reveal"
-import { ProjectHome } from "./project-home"
 import {
   enterSelectedProjectFromHome,
   recoveryErrorAfterProjectSelection,
@@ -2340,16 +2340,21 @@ function App() {
                 {projectBootstrapView.kind === "registry-loading" ? (
                   <ProjectRegistryLoadingState locale={locale} reducedMotion={appearancePreferences.reducedMotion} />
                 ) : projectBootstrapView.kind === "onboarding" ? (
-                  <ProjectHome
-                    controller={projectController}
+                  <ConvaxOnboarding
                     locale={locale}
                     onEnterProject={enterHomeProject}
-                    onSelectionStart={() => {
+                    onProjectSelectionStart={() => {
                       startupAutoRestoreEnabledRef.current = false
                       setStartupEntryFailure(null)
                       setStartupRecoveryError(null)
                     }}
+                    onRefreshServices={() => serviceCatalogController.refresh()}
+                    onServiceAction={(target, action) => serviceCatalogController.perform(target, action)}
+                    onServiceCheckout={(target, planKey) => serviceCatalogController.checkout(target, planKey)}
+                    projectController={projectController}
                     reducedMotion={appearancePreferences.reducedMotion}
+                    serviceSnapshot={serviceCatalogSnapshot}
+                    storage={localStorage}
                   />
                 ) : projectBootstrapView.kind === "recovery" ? (
                   <ProjectRecoveryState

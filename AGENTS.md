@@ -359,6 +359,12 @@ user directory.
   optional usage history. It renders that projection immediately, refreshes status
   and usage independently in the background, and never treats it as authorization,
   execution availability, Checkout, or billing authority.
+- Renderer may persist only the bounded versioned presentation step and completion
+  flag for first-run account onboarding. The flow applies only after a successful
+  empty Project-registry read, selects an account surface from generic advertised
+  Service actions, and derives account, Plan, Credits, Checkout and entitlement
+  display from live Service status. Existing local Projects bypass it and remain
+  openable while offline, signed out or unsubscribed.
 - External public-client authorization is companion-owned. Direct Resource Server
   access requires an Access Token whose audience is that exact resource or an
   explicitly bound first-party Application trust domain. An arbitrary or unbound
