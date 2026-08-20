@@ -219,15 +219,15 @@ function OnboardingShell({
       <section className="convax-onboarding__surface">
         <header className="convax-onboarding__header">
           <ConvaxBrand label="Convax" showWordmark tone="monochrome" />
-          <div className="convax-onboarding__header-actions">
-            <OnboardingProgress locale={locale} step={step} />
-            <button className="convax-onboarding__defer" onClick={onDefer} type="button">
-              <span>{copy[locale].defer}</span>
-              <X aria-hidden="true" />
-            </button>
-          </div>
+          <OnboardingProgress locale={locale} step={step} />
         </header>
         {children}
+        <footer className="convax-onboarding__footer">
+          <button className="convax-onboarding__defer" onClick={onDefer} type="button">
+            <span>{copy[locale].defer}</span>
+            <X aria-hidden="true" />
+          </button>
+        </footer>
       </section>
     </main>
   )

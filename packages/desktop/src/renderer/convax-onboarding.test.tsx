@@ -193,6 +193,19 @@ describe("ConvaxOnboarding", () => {
     expect(markup).not.toContain("MCP")
   })
 
+  test("places the defer action in the bottom-left footer outside the step header", async () => {
+    await withDom(async (root) => {
+      await act(async () => {
+        root.render(<ConvaxOnboarding {...props()} />)
+      })
+
+      const defer = document.querySelector<HTMLButtonElement>(".convax-onboarding__defer")
+      expect(defer?.closest(".convax-onboarding__footer")).not.toBeNull()
+      expect(defer?.closest(".convax-onboarding__header")).toBeNull()
+      expect(document.querySelector(".convax-onboarding__header > .convax-onboarding__progress")).not.toBeNull()
+    })
+  })
+
   test("defers without completing onboarding and resumes from the bottom-left task", async () => {
     await withDom(async (root) => {
       const progress = memoryStorage()
