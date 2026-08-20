@@ -1995,8 +1995,13 @@ catalog so a provider webhook projection can become visible without granting any
 entitlement locally.
 
 Desktop exposes one read-only service catalog to the application menu and Services
-settings. Plugin generation capabilities and model rows are derived from the
-installed manifest. Every present LLM contribution declares exactly one `openai`
+settings. Plugin generation capabilities and model-family membership are derived
+from the installed manifest, but a manifest family label is never projected as a
+concrete available model. Concrete generation model rows come only from the current
+bounded `tools/list.inputSchema`: an unmarked live family contributes its one static
+declared model, a marked dynamic family contributes its current selector choices,
+and a missing or invalid live family contributes no model row. Every present LLM
+contribution declares exactly one `openai`
 or `openrouter` Provider protocol; a Service without LLM remains valid. After
 starting its Main-only loopback gateway,
 Desktop actively requests that protocol's `/models` catalog, validates it in Main,
@@ -2011,13 +2016,14 @@ select an OpenCode provider/model pair. Agent messages may carry the exact
 provider/model identity recorded by OpenCode for that message so Renderer can show
 the dispatch result; model-authored prose is never model-selection evidence.
 
-The Services page and generation pickers may display installed model rows while a
-service is disconnected so the user can understand, select, and configure that
-installation. Main joins each model back to the exact installed service projection
-and validates its bounded current tool schema without using `service.status` as a
-discovery gate. Execution is stricter: preparation and dispatch perform bounded live
-status checks and cross the external-call boundary only while the service is
-connected.
+The Services page and generation pickers may display concrete model rows discovered
+from an installed sidecar while a service is disconnected so the user can understand,
+select, and configure that installation. They never synthesize a fallback row from
+a manifest family name when concrete discovery is empty or unavailable. Main joins
+each model back to the exact installed service projection and validates its bounded
+current tool schema without using `service.status` as a discovery gate. Execution is
+stricter: preparation and dispatch perform bounded live status checks and cross the
+external-call boundary only while the service is connected.
 
 Either admitted manifest may add one top-level generic LLM contribution, and each
 v9 Service may independently add one, without introducing a built-in vendor

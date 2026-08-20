@@ -77,7 +77,7 @@ function pluginClient(): PluginServiceClient {
 }
 
 describe("ServiceCatalogController", () => {
-  test("projects the shared dynamic generation catalog into its owning Service", async () => {
+  test("projects only concrete runtime generation models into its owning Service", async () => {
     const listeners = new Set<() => void>()
     const imageModel = (id: string, name: string): GenerationToolSummary => ({
       acceptedInputs: ["text"],
@@ -116,10 +116,10 @@ describe("ServiceCatalogController", () => {
     controller.start()
     await controller.refresh()
 
-    expect(controller.getSnapshot().services[1]?.models).toEqual([
-      { capability: "video", id: "seedance", name: "Seedance" },
-      { capability: "image", id: "dynamic-image-one", name: "Dynamic Image One" },
-    ])
+    expect(controller.getSnapshot().services[1]).toMatchObject({
+      capabilities: ["image", "video"],
+      models: [{ capability: "image", id: "dynamic-image-one", name: "Dynamic Image One" }],
+    })
 
     generationSnapshot = {
       ...generationSnapshot,
@@ -127,12 +127,35 @@ describe("ServiceCatalogController", () => {
     }
     for (const listener of listeners) listener()
     expect(controller.getSnapshot().services[1]?.models).toEqual([
-      { capability: "video", id: "seedance", name: "Seedance" },
       { capability: "image", id: "dynamic-image-two", name: "Dynamic Image Two" },
     ])
 
     controller.dispose()
     expect(listeners.size).toBe(0)
+  })
+
+  test("does not turn manifest model-family labels into fallback models", async () => {
+    const controller = new ServiceCatalogController(
+      pluginClient(),
+      { listModels: mock(async () => ({ providers: [] })) },
+      {
+        generationCatalog: {
+          getSnapshot: () => ({ loading: false, ready: true, refreshing: false, tools: [] }),
+          refresh: mock(async () => []),
+          subscribe: mock(() => () => undefined),
+        },
+      },
+    )
+    controller.setScopeId("project-a")
+    controller.start()
+    await controller.refresh()
+
+    expect(controller.getSnapshot().services[1]).toMatchObject({
+      capabilities: ["image", "video"],
+      models: [],
+      name: "Creative Service",
+    })
+    controller.dispose()
   })
 
   test("renders the persisted Agent model catalog while cold-start revalidation is pending", async () => {
@@ -297,7 +320,7 @@ describe("ServiceCatalogController", () => {
     controller.dispose()
   })
 
-  test("joins Plugin service metadata and OpenCode models without adding an execution router", async () => {
+  test("joins Plugin service metadata and concrete OpenCode models without inventing generation models", async () => {
     const agentClient = {
       listModels: mock(async () => ({
         providers: [
@@ -328,10 +351,7 @@ describe("ServiceCatalogController", () => {
         authentication: "authenticated",
         billing: { kind: "credits", remaining: 88, unit: "credits" },
         capabilities: ["image", "video"],
-        models: [
-          { capability: "image", id: "seedream", name: "Seedream" },
-          { capability: "video", id: "seedance", name: "Seedance" },
-        ],
+        models: [],
         name: "Creative Service",
         serviceId: "plugin:creative-service",
       }),
