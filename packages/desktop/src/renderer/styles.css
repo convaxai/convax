@@ -406,7 +406,10 @@
 }
 
 .convax-onboarding__surface {
+  display: flex;
+  min-height: 100%;
   width: min(100%, 58rem);
+  flex-direction: column;
   margin: 0 auto;
   animation: convax-onboarding-reveal var(--ui-motion-slow) var(--ui-ease-reveal) both;
 }
@@ -419,11 +422,12 @@
   margin-bottom: clamp(2.25rem, 7vh, 4.75rem);
 }
 
-.convax-onboarding__header-actions {
+.convax-onboarding__footer {
   display: flex;
-  min-width: 0;
-  align-items: center;
-  gap: 1rem;
+  align-items: flex-end;
+  justify-content: flex-start;
+  margin-top: auto;
+  padding-top: clamp(1.5rem, 5vh, 3.5rem);
 }
 
 .convax-onboarding__defer {
@@ -985,11 +989,6 @@
 
   .convax-onboarding__progress li > span {
     margin-right: 0;
-  }
-
-  .convax-onboarding__header-actions {
-    width: 100%;
-    justify-content: space-between;
   }
 
   .convax-onboarding__concepts,
