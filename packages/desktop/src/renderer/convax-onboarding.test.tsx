@@ -193,6 +193,60 @@ describe("ConvaxOnboarding", () => {
     expect(markup).not.toContain("MCP")
   })
 
+  test("defers without completing onboarding and resumes from the bottom-left task", async () => {
+    await withDom(async (root) => {
+      const progress = memoryStorage()
+      await act(async () => {
+        root.render(
+          <ConvaxOnboarding
+            {...props({
+              locale: "zh-CN",
+              serviceSnapshot: serviceSnapshot(disconnectedService()),
+              storage: progress.storage,
+            })}
+          />,
+        )
+      })
+      await act(async () => {
+        document.querySelector<HTMLButtonElement>(".convax-onboarding__defer")?.click()
+      })
+
+      expect(document.querySelector('[data-convax-onboarding-deferred="true"]')).not.toBeNull()
+      expect(document.querySelector('[data-convax-onboarding-task="true"]')?.textContent).toContain("下一步：登录")
+      expect(progress.parsed).toEqual({ completed: false, deferred: true, step: "account", version: 2 })
+
+      await act(async () => {
+        document.querySelector<HTMLButtonElement>('[data-convax-onboarding-task="true"]')?.click()
+      })
+      expect(document.querySelector('[data-convax-onboarding="true"]')).not.toBeNull()
+      expect(document.querySelector('[data-convax-onboarding-task="true"]')).toBeNull()
+    })
+  })
+
+  test("shows the live resumable step and progress in the deferred task", async () => {
+    await withDom(async (root) => {
+      const progress = memoryStorage()
+      await act(async () => {
+        root.render(
+          <ConvaxOnboarding
+            {...props({
+              locale: "zh-CN",
+              serviceSnapshot: serviceSnapshot(service()),
+              storage: progress.storage,
+            })}
+          />,
+        )
+      })
+      await act(async () => {
+        document.querySelector<HTMLButtonElement>(".convax-onboarding__defer")?.click()
+      })
+
+      expect(document.querySelector('[data-convax-onboarding-task="true"]')?.textContent).toContain("下一步：选择套餐")
+      expect(document.querySelector('[role="progressbar"]')?.getAttribute("aria-valuenow")).toBe("1")
+      expect(progress.parsed).toEqual({ completed: false, deferred: true, step: "plan", version: 2 })
+    })
+  })
+
   test("shows a recoverable missing account-service state", () => {
     const markup = renderToStaticMarkup(
       <ConvaxOnboarding
@@ -298,7 +352,7 @@ describe("ConvaxOnboarding", () => {
       expect(document.querySelector('[data-project-home-ready-summary="true"]')?.textContent).toContain("Free")
       expect(document.querySelector('[data-project-action="create"]')?.textContent).toContain("创建第一个项目")
       expect(document.querySelector('[data-project-action="open"]')?.textContent).toContain("打开已有项目")
-      expect(progress.parsed).toEqual({ completed: false, step: "ready", version: 1 })
+      expect(progress.parsed).toEqual({ completed: false, deferred: false, step: "ready", version: 2 })
     })
   })
 
@@ -326,7 +380,7 @@ describe("ConvaxOnboarding", () => {
 
   test("marks onboarding complete only after a Project is entered", async () => {
     await withDom(async (root) => {
-      const progress = memoryStorage({ completed: false, step: "ready", version: 1 })
+      const progress = memoryStorage({ completed: false, deferred: false, step: "ready", version: 2 })
       const harness = projectController()
       const openProject = mock(async () => {
         harness.setSnapshot({ activeProjectId: "opened", projects: [project("opened")] })
@@ -351,12 +405,41 @@ describe("ConvaxOnboarding", () => {
       })
 
       expect(onEnterProject).toHaveBeenCalledWith("opened")
-      expect(progress.parsed).toEqual({ completed: true, step: "ready", version: 1 })
+      expect(progress.parsed).toEqual({ completed: true, deferred: false, step: "ready", version: 2 })
+    })
+  })
+
+  test("finishes resumed onboarding against an already active Project", async () => {
+    await withDom(async (root) => {
+      const progress = memoryStorage({ completed: false, deferred: true, step: "ready", version: 2 })
+      const harness = projectController()
+      harness.setSnapshot({ activeProjectId: "current", projects: [project("current")] })
+      const onEnterProject = mock(async () => true)
+      await act(async () => {
+        root.render(
+          <ConvaxOnboarding
+            {...props({
+              forceOpen: true,
+              locale: "zh-CN",
+              onEnterProject,
+              projectController: harness.controller,
+              serviceSnapshot: serviceSnapshot(service()),
+              storage: progress.storage,
+            })}
+          />,
+        )
+      })
+      await act(async () => {
+        document.querySelector<HTMLButtonElement>('[data-convax-onboarding-ready="true"] button')?.click()
+      })
+
+      expect(onEnterProject).toHaveBeenCalledWith("current")
+      expect(progress.parsed).toEqual({ completed: true, deferred: false, step: "ready", version: 2 })
     })
   })
 
   test("does not repeat the full onboarding after completion", () => {
-    const progress = memoryStorage({ completed: true, step: "ready", version: 1 })
+    const progress = memoryStorage({ completed: true, deferred: false, step: "ready", version: 2 })
     const markup = renderToStaticMarkup(
       <ConvaxOnboarding
         {...props({ serviceSnapshot: serviceSnapshot(disconnectedService()), storage: progress.storage })}

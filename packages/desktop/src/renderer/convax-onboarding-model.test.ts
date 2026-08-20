@@ -5,6 +5,8 @@ import {
   completeConvaxOnboarding,
   convaxOnboardingStorageKey,
   defaultConvaxOnboardingProgress,
+  deferConvaxOnboarding,
+  legacyConvaxOnboardingStorageKey,
   nextConvaxOnboardingProgress,
   readConvaxOnboardingProgress,
   resolveConvaxOnboardingRoute,
@@ -69,13 +71,31 @@ describe("Convax onboarding persistence", () => {
     ).toEqual(defaultConvaxOnboardingProgress())
     expect(
       readConvaxOnboardingProgress({
-        getItem: () => JSON.stringify({ account: "person@example.com", completed: true, step: "ready", version: 1 }),
+        getItem: () =>
+          JSON.stringify({
+            account: "person@example.com",
+            completed: true,
+            deferred: false,
+            step: "ready",
+            version: 2,
+          }),
       }),
     ).toEqual(defaultConvaxOnboardingProgress())
     expect(readConvaxOnboardingProgress({ getItem: () => " ".repeat(257) })).toEqual(defaultConvaxOnboardingProgress())
   })
 
-  test("persists only the bounded step and completion preference", () => {
+  test("migrates a strict v1 preference without inventing a deferred task", () => {
+    expect(
+      readConvaxOnboardingProgress({
+        getItem: (key) =>
+          key === legacyConvaxOnboardingStorageKey
+            ? JSON.stringify({ completed: false, step: "plan", version: 1 })
+            : null,
+      }),
+    ).toEqual({ completed: false, deferred: false, step: "plan", version: 2 })
+  })
+
+  test("persists only the bounded step, completion, and deferred presentation preferences", () => {
     let stored = ""
     const storage = {
       getItem: (key: string) => (key === convaxOnboardingStorageKey ? stored : null),
@@ -87,11 +107,16 @@ describe("Convax onboarding persistence", () => {
     const ready = nextConvaxOnboardingProgress(defaultConvaxOnboardingProgress(), "ready")
     expect(writeConvaxOnboardingProgress(storage, ready)).toBeTrue()
     expect(readConvaxOnboardingProgress(storage)).toEqual(ready)
-    expect(JSON.parse(stored)).toEqual({ completed: false, step: "ready", version: 1 })
+    expect(JSON.parse(stored)).toEqual({ completed: false, deferred: false, step: "ready", version: 2 })
 
-    const completed = completeConvaxOnboarding(ready)
+    const deferred = deferConvaxOnboarding(ready)
+    expect(writeConvaxOnboardingProgress(storage, deferred)).toBeTrue()
+    expect(readConvaxOnboardingProgress(storage)).toEqual(deferred)
+
+    const completed = completeConvaxOnboarding(deferred)
     expect(writeConvaxOnboardingProgress(storage, completed)).toBeTrue()
     expect(readConvaxOnboardingProgress(storage)).toEqual(completed)
+    expect(completed.deferred).toBeFalse()
   })
 
   test("fails softly when browser storage is unavailable", () => {

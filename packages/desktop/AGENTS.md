@@ -93,8 +93,10 @@ contract and its routed references.
 - First-run account onboarding is an empty-registry Renderer composition. Resolve
   its account surface only from generic installed Service actions, reuse the
   system-browser authorization and Checkout operations, and persist only bounded
-  presentation progress. Live Service status owns account, Plan, Credits and
-  entitlement display; an existing local Project always bypasses the flow.
+  presentation progress, including whether the incomplete flow was deferred. A
+  deferred flow becomes a non-blocking bottom-left task and resumes only by explicit
+  user action. Live Service status owns account, Plan, Credits and entitlement
+  display; an existing local Project always bypasses automatic presentation.
 - Derive the active Canvas/file from Workbench Surface only. Project Canvas owns
   catalog CRUD; Desktop coordinators may own save guards, fallback, rollback, and
   preference flows, but not a second active selection.
