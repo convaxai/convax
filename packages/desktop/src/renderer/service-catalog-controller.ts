@@ -99,10 +99,10 @@ export function serviceCatalogAgentModelsForScope(
 }
 
 /**
- * Generation model discovery is stricter than the display catalog: Main exposes
- * models only after the owning service reports connected. Keep a small renderer
- * invalidation key that changes with settled authority availability, not with
- * transient refresh/loading presentation state.
+ * Concrete generation models come from the current runtime catalog independently
+ * of Service connection state. Keep a small renderer invalidation key so a
+ * settled authorization transition still revalidates that catalog, without
+ * coupling it to transient refresh/loading presentation state.
  */
 export function serviceGenerationAvailabilityVersion(
   snapshot: ServiceCatalogSnapshot,
@@ -165,13 +165,13 @@ function pluginEntry(
       id: tool.id,
       name: tool.modelName ?? tool.title,
     }))
-  const dynamicGenerationCapabilities = new Set(dynamicGenerationModels.map((model) => model.capability))
-  const nonLlmModels = [
-    ...service.models.filter(
-      (model) => model.capability !== "llm" && !dynamicGenerationCapabilities.has(model.capability),
-    ),
-    ...dynamicGenerationModels,
-  ]
+  // Manifest generation models declare model families and their owning tools.
+  // They are not concrete runtime availability: a dynamic family name such as
+  // "Image generation" must never become a selectable fallback model when the
+  // sidecar has not reported concrete choices. Static families still reappear
+  // through the inspected generation catalog because an unmarked live schema
+  // resolves to its one declared model.
+  const nonLlmModels = dynamicGenerationModels
   const models =
     connectedLlmProviders.length === 0
       ? [...service.models.filter((model) => model.capability === "llm"), ...nonLlmModels]
@@ -190,7 +190,7 @@ function pluginEntry(
     actions: service.actions,
     authentication: pluginAuthentication(service),
     billing: pluginBilling(service),
-    capabilities: [...new Set(models.map((model) => model.capability))],
+    capabilities: [...new Set([...service.capabilities, ...models.map((model) => model.capability)])],
     description: service.description,
     error: service.error,
     kind: "plugin",

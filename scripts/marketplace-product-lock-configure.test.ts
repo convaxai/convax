@@ -17,8 +17,8 @@ describe("Marketplace product policy configuration", () => {
     expect(new TextDecoder().decode(result.stderr)).toContain("--revision=<positive integer>")
   })
 
-  test("creates the approved v13 source and one package policy per exact multi-purpose closure", () => {
-    expect(CURRENT_MARKETPLACE_PRODUCT_POLICY_REVISION).toBe(13)
+  test("creates the approved v15 source and one package policy per exact multi-purpose closure", () => {
+    expect(CURRENT_MARKETPLACE_PRODUCT_POLICY_REVISION).toBe(15)
     expect(configureMarketplaceProductPolicy(CURRENT_MARKETPLACE_PRODUCT_POLICY_REVISION)).toEqual({
       builtin: { marketplaceId: "convax-builtin", repository: "convaxai/convax-plugins" },
       official: {
@@ -41,6 +41,13 @@ describe("Marketplace product policy configuration", () => {
           purposes: ["default-install"],
           targets: ["darwin-arm64"],
         },
+        ...["jimeng-service", "libtv-service", "xiaoyunque-service"].map((id) => ({
+          id,
+          kind: "plugin",
+          marketplaceId: "convax-official",
+          purposes: ["default-install"],
+          targets: ["darwin-arm64"],
+        })),
         {
           id: "cutout-studio",
           kind: "plugin",
@@ -75,7 +82,7 @@ describe("Marketplace product policy configuration", () => {
             version: "0.3.14",
           },
           targets: ["darwin-arm64"],
-          version: "1.0.6",
+          version: "1.0.7",
         },
         ...[
           "ad-idea",
@@ -150,7 +157,7 @@ describe("Marketplace product policy configuration", () => {
           version: "0.2.2",
         },
       ],
-      revision: 13,
+      revision: 15,
     })
   })
 

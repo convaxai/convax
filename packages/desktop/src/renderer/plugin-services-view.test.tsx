@@ -67,6 +67,40 @@ function installTestWindow() {
 }
 
 describe("Plugin Services host UI", () => {
+  test("distinguishes an unauthorized empty model catalog from a connected empty catalog", () => {
+    const unauthorized = renderToStaticMarkup(
+      <PluginServicesSurface
+        locale="zh-CN"
+        onAction={noop}
+        onRefresh={noop}
+        snapshot={{
+          loading: false,
+          services: [
+            {
+              ...baseService,
+              actions: ["authorize"],
+              authentication: "required",
+              models: [],
+              state: "disconnected",
+            },
+          ],
+        }}
+      />,
+    )
+    const connectedWithoutModels = renderToStaticMarkup(
+      <PluginServicesSurface
+        locale="zh-CN"
+        onAction={noop}
+        onRefresh={noop}
+        snapshot={{ loading: false, services: [{ ...baseService, models: [] }] }}
+      />,
+    )
+
+    expect(unauthorized).toContain("暂未授权，授权后加载模型。")
+    expect(unauthorized).not.toContain("小云雀图片")
+    expect(connectedWithoutModels).toContain("暂无可用模型。")
+  })
+
   test("opens a concrete Service target directly", () => {
     const markup = renderToStaticMarkup(
       <PluginServicesSurface

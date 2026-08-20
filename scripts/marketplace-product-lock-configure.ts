@@ -3,7 +3,7 @@ import { resolve } from "node:path"
 
 import type { MarketplaceProductPolicy } from "./marketplace-product-lock"
 
-export const CURRENT_MARKETPLACE_PRODUCT_POLICY_REVISION = 14
+export const CURRENT_MARKETPLACE_PRODUCT_POLICY_REVISION = 15
 
 const DEFAULT_STANDALONE_SKILLS = [
   "ad-idea",
@@ -47,6 +47,15 @@ export function configureMarketplaceProductPolicy(revision: number): Marketplace
         purposes: ["default-install"],
         targets: ["darwin-arm64"],
       },
+      ...["jimeng-service", "libtv-service", "xiaoyunque-service"].map(
+        (id): MarketplaceProductPolicy["packages"][number] => ({
+          id,
+          kind: "plugin",
+          marketplaceId: "convax-official",
+          purposes: ["default-install"],
+          targets: ["darwin-arm64"],
+        }),
+      ),
       {
         id: "cutout-studio",
         kind: "plugin",

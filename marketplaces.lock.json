@@ -33,6 +33,39 @@
         ]
       },
       {
+        "id": "jimeng-service",
+        "kind": "plugin",
+        "marketplaceId": "convax-official",
+        "purposes": [
+          "default-install"
+        ],
+        "targets": [
+          "darwin-arm64"
+        ]
+      },
+      {
+        "id": "libtv-service",
+        "kind": "plugin",
+        "marketplaceId": "convax-official",
+        "purposes": [
+          "default-install"
+        ],
+        "targets": [
+          "darwin-arm64"
+        ]
+      },
+      {
+        "id": "xiaoyunque-service",
+        "kind": "plugin",
+        "marketplaceId": "convax-official",
+        "purposes": [
+          "default-install"
+        ],
+        "targets": [
+          "darwin-arm64"
+        ]
+      },
+      {
         "id": "cutout-studio",
         "kind": "plugin",
         "marketplaceId": "convax-official",
@@ -228,7 +261,7 @@
         "version": "0.2.2"
       }
     ],
-    "revision": 14
+    "revision": 15
   },
   "resolved": {
     "builtinBundle": {
@@ -248,20 +281,20 @@
         "name": "marketplace.json",
         "sha256": "371a7ca2fc29a492a599878d53ca62a36ac98ca160d6d3b880aec8d72c48f001",
         "size": 563,
-        "url": "https://github.com/convaxai/convax-plugins/releases/download/registry-v2-e7161b62de20c0fb311c1ca4854dae61718f5b5da37e5b93f7b7eeacf4b112ab/marketplace.json"
+        "url": "https://github.com/convaxai/convax-plugins/releases/download/registry-v2-46964c1e0141775c08564a7d493cd859de6ca6739198be9be86bae421926c3a3/marketplace.json"
       },
       "registry": {
         "name": "registry-v2.json",
-        "sha256": "77e80d85eb63b80b02941f34b2d9b6d4b5c180e5f390faf307da236b348847df",
+        "sha256": "10c50e825ab4f3d192fa93038c2a6517ed79853bb79817968e0a03f22fb5c9c1",
         "size": 43751,
-        "url": "https://github.com/convaxai/convax-plugins/releases/download/registry-v2-e7161b62de20c0fb311c1ca4854dae61718f5b5da37e5b93f7b7eeacf4b112ab/registry-v2.json"
+        "url": "https://github.com/convaxai/convax-plugins/releases/download/registry-v2-46964c1e0141775c08564a7d493cd859de6ca6739198be9be86bae421926c3a3/registry-v2.json"
       },
-      "revision": "e7161b62de20c0fb311c1ca4854dae61718f5b5da37e5b93f7b7eeacf4b112ab",
+      "revision": "46964c1e0141775c08564a7d493cd859de6ca6739198be9be86bae421926c3a3",
       "showcase": {
         "name": "showcase-v2.json",
-        "sha256": "1e5dcb52024fe43aa1a2b742ccb947ef70d0a568e3c441ff2e4faf48c2804b15",
+        "sha256": "c3141578189e68b8710070b937c32dc0089f7937c6ba3bc8c009ae66a86e1fc4",
         "size": 15031,
-        "url": "https://github.com/convaxai/convax-plugins/releases/download/registry-v2-e7161b62de20c0fb311c1ca4854dae61718f5b5da37e5b93f7b7eeacf4b112ab/showcase-v2.json"
+        "url": "https://github.com/convaxai/convax-plugins/releases/download/registry-v2-46964c1e0141775c08564a7d493cd859de6ca6739198be9be86bae421926c3a3/showcase-v2.json"
       }
     },
     "packages": [
@@ -339,6 +372,93 @@
       },
       {
         "artifact": {
+          "name": "plugin-jimeng-service-0.1.0.zip",
+          "sha256": "3e35f1afb435ae7b5842572ea9ef36ae1c1b63151988f712795730536e255be1",
+          "size": 3996,
+          "url": "https://github.com/convaxai/convax-plugins/releases/download/plugin-jimeng-service-v0.1.0/plugin-jimeng-service-0.1.0.zip"
+        },
+        "companions": [
+          {
+            "name": "jimeng-service-0.1.0-darwin-arm64-convax-shortdrama-router-mcp",
+            "sha256": "bc2da043467338872bda3ba2770ca6a8159225509cd7481a7d7381184f9586d6",
+            "size": 155860,
+            "url": "https://github.com/convaxai/convax-plugins/releases/download/plugin-jimeng-service-v0.1.0/jimeng-service-0.1.0-darwin-arm64-convax-shortdrama-router-mcp",
+            "arch": "arm64",
+            "platform": "darwin"
+          }
+        ],
+        "id": "jimeng-service",
+        "kind": "plugin",
+        "marketplaceId": "convax-official",
+        "ownedSkills": [],
+        "purposes": [
+          "default-install"
+        ],
+        "targets": [
+          "darwin-arm64"
+        ],
+        "version": "0.1.0"
+      },
+      {
+        "artifact": {
+          "name": "plugin-libtv-service-0.1.0.zip",
+          "sha256": "7e7fec18bfe4654f438dcfb0bf6b3d4ac24def105b49540e0432098c9c8b6ecf",
+          "size": 4011,
+          "url": "https://github.com/convaxai/convax-plugins/releases/download/plugin-libtv-service-v0.1.0/plugin-libtv-service-0.1.0.zip"
+        },
+        "companions": [
+          {
+            "name": "libtv-service-0.1.0-darwin-arm64-convax-shortdrama-router-mcp",
+            "sha256": "bc2da043467338872bda3ba2770ca6a8159225509cd7481a7d7381184f9586d6",
+            "size": 155860,
+            "url": "https://github.com/convaxai/convax-plugins/releases/download/plugin-libtv-service-v0.1.0/libtv-service-0.1.0-darwin-arm64-convax-shortdrama-router-mcp",
+            "arch": "arm64",
+            "platform": "darwin"
+          }
+        ],
+        "id": "libtv-service",
+        "kind": "plugin",
+        "marketplaceId": "convax-official",
+        "ownedSkills": [],
+        "purposes": [
+          "default-install"
+        ],
+        "targets": [
+          "darwin-arm64"
+        ],
+        "version": "0.1.0"
+      },
+      {
+        "artifact": {
+          "name": "plugin-xiaoyunque-service-0.1.0.zip",
+          "sha256": "4190613bf6319b12443d14d576d14113e78f312ab000776754bb6ba425678ca1",
+          "size": 4367,
+          "url": "https://github.com/convaxai/convax-plugins/releases/download/plugin-xiaoyunque-service-v0.1.0/plugin-xiaoyunque-service-0.1.0.zip"
+        },
+        "companions": [
+          {
+            "name": "xiaoyunque-service-0.1.0-darwin-arm64-convax-shortdrama-router-mcp",
+            "sha256": "bc2da043467338872bda3ba2770ca6a8159225509cd7481a7d7381184f9586d6",
+            "size": 155860,
+            "url": "https://github.com/convaxai/convax-plugins/releases/download/plugin-xiaoyunque-service-v0.1.0/xiaoyunque-service-0.1.0-darwin-arm64-convax-shortdrama-router-mcp",
+            "arch": "arm64",
+            "platform": "darwin"
+          }
+        ],
+        "id": "xiaoyunque-service",
+        "kind": "plugin",
+        "marketplaceId": "convax-official",
+        "ownedSkills": [],
+        "purposes": [
+          "default-install"
+        ],
+        "targets": [
+          "darwin-arm64"
+        ],
+        "version": "0.1.0"
+      },
+      {
+        "artifact": {
           "name": "plugin-cutout-studio-0.3.2.zip",
           "sha256": "74cdfb8c08a065bad64023d94be461d6e85f2a2ecde452b6b55c2292c323d104",
           "size": 3238,
@@ -386,8 +506,8 @@
         "companions": [
           {
             "name": "nexus-service-1.0.7-darwin-arm64-convax-nexus-mcp",
-            "sha256": "f7ee6609bec86946274ec23d214357481f84070f4a7d46d6d20e130c873fafff",
-            "size": 63177504,
+            "sha256": "328c3401ddfff08ba532cf5148b84914a21ee9a0834c1e599128b2110db7c37c",
+            "size": 63546848,
             "url": "https://github.com/convaxai/convax-plugins/releases/download/plugin-nexus-service-v1.0.7/nexus-service-1.0.7-darwin-arm64-convax-nexus-mcp",
             "arch": "arm64",
             "platform": "darwin"
@@ -675,7 +795,7 @@
         "version": "0.2.2"
       }
     ],
-    "policyDigest": "b9aa89e912ee5b1511e5673aa6fe564f8eff84d36ed7bbdb5c8f7e9c01cba267"
+    "policyDigest": "fa798d3657e65cb0e3f0439b379e4f6fef88a85117c5368441dbe2ec527556c3"
   },
   "schema": "convax.marketplace-product-lock/3"
 }

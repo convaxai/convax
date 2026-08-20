@@ -100,6 +100,13 @@ disambiguates routing. A single explicitly marked top-level selector may represe
 a dynamic generation model id; Main removes it from ordinary controls and binds an
 opaque validated selection immediately before execution.
 
+Manifest `generation.models` entries declare model families and their owning tools;
+their names are not runtime fallback models. A live unmarked family resolves to its
+one declared static model, while a marked family resolves only to the current
+selector choices in `tools/list.inputSchema`. If the sidecar reports no matching
+tool or a catalog cannot be validated, that family contributes no concrete display
+model until a later refresh succeeds.
+
 Main may project all admitted model families from one exact runtime response into
 one bounded, display-only session snapshot. Startup provisioning and Plugin or
 service lifecycle changes invalidate and asynchronously warm a new epoch.
