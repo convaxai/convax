@@ -28,7 +28,7 @@ Auth、Hosted Product Session、Data Token 和第二份 Nexus Token 方案。
 | Nexus Workspace、Plan、Quota、ProviderConnection、Provider Secret                | Nexus                                     | AuthX Token 或 AuthX 数据库存储产品事实     |
 | Nexus Application binding 与版本                                                 | Nexus；AuthX 只保存引用                   | 根据固定模板自动猜测产品配置                |
 | 管理员绑定 handoff                                                               | AuthX 签名；Nexus 校验                    | 浏览器改写 issuer/client/project/return URI |
-| AuthX Refresh Credential                                                         | verified companion 的 OS credential store | Renderer、Preload 或 Main 保存              |
+| AuthX Refresh Credential                                                         | verified companion 的私有用户应用数据文件 | Renderer、Preload 或 Main 保存              |
 | 短期 Access Token                                                                | companion 内存                            | 持久化或发送到非精确 Nexus origin           |
 
 `authx_integration_id` 是跨服务唯一键。它永久映射同一个 Nexus Application。Workspace、Plan、
@@ -184,6 +184,8 @@ Nexus 服务端实现，不是用户可见的 connect API。
 MCP、Tool、Canvas、Service status、Checkout 与系统浏览器能力：
 
 - Renderer、Preload、Main 不读取或保存 AuthX/Nexus token；
+- companion 仅把轮换 Refresh Credential 写入同一 OS 用户可读的私有应用数据文件，目录权限为
+  `0700`、文件权限为 `0600`；不访问 macOS Keychain，短期 Access Token 仍只在内存中；
 - companion 不调用 Nexus 管理端点，也不选择 Workspace/Plan/Provider；
 - Host 不按 Nexus id、vendor 或模型分支；
 - 生成任务继续使用通用 `convax.generation-lro/1` 与现有 durable commit 边界。
@@ -226,7 +228,9 @@ MCP、Tool、Canvas、Service status、Checkout 与系统浏览器能力：
    Disable 后旧 Token 必须立即失败，Re-enable 后新 Token 恢复。
 8. 验证 AuthX 数据库没有 Workspace/Plan/Provider facts，Nexus 日志没有 handoff、token 或 Provider
    Secret 明文。
+9. 验证 companion 首次授权后可从私有用户应用数据恢复 Refresh Credential，整个授权、重启与退出登录
+   流程不触发 macOS Keychain 弹窗；旧 Keychain 条目不被运行时读取，升级后需要重新授权一次。
 
 回滚必须是 AuthX D1 snapshot 恢复、Nexus PostgreSQL 恢复和 AuthX/Nexus/Convax plugin 三仓 release
-tag 同时回退。tenant claim 合同不能按单仓回滚。在上述协调迁移和发布前，不得把本地实现描述为生产已修复
-或 production ready，也不得单独发布可见的 Enable 跳转。
+tag 同时回退。tenant claim 合同不能按单仓回滚。在上述协调迁移和发布前，
+不得把本地实现描述为生产已修复或 production ready，也不得单独发布可见的 Enable 跳转。

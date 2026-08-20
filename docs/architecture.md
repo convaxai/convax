@@ -261,12 +261,14 @@ flowchart TB
 
   subgraph State["State and persistence"]
     UserData["Electron userData<br/>bindings, user-managed private key files, Marketplace, grants, immutable Plugin closures<br/>isolated per identified development task"]
+    CompanionUserData["Companion-owned user application data<br/>private rotating refresh credential only"]
     ProjectRoot["Project root / .convax<br/>identity, final-frame objects/journals/heads, checkpoints/floors, managed assets"]
     LocalStorage["Browser localStorage<br/>preferences, onboarding progress, recovery<br/>and disposable Marketplace / Service / model display caches"]
     UpdaterCache["Electron updater cache<br/>verified partial/downloaded package · disposable"]
   end
 
   Main --> UserData
+  PluginRuntime --> CompanionUserData
   Main --> UpdaterCache
   Main -->|validated native I/O · range streams| ProjectRoot
   Renderer -. non-authoritative UI state only .-> LocalStorage
@@ -294,7 +296,7 @@ flowchart TB
   classDef store fill:#15382e,stroke:#63d4a5,color:#ffffff;
   classDef external fill:#312a1a,stroke:#e8b44e,color:#ffffff;
   class Main authority;
-  class UserData,ProjectRoot,LocalStorage store;
+  class UserData,CompanionUserData,ProjectRoot,LocalStorage store;
   class PluginSource,Release,PeerReplicas external;
 ```
 
@@ -837,6 +839,11 @@ Electron userData/
                                         persistent private HOME/config/cache/data/cwd for one exact v9 Service profile;
                                         each sidecar process receives a separate disposable private temp directory
   canvas-external-drags/                short-lived host-owned native drag copies
+
+Companion-owned per-user application data/
+  <service-private namespace>/          optional private 0700 directory
+    authx-refresh-credential.json       optional 0600 rotating Refresh Credential;
+                                        never an Access Token or Host credential
 
 The two private-key directories contain bounded canonical plaintext records. On
 POSIX, Desktop creates their directories as `0700` and records as `0600`, rejects
@@ -1954,8 +1961,11 @@ exact resource or an explicitly managed first-party Application trust domain tha
 contains it. An arbitrary or unbound client-audience Access Token, ID Token, Cookie,
 Refresh Credential, or Management credential is never a resource credential. The
 verified companion owns the loopback callback, PKCE transaction, token validation,
-refresh rotation and OS credential-store adapter; only the rotating Refresh
-Credential may be durable and short-lived Access Tokens remain in companion memory.
+refresh rotation and its private credential-storage adapter. Only the rotating
+Refresh Credential may be durable, either in an operating-system credential service
+or a private same-user application-data file; short-lived Access Tokens remain in
+companion memory. Main, Preload and Renderer receive neither credential bytes nor
+the native storage path.
 The Resource Server validates exact issuer/JWKS, audience, Application/client,
 subject, environment, token use, capability scope, time claims and the live
 server-side integration binding, then resolves its product authorization and
