@@ -1,7 +1,10 @@
 import { describe, expect, test } from "bun:test"
-import { createCanvasDocument, createMediaNode } from "./document"
+import { createCanvasDocument, createMediaNode, isCanvasEmptyMediaNodeData } from "./document"
+import { isCanvasOptimisticGhostNodeData } from "./optimistic-overlay-react-flow"
 import {
+  createOptimisticEmptyNodeGhosts,
   createOptimisticResourceGhosts,
+  isEmptyLocalCanvasResourceCreate,
   projectCanvasResourceGhostForReactFlow,
 } from "./optimistic-resource-projection"
 
@@ -77,5 +80,72 @@ describe("optimistic resource overlay", () => {
       ),
     ).toBeTrue()
     expect(JSON.stringify(ghosts)).not.toContain("connectable")
+  })
+
+  test("projects an empty pending image as an idle empty card without inventing a File", () => {
+    expect(
+      isEmptyLocalCanvasResourceCreate({
+        files: [],
+        pending: { kind: "image" },
+        sources: [],
+      }),
+    ).toBeTrue()
+    expect(
+      isEmptyLocalCanvasResourceCreate({
+        files: [new File(["image"], "frame.png", { type: "image/png" })],
+        sources: [],
+      }),
+    ).toBeFalse()
+
+    const ghosts = createOptimisticEmptyNodeGhosts({
+      anchor: { x: 400, y: 260 },
+      document: createCanvasDocument({ id: "canvas-empty" }),
+      kind: "image",
+      createPresentationKey: () => "presentation-empty-image",
+    })
+
+    expect(ghosts).toHaveLength(1)
+    expect(ghosts[0]).toMatchObject({
+      presentation: {
+        emptyCard: true,
+        mediaKind: "image",
+        nodeType: "file",
+        title: "Image",
+      },
+      size: { height: 240, width: 320 },
+    })
+    expect(ghosts[0]?.presentation).not.toHaveProperty("mimeType")
+
+    const adapted = projectCanvasResourceGhostForReactFlow(ghosts[0]!)
+    expect(adapted.data.status).toBe("idle")
+    expect(adapted.data.name).toBeUndefined()
+    expect(adapted.data.mimeType).toBeUndefined()
+    expect(isCanvasEmptyMediaNodeData(adapted.data)).toBeTrue()
+    expect(adapted.connectable).toBeFalse()
+    expect(isCanvasOptimisticGhostNodeData(adapted.data)).toBeTrue()
+    expect(adapted.style?.opacity).toBeUndefined()
+  })
+
+  test("projects an empty new-text node as an idle card without inventing a File", () => {
+    expect(
+      isEmptyLocalCanvasResourceCreate({
+        files: [],
+        sources: [{ kind: "new-text" }],
+      }),
+    ).toBeTrue()
+
+    const ghosts = createOptimisticEmptyNodeGhosts({
+      anchor: { x: 80, y: 40 },
+      document: createCanvasDocument({ id: "canvas-empty-text" }),
+      kind: "text",
+      createPresentationKey: () => "presentation-empty-text",
+    })
+    const adapted = projectCanvasResourceGhostForReactFlow(ghosts[0]!)
+    expect(adapted.data.kind).toBe("text")
+    expect(adapted.data.status).toBe("idle")
+    expect(adapted.data.name).toBeUndefined()
+    expect(adapted.data.mimeType).toBeUndefined()
+    expect(isCanvasOptimisticGhostNodeData(adapted.data)).toBeTrue()
+    expect(adapted.style?.opacity).toBeUndefined()
   })
 })

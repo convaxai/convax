@@ -759,20 +759,89 @@ describe("CanvasEditor resource mutation", () => {
     expect(uploaded).toEqual([[first, second]])
     expect(relinked).toEqual([])
 
-    handleCanvasResourceRelinkSelection("missing-image", [first, second], (nodeId, file) => {
-      relinked.push({ file, nodeId })
-    })
+    expect(
+      handleCanvasResourceRelinkSelection(
+        "missing-image",
+        [first, second],
+        (nodeId, file) => {
+          relinked.push({ file, nodeId })
+        },
+        "image",
+      ),
+    ).toBe("selected")
     expect(relinked).toEqual([{ file: first, nodeId: "missing-image" }])
 
     const markup = renderEditor()
-    expect(markup).toMatch(/accept="image\/\*"[^>]*data-canvas-resource-picker="image"/)
-    expect(markup).toMatch(/accept="video\/\*"[^>]*data-canvas-resource-picker="video"/)
+    expect(markup).toMatch(/accept="[^"]*\.png[^"]*"[^>]*data-canvas-resource-picker="image"/)
+    expect(markup).toMatch(/accept="[^"]*\.mp4[^"]*"[^>]*data-canvas-resource-picker="video"/)
     expect(markup).not.toMatch(/data-canvas-resource-picker="image"[^>]*multiple/)
     expect(markup).not.toMatch(/data-canvas-resource-picker="video"[^>]*multiple/)
     expect(markup).toContain('data-canvas-resource-picker="upload"')
     expect(markup).toContain('data-canvas-resource-picker="relink"')
     expect(markup).toMatch(/data-canvas-resource-picker="upload"[^>]*multiple=""/)
     expect(markup).not.toMatch(/data-canvas-resource-picker="relink"[^>]*multiple/)
+  })
+
+  test("rejects a local relink whose file cluster does not match the node kind", () => {
+    const relinked: Array<{ file: File; nodeId: string }> = []
+    const image = new File(["image"], "hero.png", { type: "image/png" })
+    const video = new File(["video"], "clip.mp4", { type: "video/mp4" })
+    const audio = new File(["audio"], "take.wav", { type: "audio/wav" })
+    const text = new File(["note"], "notes.md", { type: "text/markdown" })
+    const archive = new File(["zip"], "archive.zip", { type: "application/zip" })
+
+    expect(handleCanvasResourceRelinkSelection("image-node", [video], () => relinked.push({ file: video, nodeId: "image-node" }), "image")).toBe(
+      "incompatible",
+    )
+    expect(
+      handleCanvasResourceRelinkSelection(
+        "image-node",
+        [new File(["clip"], "clip.mp4")],
+        () => relinked.push({ file: video, nodeId: "image-node" }),
+        "image",
+      ),
+    ).toBe("incompatible")
+    expect(handleCanvasResourceRelinkSelection("video-node", [image], () => relinked.push({ file: image, nodeId: "video-node" }), "video")).toBe(
+      "incompatible",
+    )
+    expect(handleCanvasResourceRelinkSelection("audio-node", [video], () => relinked.push({ file: video, nodeId: "audio-node" }), "audio")).toBe(
+      "incompatible",
+    )
+    expect(handleCanvasResourceRelinkSelection("text-node", [image], () => relinked.push({ file: image, nodeId: "text-node" }), "text")).toBe(
+      "incompatible",
+    )
+    expect(handleCanvasResourceRelinkSelection("file-node", [image], () => relinked.push({ file: image, nodeId: "file-node" }), "file")).toBe(
+      "incompatible",
+    )
+    expect(
+      handleCanvasResourceRelinkSelection(
+        "file-node",
+        [archive],
+        (nodeId, file) => relinked.push({ file, nodeId }),
+        "file",
+      ),
+    ).toBe("selected")
+    expect(
+      handleCanvasResourceRelinkSelection(
+        "audio-node",
+        [audio],
+        (nodeId, file) => relinked.push({ file, nodeId }),
+        "audio",
+      ),
+    ).toBe("selected")
+    expect(
+      handleCanvasResourceRelinkSelection(
+        "text-node",
+        [text],
+        (nodeId, file) => relinked.push({ file, nodeId }),
+        "text",
+      ),
+    ).toBe("selected")
+    expect(relinked).toEqual([
+      { file: archive, nodeId: "file-node" },
+      { file: audio, nodeId: "audio-node" },
+      { file: text, nodeId: "text-node" },
+    ])
   })
 
   test("replaces only transient resource state without changing document metadata", () => {
@@ -1405,6 +1474,32 @@ describe("CanvasEditor resource mutation", () => {
       sources: [{ kind: "new-text", text: "" }],
     })
     expect((additions[0] as { sources: Array<{ sourceId: unknown }> }).sources[0]?.sourceId).toBeString()
+  })
+
+  test("routes context-menu image creation through the pending empty-card mutation boundary", async () => {
+    const additions: unknown[] = []
+    renderEditor(
+      createCanvasServices({
+        mutation: {
+          async add(input) {
+            additions.push(input)
+            return { createdNodeIds: ["image"], warnings: [] }
+          },
+        },
+      }),
+    )
+
+    expect(contextMenuActions.get("Add Image")).toBeFunction()
+    contextMenuActions.get("Add Image")?.()
+    await new Promise<void>((resolve) => setTimeout(resolve, 0))
+
+    expect(additions).toHaveLength(1)
+    expect(additions[0]).toMatchObject({
+      files: [],
+      pending: { kind: "image", label: "Image" },
+      sources: [],
+    })
+    expect((additions[0] as { files: unknown[] }).files).toHaveLength(0)
   })
 
   test("routes a drop through resource mutation and preserves the viewport", async () => {

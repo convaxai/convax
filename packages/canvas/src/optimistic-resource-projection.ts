@@ -1,6 +1,7 @@
 import { findOpenCanvasPoint } from "./application"
 import type { CanvasResourceAnchorOrigin } from "./application"
-import { getCanvasTextFileFormat } from "./file-import"
+import { createMediaNode, createTextNode, getCanvasNodePresentationSize } from "./document"
+import { classifyCanvasFileKind } from "./file-import"
 import { getCanvasResourcePresentationSize } from "./media-sizing"
 import type { CanvasGhostNode } from "./optimistic-overlay"
 import { projectCanvasGhostNodeForReactFlow } from "./optimistic-overlay-react-flow"
@@ -22,10 +23,9 @@ export function createOptimisticResourceGhosts(input: {
   const ghosts: CanvasGhostNode[] = []
   for (const [index, file] of input.files.entries()) {
     const mimeType = normalizedMimeType(file.type)
-    const nodeType = getCanvasTextFileFormat({ name: file.name, type: mimeType })
-      ? ("text" as const)
-      : ("file" as const)
-    const mediaKind = nodeType === "file" ? mediaKindForMimeType(mimeType) : undefined
+    const classifiedKind = classifyCanvasFileKind({ name: file.name, type: mimeType })
+    const nodeType = classifiedKind === "text" ? ("text" as const) : ("file" as const)
+    const mediaKind = classifiedKind === "text" ? undefined : classifiedKind
     const intrinsic = input.intrinsicSizes?.[index]
     const size = getCanvasResourcePresentationSize(
       nodeType === "text" ? "text" : (mediaKind ?? "file"),
@@ -57,6 +57,63 @@ export function createOptimisticResourceGhosts(input: {
     )
   }
   return Object.freeze(ghosts)
+}
+
+export function isEmptyLocalCanvasResourceCreate(input: {
+  files?: readonly File[]
+  pending?: { kind: "image" | "video" }
+  sources: readonly { kind: string }[]
+}) {
+  if (input.files && input.files.length > 0) return false
+  if (input.pending) return true
+  return input.sources.length > 0 && input.sources.every((source) => source.kind === "new-text")
+}
+
+/**
+ * Immediate empty text/image/video cards. These must not invent a File, wait for
+ * dropped-byte decoding, or pretend to be a generation job.
+ */
+export function createOptimisticEmptyNodeGhosts(input: {
+  anchor: CanvasPoint
+  anchorOrigin?: CanvasResourceAnchorOrigin
+  document: CanvasDocument
+  kind: "image" | "text" | "video"
+  parentPresentationKey?: string
+  createPresentationKey?: () => string
+}): readonly CanvasGhostNode[] {
+  const createKey = input.createPresentationKey ?? (() => `ghost-resource:${globalThis.crypto.randomUUID()}`)
+  const placeholder =
+    input.kind === "text"
+      ? createTextNode({
+          metadata: {},
+          position: { x: 0, y: 0 },
+          resourceState: { status: "ready", text: "" },
+        })
+      : createMediaNode({
+          position: { x: 0, y: 0 },
+          resource: { id: input.kind, kind: input.kind, metadata: {}, state: { status: "ready" } },
+        })
+  const size = getCanvasNodePresentationSize(placeholder)
+  const preferred = {
+    x: input.anchor.x - (input.anchorOrigin === "center" ? size.width / 2 : 0),
+    y: input.anchor.y - (input.anchorOrigin === "center" ? size.height / 2 : 0),
+  }
+  const position = findOpenCanvasPoint(input.document, preferred, size, undefined, input.parentPresentationKey)
+  const title = input.kind === "image" ? "Image" : input.kind === "video" ? "Video" : "Text"
+  return Object.freeze([
+    Object.freeze({
+      kind: "ghost-node" as const,
+      presentationKey: createKey(),
+      ...(input.parentPresentationKey ? { parentPresentationKey: input.parentPresentationKey } : {}),
+      position: Object.freeze(position),
+      presentation: Object.freeze({
+        emptyCard: true as const,
+        ...(input.kind === "text" ? { nodeType: "text" as const } : { mediaKind: input.kind, nodeType: "file" as const }),
+        title,
+      }),
+      size: Object.freeze(size),
+    }),
+  ])
 }
 
 /**
@@ -114,13 +171,6 @@ function intersects(
     leftPosition.y + leftSize.height + ghostGap <= rightPosition.y ||
     rightPosition.y + rightSize.height + ghostGap <= leftPosition.y
   )
-}
-
-function mediaKindForMimeType(mimeType: string) {
-  if (mimeType.startsWith("image/")) return "image" as const
-  if (mimeType.startsWith("video/")) return "video" as const
-  if (mimeType.startsWith("audio/")) return "audio" as const
-  return "file" as const
 }
 
 function normalizedMimeType(value: string) {

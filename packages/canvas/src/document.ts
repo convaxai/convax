@@ -20,7 +20,7 @@ import { fitCanvasMediaSizeWithinBounds } from "./media-sizing"
 
 /** Wide only at the persistence boundary so legacy node types never leak into the public model. */
 type PersistedCanvasNode = Node<CanvasNodeData, string>
-const emptyImageRuntimeStateKeys = new Set(["mediaType", "name", "status", "text", "url"])
+const emptyMediaRuntimeStateKeys = new Set(["mediaType", "name", "status", "text", "url"])
 
 export function createCanvasId(prefix: string) {
   const value =
@@ -140,14 +140,14 @@ export function createMediaNode(input: {
   }
 }
 
-export function isCanvasEmptyImageNodeData(data: CanvasNodeData) {
+export function isCanvasEmptyMediaNodeData(data: CanvasNodeData) {
   const name = data.name
   const mimeType = data.mimeType
   const metadata = data.metadata
   const error = data.error
   if (
-    data.kind !== "image" ||
-    data.status !== "idle" ||
+    (data.kind !== "image" && data.kind !== "video") ||
+    (data.status !== "idle" && data.status !== "pending") ||
     (name !== undefined && (typeof name !== "string" || name.trim())) ||
     (mimeType !== undefined && (typeof mimeType !== "string" || mimeType.trim())) ||
     (error !== undefined && (typeof error !== "string" || error.trim())) ||
@@ -157,18 +157,24 @@ export function isCanvasEmptyImageNodeData(data: CanvasNodeData) {
     return false
   }
   const state = data.resourceState
-  // A durable empty card has no runtime state after serialization. Any persisted
-  // resource identity above, or any non-ready runtime state, fails closed.
+  // A durable empty card has no runtime state after serialization. Application-layer
+  // pending placeholders use the same shape before collaboration projects them to
+  // idle; they are still empty cards, not generation jobs. Any persisted resource
+  // identity above, or any non-ready runtime state, fails closed.
   if (state === undefined) return true
   return (
     isRecord(state) &&
-    Object.keys(state).every((key) => emptyImageRuntimeStateKeys.has(key)) &&
+    Object.keys(state).every((key) => emptyMediaRuntimeStateKeys.has(key)) &&
     state.status === "ready" &&
     isEmptyOptionalString(state.url) &&
     isEmptyOptionalString(state.name) &&
     isEmptyOptionalString(state.mediaType) &&
     isEmptyOptionalString(state.text)
   )
+}
+
+export function isCanvasEmptyImageNodeData(data: CanvasNodeData) {
+  return data.kind === "image" && isCanvasEmptyMediaNodeData(data)
 }
 
 function isEmptyOptionalString(value: unknown) {

@@ -121,6 +121,13 @@ import {
   type CanvasAutoLayoutStrategy,
 } from "../application"
 import { canvasAppearanceStyle, resolveCanvasAppearance, type CanvasAppearanceInput } from "../appearance"
+import { canvasFileKindLabel, canvasMessage, resolveCanvasUiLocale, type CanvasUiLocale } from "../copy"
+import {
+  applyCanvasFilePickerAccept,
+  canPickLocalCanvasRelinkFile,
+  canvasFilePickerAccept,
+  isCanvasFileCompatibleWithKind,
+} from "../file-import"
 import {
   addCanvasNodes,
   canGroupCanvasNodes,
@@ -178,13 +185,16 @@ import {
 } from "../interaction"
 import { deriveCanvasSelectionContext, isNodeOnlySelectionContext } from "../selection-context"
 import {
+  createOptimisticEmptyNodeGhosts,
   createOptimisticResourceGhosts,
   inspectDroppedCanvasResourcePresentations,
+  isEmptyLocalCanvasResourceCreate,
 } from "../optimistic-resource-projection"
 import {
   CanvasCombinedPresentationStore,
   CanvasMergedOptimisticOverlayStore,
   CanvasOptimisticOverlayCoordinator,
+  type CanvasGhostNode,
   type CanvasOptimisticOverlaySnapshot,
 } from "../optimistic-overlay"
 import {
@@ -343,6 +353,18 @@ function createCanvasLoadBarrier(resolved = false): CanvasLoadBarrier {
   })
   void promise.catch(() => undefined)
   return { promise, reject: rejectPromise, resolve: resolvePromise }
+}
+
+function createCanvasCameraMotionInterruptWaiter(listeners: Set<() => void>) {
+  let listener: () => void = () => undefined
+  const promise = new Promise<void>((resolve) => {
+    listener = resolve
+    listeners.add(listener)
+  })
+  return Object.freeze({
+    dispose: () => listeners.delete(listener),
+    promise,
+  })
 }
 
 function equalIds(left: ReadonlySet<string>, right: ReadonlySet<string>) {
@@ -602,6 +624,8 @@ function getNodeWorldPosition(document: CanvasDocument, nodeId: string): CanvasP
 export interface CanvasEditorProps {
   appearance?: CanvasAppearanceInput
   className?: string
+  /** Host-owned application locale for Canvas-owned UI copy. Independent consumers default to English. */
+  locale?: CanvasUiLocale
   clipboardScope?: string
   /** Immutable, read-only, no-persistence preview used only when `session` is absent. */
   initialDocument?: CanvasDocument
@@ -1085,9 +1109,13 @@ export function handleCanvasResourceRelinkSelection(
   nodeId: string | null,
   files: readonly File[],
   relink: (nodeId: string, file: File) => void,
-) {
+  expectedKind: string | null,
+): "empty" | "incompatible" | "selected" {
   const file = files[0]
-  if (nodeId && file) relink(nodeId, file)
+  if (!nodeId || !file) return "empty"
+  if (!isCanvasFileCompatibleWithKind(file, expectedKind)) return "incompatible"
+  relink(nodeId, file)
+  return "selected"
 }
 export const CanvasEditor = forwardRef<CanvasEditorHandle, CanvasEditorProps>(function CanvasEditor(props, ref) {
   const nodeRegistry = useMemo(() => props.nodeRegistry ?? createDefaultCanvasNodeRegistry(), [props.nodeRegistry])
@@ -1138,6 +1166,7 @@ function CanvasEditorContent(
   },
 ) {
   const appearance = useMemo(() => resolveCanvasAppearance(props.appearance), [props.appearance])
+  const locale = resolveCanvasUiLocale(props.locale)
   const [bootstrapProjection] = useState<CanvasRendererProjectionStore | undefined>(() =>
     props.initialDocument ? createReadonlyCanvasProjectionBootstrap(props.initialDocument) : undefined,
   )
@@ -1344,6 +1373,7 @@ function CanvasEditorContent(
   const searchPanelRef = useRef<HTMLDivElement>(null)
   const relinkInputRef = useRef<HTMLInputElement>(null)
   const relinkNodeIdRef = useRef<string | null>(null)
+  const relinkKindRef = useRef<string | null>(null)
   const pointerRef = useRef<CanvasPoint | null>(null)
   const boxSelectionActiveRef = useRef(false)
   const boxSelectionBaselineRef = useRef<CanvasSelection | null>(null)
@@ -1364,6 +1394,7 @@ function CanvasEditorContent(
   const snapEnabledRef = useRef(snapEnabled)
   const navigationRevisionRef = useRef(0)
   const cameraMotionGenerationRef = useRef(0)
+  const cameraMotionInterruptListenersRef = useRef(new Set<() => void>())
   const nodeEntryTimersRef = useRef(new Map<string, ReturnType<typeof setTimeout>>())
   const initialCameraScopeRef = useRef("")
   const viewportInsetsKeyRef = useRef(
@@ -1512,6 +1543,8 @@ function CanvasEditorContent(
     setGenerateOpen(false)
     setSearchOpen(false)
     cameraMotionGenerationRef.current += 1
+    for (const listener of cameraMotionInterruptListenersRef.current) listener()
+    cameraMotionInterruptListenersRef.current.clear()
     try {
       void reactFlowRef.current.setViewport(reactFlowRef.current.getViewport(), { duration: 0 })
     } catch {
@@ -2100,6 +2133,26 @@ function CanvasEditorContent(
     },
     [nodeEntryScopeKey, startNodeEntryPresentation],
   )
+  const armFocusedNodeEntryTimeout = useCallback(
+    (nodeIds: readonly string[]) => {
+      const focusTimeout =
+        resolveCanvasMotionDuration(CANVAS_MOTION_DURATION.postMutationReveal, prefersReducedMotion) +
+        CANVAS_NODE_ENTRY_FINISH_GRACE
+      for (const nodeId of nodeIds) {
+        const timerKey = `${nodeEntryScopeKey}\u0000${nodeId}`
+        const currentTimer = nodeEntryTimersRef.current.get(timerKey)
+        if (currentTimer !== undefined) clearTimeout(currentTimer)
+        nodeEntryTimersRef.current.set(
+          timerKey,
+          setTimeout(() => {
+            if (nodeEntryPresentation.phase(nodeId) !== "pending-focus") return
+            startNodeEntryPresentation([nodeId])
+          }, focusTimeout),
+        )
+      }
+    },
+    [nodeEntryPresentation, nodeEntryScopeKey, prefersReducedMotion, startNodeEntryPresentation],
+  )
   const prepareFocusedNodeEntries = useCallback(
     (nodeIds: readonly string[]) => {
       const tracker = nodeEntryTrackerRef.current
@@ -2107,8 +2160,9 @@ function CanvasEditorContent(
       const claimed = tracker.claim(nodeEntryScopeKey, nodeIds)
       if (prefersReducedMotion) return
       nodeEntryPresentation.prepare(nodeEntryScopeKey, claimed)
+      armFocusedNodeEntryTimeout(claimed)
     },
-    [nodeEntryPresentation, nodeEntryScopeKey, prefersReducedMotion],
+    [armFocusedNodeEntryTimeout, nodeEntryPresentation, nodeEntryScopeKey, prefersReducedMotion],
   )
   const cancelNodeEntries = useCallback(
     (nodeIds: readonly string[]) => {
@@ -2183,6 +2237,8 @@ function CanvasEditorContent(
   }, [props.viewportInsets?.bottom, props.viewportInsets?.left, props.viewportInsets?.right, props.viewportInsets?.top])
   const interruptCameraMotion = useCallback(() => {
     cameraMotionGenerationRef.current += 1
+    for (const listener of cameraMotionInterruptListenersRef.current) listener()
+    cameraMotionInterruptListenersRef.current.clear()
     try {
       void reactFlowRef.current.setViewport(reactFlowRef.current.getViewport(), { duration: 0 })
     } catch {
@@ -2192,7 +2248,11 @@ function CanvasEditorContent(
   const markUserNavigation = useCallback(() => {
     navigationRevisionRef.current += 1
     interruptCameraMotion()
-  }, [interruptCameraMotion])
+    const pending = [...nodeEntryPresentation.activeNodeIds].filter(
+      (nodeId) => nodeEntryPresentation.phase(nodeId) === "pending-focus",
+    )
+    if (pending.length > 0) startNodeEntryPresentation(pending)
+  }, [interruptCameraMotion, nodeEntryPresentation, startNodeEntryPresentation])
   const fitDocumentViewport = useCallback(
     async (
       document: CanvasDocument,
@@ -2547,12 +2607,26 @@ function CanvasEditorContent(
       }
       interruptCameraMotion()
       const motionGeneration = cameraMotionGenerationRef.current
-      await fitDocumentViewport(documentRef.current, {
-        duration,
-        maxZoom: CANVAS_CENTER_FIT_MAX_ZOOM,
-        nodeIds,
-        padding: CANVAS_CENTER_FIT_PADDING,
-      })
+      const motionDuration = resolveCanvasMotionDuration(duration, prefersReducedMotion)
+      const interruption = createCanvasCameraMotionInterruptWaiter(cameraMotionInterruptListenersRef.current)
+      let timeoutId: ReturnType<typeof setTimeout> | undefined
+      try {
+        await Promise.race([
+          fitDocumentViewport(documentRef.current, {
+            duration,
+            maxZoom: CANVAS_CENTER_FIT_MAX_ZOOM,
+            nodeIds,
+            padding: CANVAS_CENTER_FIT_PADDING,
+          }),
+          new Promise<void>((resolve) => {
+            timeoutId = setTimeout(resolve, motionDuration + CANVAS_NODE_ENTRY_FINISH_GRACE)
+          }),
+          interruption.promise,
+        ])
+      } finally {
+        if (timeoutId !== undefined) clearTimeout(timeoutId)
+        interruption.dispose()
+      }
       if (
         !isCanvasCameraMotionCurrent(motionGeneration, cameraMotionGenerationRef.current) ||
         !isCanvasPostMutationRevealGuardCurrent(guard, getPostMutationRevealGuard())
@@ -2567,8 +2641,53 @@ function CanvasEditorContent(
       fitDocumentViewport,
       getPostMutationRevealGuard,
       interruptCameraMotion,
+      prefersReducedMotion,
       startNodeEntryPresentation,
     ],
+  )
+  const focusOptimisticCanvasGhosts = useCallback(
+    async (ghosts: readonly CanvasGhostNode[], guard: CanvasPostMutationRevealGuard) => {
+      if (
+        ghosts.length === 0 ||
+        leavingRef.current ||
+        !isCanvasPostMutationRevealGuardCurrent(guard, getPostMutationRevealGuard())
+      ) {
+        return false
+      }
+      interruptCameraMotion()
+      const motionGeneration = cameraMotionGenerationRef.current
+      const duration = CANVAS_MOTION_DURATION.postMutationReveal
+      const motionDuration = resolveCanvasMotionDuration(duration, prefersReducedMotion)
+      const interruption = createCanvasCameraMotionInterruptWaiter(cameraMotionInterruptListenersRef.current)
+      const ghostNodes = ghosts.map(projectCanvasGhostNodeForReactFlow)
+      const presentationDocument: CanvasDocument = {
+        ...documentRef.current,
+        nodes: [...documentRef.current.nodes, ...ghostNodes],
+      }
+      let timeoutId: ReturnType<typeof setTimeout> | undefined
+      try {
+        await Promise.race([
+          fitDocumentViewport(presentationDocument, {
+            duration,
+            maxZoom: CANVAS_CENTER_FIT_MAX_ZOOM,
+            nodeIds: ghostNodes.map((node) => node.id),
+            padding: CANVAS_CENTER_FIT_PADDING,
+          }),
+          new Promise<void>((resolve) => {
+            timeoutId = setTimeout(resolve, motionDuration + CANVAS_NODE_ENTRY_FINISH_GRACE)
+          }),
+          interruption.promise,
+        ])
+      } finally {
+        if (timeoutId !== undefined) clearTimeout(timeoutId)
+        interruption.dispose()
+      }
+      return (
+        isCanvasCameraMotionCurrent(motionGeneration, cameraMotionGenerationRef.current) &&
+        isCanvasPostMutationRevealGuardCurrent(guard, getPostMutationRevealGuard())
+      )
+    },
+    [fitDocumentViewport, getPostMutationRevealGuard, interruptCameraMotion, prefersReducedMotion],
   )
   useLayoutEffect(() => {
     if (!pendingNodeFocus) return
@@ -3271,16 +3390,11 @@ function CanvasEditorContent(
       if (!mutationService || readOnly) return
       const controller = new AbortController()
       operationControllersRef.current.add(controller)
+      const emptyLocalCreate = isEmptyLocalCanvasResourceCreate(input)
       const revealGuard =
         options.focusCreatedNodes || options.revealCreatedNodes ? getPostMutationRevealGuard() : undefined
-      const optimisticFiles =
-        input.files && input.files.length > 0
-          ? input.files
-          : input.pending
-            ? [new File([], input.pending.label, { type: input.pending.kind === "image" ? "image/*" : "video/*" })]
-            : input.sources.some((source) => source.kind === "new-text")
-              ? [new File([], "Untitled", { type: "text/plain" })]
-              : []
+      const droppedFiles = input.files && input.files.length > 0 ? input.files : []
+      const optimisticFiles = emptyLocalCreate ? [] : droppedFiles
       void (async () => {
         const operationScope = resourceMutationScopeRef.current
         let optimisticToken: symbol | undefined
@@ -3291,11 +3405,20 @@ function CanvasEditorContent(
           optimisticOverlay.settle(optimisticToken)
         }
         try {
+          const emptyGhosts = emptyLocalCreate
+            ? createOptimisticEmptyNodeGhosts({
+                anchor: input.anchor,
+                ...(input.anchorOrigin === undefined ? {} : { anchorOrigin: input.anchorOrigin }),
+                document: documentRef.current,
+                kind: input.pending?.kind ?? "text",
+                ...(options.parentGroupId ? { parentPresentationKey: options.parentGroupId } : {}),
+              })
+            : []
           const intrinsicSizes =
             optimisticFiles.length > 0
               ? await inspectDroppedCanvasResourcePresentations(optimisticFiles, controller.signal)
               : []
-          const optimisticGhosts =
+          const fileGhosts =
             optimisticFiles.length > 0
               ? createOptimisticResourceGhosts({
                   anchor: input.anchor,
@@ -3306,6 +3429,7 @@ function CanvasEditorContent(
                   ...(options.parentGroupId ? { parentPresentationKey: options.parentGroupId } : {}),
                 })
               : []
+          const optimisticGhosts = [...emptyGhosts, ...fileGhosts]
           const optimisticEdges =
             input.relation?.mode === "connect"
               ? optimisticGhosts.flatMap((ghost) =>
@@ -3321,6 +3445,16 @@ function CanvasEditorContent(
               ? optimisticOverlay.begin(optimisticResourceScopeKey, [...optimisticGhosts, ...optimisticEdges])
               : undefined
           optimisticToken = optimisticOperation?.token
+          const optimisticFocusStarted = Boolean(
+            options.focusCreatedNodes &&
+              !options.parentGroupId &&
+              revealGuard &&
+              optimisticOperation?.status === "shown" &&
+              optimisticGhosts.length > 0,
+          )
+          if (optimisticFocusStarted) {
+            void focusOptimisticCanvasGhosts(optimisticGhosts, revealGuard!).catch(() => undefined)
+          }
           if (optimisticOperation?.status === "bounded") {
             notificationService?.show({ kind: "info", title: "Saving Canvas changes…" })
           }
@@ -3337,7 +3471,8 @@ function CanvasEditorContent(
             cancelPreparedNodes: cancelNodeEntries,
             currentScope: () => resourceMutationScopeRef.current,
             operationScope,
-            prepareCreatedNodes: options.focusCreatedNodes ? prepareFocusedNodeEntries : presentNodeEntries,
+            prepareCreatedNodes:
+              options.focusCreatedNodes && !optimisticFocusStarted ? prepareFocusedNodeEntries : presentNodeEntries,
             reload: reloadAuthoritativeDocument,
             result,
             runViewEffect: revealGuard
@@ -3359,7 +3494,7 @@ function CanvasEditorContent(
                     }
                     return
                   }
-                  if (options.focusCreatedNodes) {
+                  if (options.focusCreatedNodes && !optimisticFocusStarted) {
                     try {
                       const focused = await focusCanvasNodes(createdNodeIds, revealGuard)
                       if (!focused) cancelNodeEntries(createdNodeIds)
@@ -3397,6 +3532,7 @@ function CanvasEditorContent(
       dispatch,
       getPostMutationRevealGuard,
       focusCanvasNodes,
+      focusOptimisticCanvasGhosts,
       mutationService,
       notificationService,
       notifyError,
@@ -3473,8 +3609,14 @@ function CanvasEditorContent(
   const requestResourceRelink = useCallback(
     (nodeId: string) => {
       if (!mutationService?.relink || readOnly) return
+      const node = documentRef.current.nodes.find((candidate) => candidate.id === nodeId)
+      const kind = typeof node?.data.kind === "string" ? node.data.kind : null
+      const input = relinkInputRef.current
+      if (!input || !canPickLocalCanvasRelinkFile(kind)) return
+      applyCanvasFilePickerAccept(input, kind)
       relinkNodeIdRef.current = nodeId
-      relinkInputRef.current?.click()
+      relinkKindRef.current = kind
+      input.click()
     },
     [mutationService, readOnly],
   )
@@ -4635,6 +4777,7 @@ function CanvasEditorContent(
       scopeId: currentViewScopeId,
       enteringNodeIds,
       hydrating,
+      locale: props.locale,
       reducedMotion: prefersReducedMotion,
       selection,
       selectionContext,
@@ -4698,6 +4841,7 @@ function CanvasEditorContent(
       hydrating,
       isSelectionActionPending,
       props.fileRendererRegistry,
+      props.locale,
       currentViewScopeId,
       quickConnect,
       readOnly,
@@ -5739,7 +5883,7 @@ function CanvasEditorContent(
 
                   <input
                     ref={imageUploadInputRef}
-                    accept="image/*"
+                    accept={canvasFilePickerAccept("image")}
                     className="hidden"
                     data-canvas-resource-picker="image"
                     onChange={handleUploadInputChange}
@@ -5747,7 +5891,7 @@ function CanvasEditorContent(
                   />
                   <input
                     ref={videoUploadInputRef}
-                    accept="video/*"
+                    accept={canvasFilePickerAccept("video")}
                     className="hidden"
                     data-canvas-resource-picker="video"
                     onChange={handleUploadInputChange}
@@ -5767,8 +5911,10 @@ function CanvasEditorContent(
                     data-canvas-resource-picker="relink"
                     onChange={(event: ChangeEvent<HTMLInputElement>) => {
                       const relinkNodeId = relinkNodeIdRef.current
+                      const expectedKind = relinkKindRef.current
                       relinkNodeIdRef.current = null
-                      handleCanvasResourceRelinkSelection(
+                      relinkKindRef.current = null
+                      const result = handleCanvasResourceRelinkSelection(
                         relinkNodeId,
                         [...(event.currentTarget.files ?? [])],
                         (nodeId, file) => {
@@ -5778,7 +5924,18 @@ function CanvasEditorContent(
                             "Resource relinked",
                           )
                         },
+                        expectedKind,
                       )
+                      if (result === "incompatible") {
+                        notifyError(
+                          "Could not relink resource",
+                          new Error(
+                            canvasMessage(locale, "resourceRelink.incompatibleFile", {
+                              kind: canvasFileKindLabel(locale, expectedKind ?? ""),
+                            }),
+                          ),
+                        )
+                      }
                       event.currentTarget.value = ""
                     }}
                     type="file"

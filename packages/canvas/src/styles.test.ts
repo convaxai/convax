@@ -405,6 +405,20 @@ describe("Canvas-first visual hierarchy", () => {
       /@media \(forced-colors: active\)[\s\S]*data-canvas-node-entering="true"[\s\S]*animation: none;[\s\S]*transform: none;/,
     )
   })
+
+  test("keeps pending-focus chrome hidden after selected connection ports become visible", async () => {
+    const styles = await Bun.file(new URL("./styles.css", import.meta.url)).text()
+    const selectedConnectionIndex = styles.indexOf(".convax-canvas .convax-node.is-selected .convax-node__connection")
+    const pendingFocusSelectedIndex = styles.indexOf(
+      '.convax-canvas .convax-node[data-canvas-node-entry-phase="pending-focus"].is-selected > .convax-node__connection',
+    )
+
+    expect(selectedConnectionIndex).toBeGreaterThan(-1)
+    expect(pendingFocusSelectedIndex).toBeGreaterThan(selectedConnectionIndex)
+    expect(styles).toMatch(
+      /\.convax-node\[data-canvas-node-entry-phase="pending-focus"\]\.is-selected > \.convax-node__connection,[\s\S]*?opacity:\s*0/,
+    )
+  })
 })
 
 describe("Canvas theme closure", () => {
@@ -485,10 +499,10 @@ describe("Canvas theme closure", () => {
     const styles = await Bun.file(new URL("./styles.css", import.meta.url)).text()
     const mediaEmptyRule = cssRule(styles, ".convax-canvas .convax-media-empty")
     const mediaContentRule = cssRule(styles, ".convax-canvas .convax-media-empty__content")
+    const mediaAddContentRule = cssRule(styles, ".convax-canvas .convax-media-empty__content--add")
     const mediaIconRule = cssRule(styles, ".convax-canvas .convax-media-empty__icon")
     const mediaHintRule = cssRule(styles, ".convax-canvas .convax-media-empty__hint")
-    const mediaActionsRule = cssRule(styles, ".convax-canvas .convax-media-empty__actions")
-    const mediaButtonRule = cssRule(styles, ".convax-canvas .convax-media-empty__button")
+    const mediaAddRule = cssRule(styles, ".convax-canvas .convax-media-empty__add")
     const outlineEmptyRule = cssRule(styles, ".convax-canvas-outline__empty")
 
     expect(mediaEmptyRule).toContain("var(--canvas-node-background)")
@@ -496,13 +510,18 @@ describe("Canvas theme closure", () => {
     expect(mediaContentRule).toContain("flex-direction: column")
     expect(mediaContentRule).toContain("color: var(--canvas-text)")
     expect(mediaContentRule).toContain("pointer-events: none")
+    expect(mediaAddContentRule).toContain("pointer-events: auto")
+    expect(mediaAddContentRule).toContain("gap: 10px")
     expect(mediaIconRule).toContain("background: var(--canvas-node-background)")
+    expect(cssRule(styles, ".convax-canvas .convax-media-empty--add")).toContain("background: transparent")
+    expect(cssRule(styles, ".convax-canvas .convax-media-empty__placeholder")).toContain("var(--canvas-text-muted)")
+    expect(cssRule(styles, ".convax-canvas .convax-media-empty__placeholder svg")).toContain("width: 48px")
     expect(mediaHintRule).toContain("color: var(--canvas-text-muted)")
-    expect(mediaActionsRule).toContain("flex-wrap: wrap")
-    expect(mediaButtonRule).toContain("min-height: 40px")
+    expect(mediaAddRule).toContain("min-width: 0")
+    expect(mediaAddRule).not.toContain("background: transparent")
     expect(outlineEmptyRule).toContain("var(--canvas-text-muted")
     expect(styles).toMatch(
-      /@media \(forced-colors: active\)[\s\S]*\.convax-canvas \.convax-media-empty--image[\s\S]*border-color: CanvasText/,
+      /@media \(forced-colors: active\)[\s\S]*\.convax-canvas \.convax-media-empty__add[\s\S]*border-color: CanvasText/,
     )
     expect(styles).toMatch(
       /\.convax-canvas-outline__item\[aria-current="location"\]\s*\{[^}]*background:\s*var\(--canvas-interactive-selected,\s*var\(--ui-interactive-selected\)\)/s,
