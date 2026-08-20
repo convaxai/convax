@@ -123,6 +123,12 @@ describe("Desktop platform artifacts", () => {
     expect(config.linux).toMatchObject({ category: "Graphics", icon: "resources/icon.png" })
   })
 
+  test("includes the Windows publisher only when it is configured", () => {
+    expect(createElectronBuilderConfig({ CONVAX_WINDOWS_PUBLISHER_NAME: "Convax Labs" }).win?.publisherName).toBe(
+      "Convax Labs",
+    )
+  })
+
   test("allows unsigned local builds but fails closed for release signing and notarization", () => {
     const local = createElectronBuilderConfig({})
     const release = createElectronBuilderConfig({

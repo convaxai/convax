@@ -359,6 +359,24 @@ user directory.
   optional usage history. It renders that projection immediately, refreshes status
   and usage independently in the background, and never treats it as authorization,
   execution availability, Checkout, or billing authority.
+- External public-client authorization is companion-owned. Direct Resource Server
+  access requires an Access Token whose audience is that exact resource or an
+  explicitly bound first-party Application trust domain. An arbitrary or unbound
+  client-audience Access Token, ID Token, Cookie, Refresh Credential, or Management
+  credential is never accepted. Only a rotating Refresh Credential may be durable
+  in the companion's OS credential store, while Access Tokens remain in memory and
+  never cross Main, Preload or Renderer.
+- A first-party Resource Server integration may be preconfigured on the upstream
+  Application so one Application login uses the same Application Access Token with
+  an integration-owned capability scope. Its binding and subject JIT access remain
+  server-side; Host, Renderer and companion never expose a second end-user resource
+  login/connect step or call the integration Management API.
+- Enabling that integration may redirect an authorized Application administrator
+  through a short-lived signed handoff to the Resource Server Console. The
+  administrator selects Resource Server-owned Workspace, Plan and provider facts
+  there; the integration id is the external uniqueness key, retries reuse the same
+  aggregate, disable retains history, re-enable retains identity, and the upstream
+  Application stores none of those product facts.
 - `WorkbenchController` is the sole active Input/Canvas source.
   `ProjectCanvasController` owns catalog CRUD, never active selection.
 - Editable Canvas text drafts are transient Canvas-owned write-behind state keyed by

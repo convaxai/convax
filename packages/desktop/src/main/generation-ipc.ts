@@ -469,9 +469,14 @@ export function registerGenerationIpc(executor: GenerationExecutor, options: Gen
     if (!options.isTrustedSender(event)) throw new Error("Generation IPC request came from an untrusted renderer")
     if (disposed) throw new Error("Generation IPC is disposed")
     const operationId = requireOperationId(input)
-    const controller = senders.get(event.sender.id)?.controllers.get(operationId)
+    const ownerState = senders.get(event.sender.id)
+    const controller = ownerState?.controllers.get(operationId)
     if (controller) {
+      const anotherSenderOwnsWait = [...senders.values()].some(
+        (state) => state !== ownerState && state.controllers.has(operationId),
+      )
       controller.abort(abortError("The generation operation was canceled"))
+      if (!anotherSenderOwnsWait) await executor.cancel?.({ operationId })
       return
     }
     if ([...senders.values()].some((state) => state.controllers.has(operationId))) return
