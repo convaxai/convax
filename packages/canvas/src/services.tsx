@@ -1,6 +1,12 @@
 import { createContext, type ReactNode, useContext, useSyncExternalStore } from "react"
 import type { ToolInputField, ToolInputValue } from "@convax/ui"
-import type { CanvasGenerationTargetGuard, CanvasResourceAnchorOrigin, CanvasResourceSource } from "./application"
+import type {
+  CanvasGenerationTargetGuard,
+  CanvasPreparedResourceRuntime,
+  CanvasResourceAnchorOrigin,
+  CanvasResourceSource,
+} from "./application"
+import type { CanvasEntityRef } from "./collaboration"
 import type { CanvasDocument, CanvasNode, CanvasPoint } from "./types"
 
 export { CanvasTextResourceConflictError } from "./application/errors"
@@ -38,6 +44,8 @@ export interface CanvasResourceMutationService {
     /** The host already installed the same-frame authoritative projection. */
     authoritativeProjectionDelivered?: boolean
     createdNodeIds: readonly string[]
+    /** Prepared presentation state for the exact accepted resource nodes. Transient only. */
+    preparedResources?: readonly CanvasAcceptedPreparedResourceRuntime[]
     warnings: readonly string[]
   }>
   relink?(input: {
@@ -52,9 +60,19 @@ export interface CanvasResourceMutationService {
   }>
 }
 
+/** Prepared state bound to the exact accepted Canvas entity and resource. */
+export interface CanvasAcceptedPreparedResourceRuntime extends CanvasPreparedResourceRuntime {
+  readonly entity: CanvasEntityRef & { readonly kind: "node" }
+  readonly resourceIdentity: string
+}
+
 export interface CanvasResourceHydrationService {
-  markStale(document: CanvasDocument): CanvasDocument
-  hydrateStale(input: { document: CanvasDocument; signal: AbortSignal }): Promise<CanvasDocument>
+  markStale(document: CanvasDocument, nodeIds?: readonly string[]): CanvasDocument
+  hydrateStale(input: {
+    document: CanvasDocument
+    nodeIds?: readonly string[]
+    signal: AbortSignal
+  }): Promise<CanvasDocument>
 }
 
 export interface CanvasFolderBrowseEntry {

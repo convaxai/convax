@@ -122,9 +122,22 @@ This package owns the durable Project aggregate and native Project adapters.
 - Publishing user-visible `Notes/` or `Generated/` files is file-first and no-clobber.
   If the later Canvas commit fails, retain the file and report partial success. Do not
   add a cross-file WAL or delete a user file to simulate atomicity.
+- A verified internal no-clobber publication may register one bounded, process-local,
+  one-shot coverage token for its exact `{projectId,path}` watcher event. Consumption
+  must remove the token before asynchronously re-verifying the published file
+  identity, size and digest. Mismatch, error, duplicate, unknown-path and external
+  events fail open to invalidation; coverage is never a durable receipt or time
+  window that suppresses another path. A debounce batch emits one uncovered exact
+  path only when that is the batch's sole external path. Multiple uncovered paths,
+  unknown filenames and path-capacity overflow emit one pathless full invalidation;
+  they must not multiply a Canvas-wide scan by the number of watcher events.
 - Project file moves and renames do not rewrite Canvas references in v1. Missing
   references remain visible until the user relinks them.
 - ProjectIndex exposes the sole stable-entry/current-resource materialization plan.
+  Resource publication may additionally request only exact target/ancestor entries
+  from the same live owner snapshot; a directory-only exact query must not enumerate
+  unrelated content families. Immutable path indexes may be weakly cached only by
+  exact validated snapshot identity and never become authority.
   Project/node subscribes to accepted ProjectIndex invalidation and durable blob
   publication, stages/fsyncs exact bytes, and replaces or removes only a prior
   `{entryId,path,digest}` match. Native untracked edits fail closed instead of being
@@ -184,6 +197,11 @@ This package owns the durable Project aggregate and native Project adapters.
   use the durable local-owner authority. Canvas genesis preflight/staging must be
   available from that same owner; absence of Team state is not a pending enrollment
   condition.
+- One open Project collaboration runtime exposes an opaque process-local identity,
+  a live guard, and an explicit release lifecycle so Main may reuse already-verified
+  static owner material only within that exact runtime. Quiesce, release, reset, or
+  disposal revokes the identity; it is never a durable Project id, a TTL cache key,
+  or permission to bypass the current Team-state gate.
 - Local-owner bindings, edit authorizations, genesis evidence, and device-level
   sharing tombstones are durable records of that one protocol. Their presence never
   selects a protocol, downgrades signing authority, or authorizes a downgrade from a

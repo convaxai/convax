@@ -274,6 +274,10 @@ export class ProjectBlobReplicationStore {
       if (BigInt(bytes.byteLength) !== BigInt(reference.blob.byteLength) || ordinarySha256(bytes) !== reference.blob.digest) {
         throw new Error("Blob admission bytes do not match the ProjectIndex reference")
       }
+      const alreadyPresent = this.#presence.entries.some((entry) =>
+        entry.blobSha256 === reference.blob.digest && entry.byteLength === reference.blob.byteLength
+      )
+      if (alreadyPresent) return this.#requirePresent(reference)
       const staging = path.join(this.#transfersRoot, `admit-${randomUUID()}.part`)
       await writeNewDurable(staging, bytes)
       try {

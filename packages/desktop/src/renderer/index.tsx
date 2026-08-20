@@ -1,5 +1,6 @@
 import {
   CanvasEditor,
+  canvasCanonicalResourceIdentity,
   createDefaultCanvasFileRendererRegistry,
   createDefaultCanvasNodeRegistry,
   createCanvasViewRegistry,
@@ -8,6 +9,7 @@ import {
   type CanvasEditorHandle,
   type CanvasDocument,
   type CanvasGenerateService,
+  type CanvasAcceptedPreparedResourceRuntime,
   type CanvasNotification,
   type CanvasSelectionProjection,
   type CanvasSelectionAction,
@@ -163,7 +165,10 @@ import {
   serviceCatalogAgentModelsForScope,
   serviceGenerationAvailabilityVersion,
 } from "./service-catalog-controller"
-import { subscribeMountedCanvasResourceInvalidation } from "./project-resource-invalidation"
+import {
+  hydrateCanvasResourceTargetsInBatches,
+  subscribeMountedCanvasResourceInvalidation,
+} from "./project-resource-invalidation"
 import { SettingsView } from "./settings-view"
 import { readWorkbenchLayoutPreferences, writeWorkbenchLayoutPreferences } from "./workbench-layout-preferences"
 import { readLastCanvasPreference, writeLastCanvasPreference } from "./workbench-preferences"
@@ -194,6 +199,32 @@ const canvasShortcutScopeId = "desktop.canvas"
 const canvasInteractionShortcutScopeId = "desktop.canvas.interaction"
 const canvasNodeInputShortcutScopeId = "desktop.canvas.node-input"
 const conversationShortcutScopeId = "desktop.conversation"
+
+function isStaleCanvasResourceState(value: unknown): boolean {
+  return value !== null && typeof value === "object" && "status" in value && value.status === "stale"
+}
+
+function bindAcceptedPreparedResourceRuntime(
+  session: DesktopCanvasRendererSession,
+  preparedResources: readonly Readonly<{ nodeId: string; state: CanvasAcceptedPreparedResourceRuntime["state"] }>[],
+): readonly CanvasAcceptedPreparedResourceRuntime[] {
+  if (preparedResources.length === 0) return []
+  const nodes = new Map(session.getProjection().nodes.map((node) => [node.id, node]))
+  const result: CanvasAcceptedPreparedResourceRuntime[] = []
+  for (const prepared of preparedResources) {
+    const node = nodes.get(prepared.nodeId)
+    const entity = session.resolveNodeEntity(prepared.nodeId)
+    const resourceIdentity = node ? canvasCanonicalResourceIdentity(node) : undefined
+    if (!node || !entity || resourceIdentity === undefined) return []
+    result.push(Object.freeze({
+      entity: Object.freeze({ ...entity }),
+      nodeId: prepared.nodeId,
+      resourceIdentity,
+      state: structuredClone(prepared.state),
+    }))
+  }
+  return Object.freeze(result)
+}
 
 function isCanvasIgnoredShortcutTarget(target: Element) {
   return Boolean(target.closest("[data-canvas-shortcuts='ignore']"))
@@ -801,6 +832,8 @@ function App() {
     })
   }, [activeCanvasId, activeProjectId])
   const activeCanvasSession = mountedCanvasSession?.key === canvasSessionScopeKey ? mountedCanvasSession.session : null
+  const activeCanvasSessionRef = useRef<DesktopCanvasRendererSession | null>(activeCanvasSession)
+  activeCanvasSessionRef.current = activeCanvasSession
   const activeCanvasSessionFailure =
     canvasSessionFailure?.key === canvasSessionScopeKey ? canvasSessionFailure.message : null
   const publishCanvasSelection = useCallback(
@@ -829,6 +862,7 @@ function App() {
       subscribeMountedCanvasResourceInvalidation({
         currentEditor: () => canvasEditorRef.current,
         currentProjectId: () => activeProjectIdRef.current,
+        currentSession: () => activeCanvasSessionRef.current,
         projectFiles: window.convax.projectFiles,
       }),
     [],
@@ -1202,18 +1236,67 @@ function App() {
         },
       },
       hydration: {
-        async hydrateStale({ signal }) {
-          if (!activeProjectId || !activeCanvasId) {
+        async hydrateStale({ document, nodeIds, signal }) {
+          if (!activeProjectId || !activeCanvasId || !activeCanvasSession) {
             throw new Error("Open a Project Canvas before refreshing resources")
           }
           if (signal.aborted) throw signal.reason
-          const hydrated = await window.convax.canvas.resources.hydrateStale({
+          const requestedNodeIds =
+            nodeIds ??
+            document.nodes.flatMap((node) =>
+              isStaleCanvasResourceState(node.data.resourceState) ? [node.id] : [],
+            )
+          if (requestedNodeIds.length === 0) return document
+          const requestedNodeIdSet = new Set(requestedNodeIds)
+          if (requestedNodeIdSet.size !== requestedNodeIds.length) {
+            throw new Error("Canvas resource refresh targets are duplicated")
+          }
+          const documentNodes = new Map(document.nodes.map((node) => [node.id, node]))
+          const targets = requestedNodeIds.map((nodeId) => {
+            const node = documentNodes.get(nodeId)
+            const entity = activeCanvasSession.resolveNodeEntity(nodeId)
+            if (!node || !isStaleCanvasResourceState(node.data.resourceState) || !entity) {
+              throw new Error("Canvas resource refresh target is outside the mounted session")
+            }
+            return { entity, nodeId }
+          })
+          const patchesResult = await hydrateCanvasResourceTargetsInBatches({
             canvasId: activeCanvasId,
+            client: window.convax.canvas.resources,
+            sessionId: activeCanvasSession.sessionId,
+            signal,
+            targets,
           })
           if (signal.aborted) throw signal.reason
-          return hydrated
+          const patches = new Map(patchesResult.map((patch) => [patch.nodeId, patch.state]))
+          return {
+            ...document,
+            nodes: document.nodes.map((node) => {
+              if (!requestedNodeIdSet.has(node.id)) return node
+              const state = patches.get(node.id)
+              if (!state) throw new Error("Canvas resource refresh response is incomplete")
+              return { ...node, data: { ...node.data, resourceState: state } }
+            }),
+          }
         },
-        markStale: markProjectCanvasResourcesStale,
+        markStale(document, nodeIds) {
+          if (nodeIds === undefined) return markProjectCanvasResourcesStale(document)
+          const selected = new Set(nodeIds)
+          if (selected.size === 0) return document
+          const marked = markProjectCanvasResourcesStale({
+            ...document,
+            nodes: document.nodes.filter((node) => selected.has(node.id)),
+          })
+          const markedById = new Map(marked.nodes.map((node) => [node.id, node]))
+          let changed = false
+          const nodes = document.nodes.map((node) => {
+            const next = markedById.get(node.id)
+            if (!next || next === node) return node
+            changed = true
+            return next
+          })
+          return changed ? { ...document, nodes } : document
+        },
       },
       mutation: {
         async add(request) {
@@ -1242,6 +1325,10 @@ function App() {
           return {
             authoritativeProjectionDelivered: delivery.projectionDelivered,
             createdNodeIds: delivery.result.createdNodeIds,
+            preparedResources: bindAcceptedPreparedResourceRuntime(
+              activeCanvasSession,
+              delivery.result.preparedResources,
+            ),
             warnings: delivery.result.warnings,
           }
         },

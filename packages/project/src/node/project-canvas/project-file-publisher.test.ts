@@ -229,6 +229,40 @@ describe("ProjectFilePublisher", () => {
     expect(await fs.readFile(path.join(projectRoot, ".convax", "staging", "note-a1"), "utf8")).toBe("# 你好\n")
   })
 
+  test("covers only the exact unchanged filesystem event caused by a verified publication", async () => {
+    let covered:
+      | {
+          path: string
+          projectId: string
+          verifyCurrent(): Promise<boolean>
+        }
+      | undefined
+    const publisher = new ProjectFilePublisher(roots(), managedAssets(), {
+      filesystemEventCoverage: {
+        cover(input) {
+          covered = input
+          return () => {
+            covered = undefined
+          }
+        },
+        consume: async () => false,
+      },
+      randomId: () => "covered-a1",
+    })
+
+    await publisher.publishText({
+      content: "covered",
+      directory: "Notes",
+      extension: ".md",
+      projectId: "project_one",
+    })
+
+    expect(covered).toMatchObject({ path: "Notes/Untitled-covered-a1.md", projectId: "project_one" })
+    await expect(covered!.verifyCurrent()).resolves.toBe(true)
+    await fs.appendFile(path.join(projectRoot, covered!.path), " changed")
+    await expect(covered!.verifyCurrent()).resolves.toBe(false)
+  })
+
   test("chooses a fresh id without overwriting an existing file, directory, or symlink", async () => {
     await fs.mkdir(path.join(projectRoot, "Notes"))
     await fs.writeFile(path.join(projectRoot, "Notes", "Brief-taken.md"), "existing")

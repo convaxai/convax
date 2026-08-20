@@ -4,8 +4,10 @@ import fs from "node:fs/promises"
 import path from "node:path"
 import type { ProjectCanvasFilePublisher } from "./project-canvas-resource-preparation"
 import type { ProjectManagedAssetStore, ProjectRootResolver } from "./project-managed-asset-store"
+import type { ProjectFilesystemEventCoverage } from "../project-filesystem-event-coverage"
 
 export interface ProjectFilePublisherOptions {
+  filesystemEventCoverage?: ProjectFilesystemEventCoverage
   maximumGeneratedBytes?: number
   maximumBytes?: number
   randomId?: () => string
@@ -23,6 +25,7 @@ export class ProjectFilePublisher implements ProjectCanvasFilePublisher {
   readonly #maximumGeneratedBytes: number
   readonly #maximumBytes: number
   readonly #randomId: () => string
+  readonly #filesystemEventCoverage: ProjectFilesystemEventCoverage | undefined
 
   constructor(
     private readonly roots: ProjectRootResolver,
@@ -42,6 +45,7 @@ export class ProjectFilePublisher implements ProjectCanvasFilePublisher {
     this.#maximumGeneratedBytes = maximumGeneratedBytes
     this.#maximumBytes = maximumBytes
     this.#randomId = options.randomId ?? randomUUID
+    this.#filesystemEventCoverage = options.filesystemEventCoverage
   }
 
   async publishText(input: {
@@ -154,10 +158,25 @@ export class ProjectFilePublisher implements ProjectCanvasFilePublisher {
       const shortId = attempt === 0 ? firstId : requirePublicationId(this.#randomId())
       const fileName = `${stem}-${shortId}${extension}`
       const targetPath = path.join(layout.target.path, fileName)
+      const relativePath = `${input.directory}/${fileName}`
       await assertPublicationDirectories(layout)
       throwIfAborted(input.signal)
       await input.beforePublish?.()
       throwIfAborted(input.signal)
+      let settleCoverageVerification:
+        | ((verification: (() => Promise<boolean>) | null) => void)
+        | undefined
+      const coverageVerification = new Promise<(() => Promise<boolean>) | null>((resolve) => {
+        settleCoverageVerification = resolve
+      })
+      const revokeFilesystemEventCoverage = this.#filesystemEventCoverage?.cover({
+        path: relativePath,
+        projectId: input.projectId,
+        async verifyCurrent() {
+          const verify = await coverageVerification
+          return verify ? verify() : false
+        },
+      })
       // Repeated identity checks fail closed on ordinary symlinks and replacements
       // completed before a check. Portable Node cannot make parent-directory
       // validation and link(2) one atomic operation, so this does not defend against
@@ -166,19 +185,34 @@ export class ProjectFilePublisher implements ProjectCanvasFilePublisher {
       try {
         await fs.link(staging.path, targetPath)
       } catch (error) {
+        settleCoverageVerification?.(null)
+        revokeFilesystemEventCoverage?.()
         if (isNodeError(error) && error.code === "EEXIST") continue
         throw error
       }
-
-      const publication = await captureOwnedFile(targetPath, staging.snapshot, "Published Project file")
-      if (!sameNativePath(path.dirname(publication.realPath), layout.target.realPath)) {
-        throw new Error(`Project ${input.directory} directory changed during publication`)
-      }
       // A user-visible publication is never rolled back. Post-link verification
       // reports failure without unlinking the published path.
-      await assertPublicationDirectories(layout)
-      await verifyPublishedFile(publication, staged.sha256, staged.size)
-      return { path: `${input.directory}/${fileName}` }
+      try {
+        const publication = await captureOwnedFile(targetPath, staging.snapshot, "Published Project file")
+        if (!sameNativePath(path.dirname(publication.realPath), layout.target.realPath)) {
+          throw new Error(`Project ${input.directory} directory changed during publication`)
+        }
+        await assertPublicationDirectories(layout)
+        await verifyPublishedFile(publication, staged.sha256, staged.size)
+        settleCoverageVerification?.(async () => {
+          try {
+            await verifyPublishedFile(publication, staged.sha256, staged.size)
+            return true
+          } catch {
+            return false
+          }
+        })
+      } catch (error) {
+        settleCoverageVerification?.(null)
+        revokeFilesystemEventCoverage?.()
+        throw error
+      }
+      return { path: relativePath }
     }
 
     throw new Error("Project text publication could not find a unique name after repeated collisions")

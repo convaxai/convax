@@ -69,6 +69,7 @@ import {
   sameCanonicalValue,
 } from "./validation"
 import { assertCanvasHistoryTemplateSchedule } from "./history-schedule"
+import { createCanvasSnapshotMap } from "./persistent-append-map"
 
 export const CANVAS_ROOT_NAME = "convax.canvas"
 export const CANVAS_ROOT_KEYS = Object.freeze([
@@ -190,6 +191,7 @@ export function validateCanvasYDoc(document: Y.Doc, scope?: DocumentScope): Canv
   const generationRecoveryFailures = readMap(root, "generationRecoveryFailures", readRecovery)
   const semanticHistory = readMap(root, "semanticHistory", readHistory)
   const operations = readMap(root, "operations", readOperation)
+  const operationById = indexCanvasOperationsById(operations)
 
   for (const [key, choice] of containments) {
     if (key !== `${canvasEntityKey(choice.child)}/actor/${choice.stamp.actorId}`)
@@ -202,8 +204,9 @@ export function validateCanvasYDoc(document: Y.Doc, scope?: DocumentScope): Canv
     generationDismissals,
     generationRecoveryFailures,
   )
-  validateCreationGroups(nodes, edges, operations)
-  validateSemanticHistory(semanticHistory, operations)
+  validateOperationResultEntities(nodes, edges, operations)
+  validateCreationGroups(nodes, edges, operationById)
+  validateSemanticHistory(semanticHistory, operationById)
 
   return Object.freeze({
     identity,
@@ -218,6 +221,56 @@ export function validateCanvasYDoc(document: Y.Doc, scope?: DocumentScope): Canv
     semanticHistory,
     operations,
   })
+}
+
+let operationIndexEntries = 0
+let creationGroupReceiptLookups = 0
+let semanticHistoryReceiptLookups = 0
+
+/** Package-internal structural validation counters. */
+export function canvasYDocValidationCounts(): Readonly<{
+  operationIndexEntries: number
+  creationGroupReceiptLookups: number
+  semanticHistoryReceiptLookups: number
+}> {
+  return Object.freeze({ operationIndexEntries, creationGroupReceiptLookups, semanticHistoryReceiptLookups })
+}
+
+function indexCanvasOperationsById(
+  operations: ReadonlyMap<string, BoundedOperationReceipt>,
+): ReadonlyMap<string, BoundedOperationReceipt> {
+  const result = new Map<string, BoundedOperationReceipt>()
+  for (const receipt of operations.values()) {
+    operationIndexEntries += 1
+    if (result.has(receipt.operationId)) {
+      throw new CanvasSchemaError(
+        "operation-id-equivocation",
+        `Operation id ${receipt.operationId} is claimed by multiple actor receipts`,
+      )
+    }
+    result.set(receipt.operationId, receipt)
+  }
+  return result
+}
+
+function validateOperationResultEntities(
+  nodes: ReadonlyMap<string, CanvasNodeSnapshot>,
+  edges: ReadonlyMap<string, CanvasEdgeSnapshot>,
+  operations: ReadonlyMap<string, BoundedOperationReceipt>,
+): void {
+  for (const receipt of operations.values()) {
+    for (const entity of receipt.resultEntities) {
+      const present = entity.kind === "node"
+        ? nodes.has(canvasEntityKey(entity))
+        : edges.has(canvasEntityKey(entity))
+      if (!present) {
+        throw new CanvasSchemaError(
+          "operation-result-entity-missing",
+          `Operation ${receipt.operationId} names an absent ${entity.kind}`,
+        )
+      }
+    }
+  }
 }
 
 export function extractCanvasCanonicalState(document: Y.Doc, scope?: DocumentScope): CanvasCanonicalState {
@@ -446,7 +499,7 @@ function validateGenerationRelations(
 function validateCreationGroups(
   nodes: ReadonlyMap<string, CanvasNodeSnapshot>,
   edges: ReadonlyMap<string, CanvasEdgeSnapshot>,
-  operations: ReadonlyMap<string, BoundedOperationReceipt>,
+  operationById: ReadonlyMap<string, BoundedOperationReceipt>,
 ): void {
   const groups = new Map<string, { ref: CreationGroupRef; members: CanvasEntityRef[] }>()
   for (const record of [...nodes.values(), ...edges.values()]) {
@@ -484,7 +537,8 @@ function validateCreationGroups(
     if (creatorIds.size !== 1 || creatorIds.has(undefined))
       throw new CanvasSchemaError("creation-group-creator-mismatch", `Creation group ${groupId} spans creators`)
     const creator = [...creatorIds][0]
-    const receipt = [...operations.values()].find((candidate) => candidate.operationId === creator)
+    creationGroupReceiptLookups += 1
+    const receipt = creator === undefined ? undefined : operationById.get(creator)
     if (
       receipt === undefined ||
       receipt.resultEntities.length !== group.members.length ||
@@ -516,7 +570,7 @@ function validateCreationGroups(
 
 function validateSemanticHistory(
   history: ReadonlyMap<string, CanvasCanonicalSemanticHistoryValue>,
-  operations: ReadonlyMap<string, BoundedOperationReceipt>,
+  operationById: ReadonlyMap<string, BoundedOperationReceipt>,
 ): void {
   const roots = new Map<string, SemanticHistoryRoot>()
   for (const [key, value] of history) {
@@ -533,7 +587,8 @@ function validateSemanticHistory(
     }
   }
   for (const root of roots.values()) {
-    const receipt = [...operations.values()].find((candidate) => candidate.operationId === root.rootOperationId)
+    semanticHistoryReceiptLookups += 1
+    const receipt = operationById.get(root.rootOperationId)
     if (
       receipt === undefined ||
       !receipt.semanticRoot ||
@@ -563,9 +618,9 @@ function readMap<T>(
   read: (key: string, value: unknown) => T,
 ): ReadonlyMap<string, T> {
   const map = asMap(root.get(key), key)
-  const result = new Map<string, T>()
-  for (const [entryKey, value] of map.entries()) result.set(entryKey, read(entryKey, value))
-  return result
+  return createCanvasSnapshotMap(
+    [...map.entries()].map(([entryKey, value]) => [entryKey, read(entryKey, value)] as const),
+  )
 }
 
 function actorEntries<T>(

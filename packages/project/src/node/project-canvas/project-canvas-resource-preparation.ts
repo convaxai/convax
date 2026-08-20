@@ -22,6 +22,7 @@ import type {
   ProjectIndexManagedBlobAdmission,
 } from "../../canvas/project-index-file-application"
 import {
+  isEditableProjectTextPath,
   projectResourceReferenceKey,
   requireProjectResourceReference,
   type ProjectResourceReference,
@@ -333,6 +334,7 @@ export class ProjectCanvasResourcePreparation implements CanvasResourcePreparati
           name: path.posix.basename(reference.path),
           state: {
             contentRevision: published.contentRevision,
+            editableText: true,
             status: "ready",
             text: source.text,
           },
@@ -381,6 +383,7 @@ export class ProjectCanvasResourcePreparation implements CanvasResourcePreparati
           name: sourceInfo.name,
           state: {
             contentRevision: text.contentRevision,
+            editableText: isEditableProjectTextPath(reference.path),
             status: "ready",
             text: text.content,
           },
@@ -496,7 +499,11 @@ export class ProjectCanvasResourcePreparation implements CanvasResourcePreparati
     if (contents && contents.size !== bytes.byteLength) {
       throw new Error("Project file size changed during Canvas resource preparation")
     }
-    let plan = input.initialPlan ?? (await this.indexFiles.queryFileMaterializationPlan({ projectId }))
+    const plan = await this.queryProjectIndexMaterializationEntries(
+      projectId,
+      [...projectIndexParentPaths(input.path), input.path],
+      input.initialPlan,
+    )
     const existing = plan.entries.find((entry) => entry.path === input.path)
     if (existing?.kind === "directory") throw new Error("ProjectIndex path is a directory")
     if (
@@ -531,8 +538,23 @@ export class ProjectCanvasResourcePreparation implements CanvasResourcePreparati
   ): Promise<ProjectIndexFileMaterializationPlan | undefined> {
     if (!this.indexFiles) return undefined
     const projectId = parseProjectId(projectIdInput)
-    const plan = await this.indexFiles.queryFileMaterializationPlan({ projectId })
+    const plan = await this.queryProjectIndexMaterializationEntries(
+      projectId,
+      projectIndexParentPaths(filePath),
+    )
     return this.ensureProjectIndexDirectories(projectId, filePath, plan)
+  }
+
+  private async queryProjectIndexMaterializationEntries(
+    projectId: ReturnType<typeof parseProjectId>,
+    paths: readonly string[],
+    compatiblePlan?: ProjectIndexFileMaterializationPlan,
+  ): Promise<ProjectIndexFileMaterializationPlan> {
+    if (!this.indexFiles) return Object.freeze({ projectId, entries: Object.freeze([]) })
+    if (this.indexFiles.queryFileMaterializationEntries) {
+      return this.indexFiles.queryFileMaterializationEntries({ projectId, paths })
+    }
+    return compatiblePlan ?? this.indexFiles.queryFileMaterializationPlan({ projectId })
   }
 
   private async publishManagedAssetProof(input: {
@@ -608,7 +630,7 @@ export class ProjectCanvasResourcePreparation implements CanvasResourcePreparati
       if (existing?.kind === "directory") continue
       const result = await this.indexFiles.createDirectory({ projectId, path: current })
       if (result.status !== "committed") {
-        plan = await this.indexFiles.queryFileMaterializationPlan({ projectId })
+        plan = await this.queryProjectIndexMaterializationEntries(projectId, [current])
         if (plan.entries.find((entry) => entry.path === current)?.kind !== "directory") {
           throw new Error("ProjectIndex did not publish the Canvas resource directory")
         }
@@ -624,6 +646,18 @@ export class ProjectCanvasResourcePreparation implements CanvasResourcePreparati
     }
     return plan
   }
+}
+
+function projectIndexParentPaths(filePath: string): readonly string[] {
+  const parentPath = path.posix.dirname(filePath)
+  if (parentPath === ".") return Object.freeze([])
+  const paths: string[] = []
+  let current = ""
+  for (const segment of parentPath.split("/").filter(Boolean)) {
+    current = current ? `${current}/${segment}` : segment
+    paths.push(current)
+  }
+  return Object.freeze(paths)
 }
 
 function localPreparedItem(

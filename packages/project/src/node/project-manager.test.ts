@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto"
-import { afterEach, beforeEach, describe, expect, test } from "bun:test"
+import { afterEach, beforeEach, describe, expect, mock, test } from "bun:test"
 import fs from "node:fs/promises"
 import os from "node:os"
 import path from "node:path"
@@ -252,6 +252,89 @@ describe("NodeProjectManager registry", () => {
 
     expect((await manager.listProjects()).map((project) => project.id)).toEqual([projectId])
     await expect(manager.addProject(projectRoot)).rejects.toThrow()
+  })
+})
+
+describe("NodeProjectManager filesystem events", () => {
+  test("suppresses an exact verified internal publication and fails open for external changes", async () => {
+    let onChange: ((eventType: string, filename: string | Buffer | null) => void) | undefined
+    const consume = mock(async ({ path: eventPath }: { path: string; projectId: string }) =>
+      eventPath === "Notes/internal.md",
+    )
+    const fakeWatcher = {
+      close() {},
+      once() {
+        return fakeWatcher
+      },
+    }
+    const watched = new NodeProjectManager({
+      filesystemEventCoverage: { cover: () => () => undefined, consume },
+      registryFile: path.join(temporaryRoot, "watched-state", "projects.json"),
+      watchDebounceMs: 0,
+      watchFileSystem(_rootPath, _options, listener) {
+        onChange = listener
+        return fakeWatcher as never
+      },
+    })
+    const watchedProject = await watched.addProject(projectRoot)
+    const events: Array<{ kind: string; path?: string; projectId: string }> = []
+    const stop = await watched.watchProject(watchedProject.id, (event) => events.push(event))
+
+    onChange?.("rename", "Notes/internal.md")
+    await new Promise((resolve) => setTimeout(resolve, 10))
+    expect(events).toEqual([])
+
+    onChange?.("rename", "Notes/internal.md")
+    onChange?.("change", "Notes/external.md")
+    onChange?.("change", "Assets/external.png")
+    await new Promise((resolve) => setTimeout(resolve, 10))
+    expect(events).toEqual([
+      { kind: "filesystem", projectId: watchedProject.id },
+    ])
+    onChange?.("change", "Notes/Cafe\u0301.md")
+    await new Promise((resolve) => setTimeout(resolve, 10))
+    onChange?.("change", "../escape.md")
+    await new Promise((resolve) => setTimeout(resolve, 10))
+    expect(events).toEqual([
+      { kind: "filesystem", projectId: watchedProject.id },
+      { kind: "filesystem", path: "Notes/Café.md", projectId: watchedProject.id },
+      { kind: "filesystem", projectId: watchedProject.id },
+    ])
+    expect(consume).toHaveBeenCalledTimes(5)
+    stop()
+  })
+
+  test("does not deliver a late filesystem event after its watcher is disposed", async () => {
+    let onChange: ((eventType: string, filename: string | Buffer | null) => void) | undefined
+    let settleConsume!: (covered: boolean) => void
+    const consume = mock(() => new Promise<boolean>((resolve) => { settleConsume = resolve }))
+    const fakeWatcher = {
+      close() {},
+      once() {
+        return fakeWatcher
+      },
+    }
+    const watched = new NodeProjectManager({
+      filesystemEventCoverage: { cover: () => () => undefined, consume },
+      registryFile: path.join(temporaryRoot, "disposed-watch-state", "projects.json"),
+      watchDebounceMs: 0,
+      watchFileSystem(_rootPath, _options, listener) {
+        onChange = listener
+        return fakeWatcher as never
+      },
+    })
+    const watchedProject = await watched.addProject(projectRoot)
+    const events: Array<{ kind: string; path?: string; projectId: string }> = []
+    const stop = await watched.watchProject(watchedProject.id, (event) => events.push(event))
+
+    onChange?.("change", "Notes/late.md")
+    await new Promise((resolve) => setTimeout(resolve, 5))
+    expect(consume).toHaveBeenCalledTimes(1)
+    stop()
+    settleConsume(false)
+    await new Promise((resolve) => setTimeout(resolve, 5))
+
+    expect(events).toEqual([])
   })
 })
 

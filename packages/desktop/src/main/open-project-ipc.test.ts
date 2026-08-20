@@ -213,7 +213,15 @@ describe("desktop Project lifecycle IPC smoke", () => {
         const current = canvasDocuments.get(key) ?? createCanvasDocument({ id: request.canvasId })
         const result = executeCanvasApplicationCommand(current, request.envelope)
         canvasDocuments.set(key, structuredClone(result.document))
-        return { ...result, operationReceipt }
+        return {
+          ...result,
+          // This compatibility fake creates ids in command item order. Production
+          // supplies this field only after the collaboration owner verifies the
+          // typed-intent ordinals against the durable receipt entity set.
+          createdResourceNodeIds:
+            request.envelope.command.type === "resources.add" ? result.createdNodeIds : undefined,
+          operationReceipt,
+        }
       },
     }
     const resourcePreparation = new ProjectCanvasResourcePreparation(
@@ -346,14 +354,31 @@ describe("desktop Project lifecycle IPC smoke", () => {
       path: "Notes/renderer-note.md",
       projectId,
     })
+    await exposedBridge.projectFiles.writeTextFile({
+      content: "Second command edit",
+      createParents: true,
+      path: "Notes/renderer-note-two.md",
+      projectId,
+    })
     const rendererResource = await exposedBridge.canvas.resources.add({
       anchor: { x: 10, y: 20 },
       canvasId: "canvas-main",
       commandId: "renderer-resource-smoke",
       projectId,
       sessionId: resourceSessionId,
-      sources: [{ kind: "host-file", path: "Notes/renderer-note.md", sourceId: "renderer-note" }],
+      sources: [
+        { kind: "host-file", path: "Notes/renderer-note.md", sourceId: "renderer-note" },
+        { kind: "host-file", path: "Notes/renderer-note-two.md", sourceId: "renderer-note-two" },
+      ],
     })
+    expect(rendererResource.createdNodeIds).toHaveLength(2)
+    expect(rendererResource.preparedResources.map((prepared) => prepared.nodeId)).toEqual(
+      [...rendererResource.createdNodeIds],
+    )
+    expect(rendererResource.preparedResources.map((prepared) => prepared.state.text)).toEqual([
+      "Command edit",
+      "Second command edit",
+    ])
     const rendererNodeId = rendererResource.createdNodeIds[0]
     if (!rendererNodeId) throw new Error("Renderer resource command did not create a node")
     const commandResult = await exposedBridge.canvas.documents.execute({
@@ -367,8 +392,12 @@ describe("desktop Project lifecycle IPC smoke", () => {
     })
     expect(commandResult).toMatchObject({
       affectedNodeIds: [rendererNodeId],
-      document: { nodes: [{ id: rendererNodeId }] },
       operationReceipt,
+    })
+    expect(commandResult.document.nodes).toHaveLength(2)
+    expect(commandResult.document.nodes.find((node) => node.id === rendererNodeId)).toMatchObject({
+      id: rendererNodeId,
+      position: { x: 15, y: 25 },
     })
     expect(handlers.has("canvas:document-save")).toBeFalse()
 
@@ -394,7 +423,7 @@ describe("desktop Project lifecycle IPC smoke", () => {
     })
     expect(JSON.stringify(resourceResult)).not.toContain(selectedLocalFilePath)
     const withResource = await exposedBridge.canvas.documents.load({ canvasId: "canvas-main", scopeId: projectId })
-    expect(withResource.projection.nodes).toHaveLength(2)
+    expect(withResource.projection.nodes).toHaveLength(3)
     expect(JSON.stringify(withResource.projection)).not.toContain(selectedLocalFilePath)
 
     await exposedBridge.agent.listSessions({ limit: 60, scopeId: projectId })

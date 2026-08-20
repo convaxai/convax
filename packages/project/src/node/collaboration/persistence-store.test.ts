@@ -74,6 +74,107 @@ describe("NodeCollaborationPersistence", () => {
     fixture.store.dispose()
   })
 
+  durabilityTest("keeps the prior reachability set unchanged until the sole-head barrier succeeds", async () => {
+    let failBeforeRename = true
+    const fixture = await createFixture({
+      afterHeadTempFsync: async () => {
+        if (!failBeforeRename) return
+        failBeforeRename = false
+        throw new Error("simulated loss before sole-head rename")
+      },
+    })
+    const scope = projectIndexScope()
+    const genesis = await initialize(fixture.store, scope)
+    const before = internalReachabilitySet(fixture.store)
+    const frame = fixture.frames.create(scope, localActor, "1", id128(124))
+    await fixture.store.putImmutableFrame(frame.ref, frame.bytes)
+    await fixture.store.putReplicationOutboxRef(frame.ref)
+    const journal = await fixture.store.appendFrameJournal(frame.ref)
+
+    expect(internalReachabilitySet(fixture.store)).toBe(before)
+    expect(before.has(frame.ref.frameDigest)).toBe(false)
+    expect(await fixture.store.compareAndCommitReplicaHead({
+      ref: frame.ref,
+      journal,
+      expectedReplicaHeadRecordDigest: genesis.headDigest,
+      resultingFrontierDigest: fixture.frames.frontierDigest(frame.ref),
+    })).toEqual({ status: "rejected", code: "durability-failed" })
+    expect(internalReachabilitySet(fixture.store)).toBe(before)
+    expect(before.has(frame.ref.frameDigest)).toBe(false)
+    expect(await fixture.store.isReachableFromAcceptedHead(frame.ref)).toBe(false)
+
+    fixture.store.dispose()
+    const reopened = await NodeCollaborationPersistence.open({
+      collaborationDirectory: fixture.collaborationDirectory,
+      localActorId: localActor,
+      materializer: fixture.frames,
+    })
+    await reopened.loadReplicaHead(scope)
+    expect(await reopened.isReachableFromAcceptedHead(frame.ref)).toBe(true)
+    reopened.dispose()
+  })
+
+  durabilityTest("transfers one owned reachability set across retained history without copying prior entries", async () => {
+    const fixture = await createFixture()
+    const scope = projectIndexScope()
+    let head = await initialize(fixture.store, scope)
+    const owned = internalReachabilitySet(fixture.store)
+    const frames: FrameObjectRef[] = []
+
+    for (let sequence = 1; sequence <= 256; sequence += 1) {
+      const frame = fixture.frames.create(scope, localActor, String(sequence), id128(600 + sequence))
+      frames.push(frame.ref)
+      await fixture.store.putImmutableFrame(frame.ref, frame.bytes)
+      await fixture.store.putReplicationOutboxRef(frame.ref)
+      const journal = await fixture.store.appendFrameJournal(frame.ref)
+      expect(internalReachabilitySet(fixture.store)).toBe(owned)
+      expect(owned.has(frame.ref.frameDigest)).toBe(false)
+      const committed = await fixture.store.compareAndCommitReplicaHead({
+        ref: frame.ref,
+        journal,
+        expectedReplicaHeadRecordDigest: head.headDigest,
+        resultingFrontierDigest: fixture.frames.frontierDigest(frame.ref),
+      })
+      if (committed.status !== "committed") throw new Error("expected committed frame")
+      head = { ...head, headDigest: committed.evidence.resultingReplicaHeadRecordDigest }
+      expect(internalReachabilitySet(fixture.store)).toBe(owned)
+      expect(owned.size).toBe(sequence)
+    }
+
+    for (const index of [0, 127, 255]) {
+      expect(await fixture.store.isReachableFromAcceptedHead(frames[index]!)).toBe(true)
+    }
+    fixture.store.dispose()
+  })
+
+  durabilityTest("does not let post-head cache or observer failures deny a durable commit", async () => {
+    let failCacheInstall = true
+    const fixture = await createFixture({
+      beforeHeadCacheInstall: async () => {
+        if (!failCacheInstall) return
+        failCacheInstall = false
+        throw new Error("simulated hot-cache failure after the head barrier")
+      },
+    })
+    fixture.frames.failObserveAcceptedFrame = true
+    const scope = projectIndexScope()
+    const genesis = await initialize(fixture.store, scope)
+    const frame = fixture.frames.create(scope, localActor, "1", id128(125))
+    await fixture.store.putImmutableFrame(frame.ref, frame.bytes)
+    await fixture.store.putReplicationOutboxRef(frame.ref)
+    const journal = await fixture.store.appendFrameJournal(frame.ref)
+
+    const committed = await fixture.store.compareAndCommitReplicaHead({
+      ref: frame.ref,
+      journal,
+      expectedReplicaHeadRecordDigest: genesis.headDigest,
+      resultingFrontierDigest: fixture.frames.frontierDigest(frame.ref),
+    })
+    expect(committed.status).toBe("committed")
+    expect(await fixture.store.isReachableFromAcceptedHead(frame.ref)).toBe(true)
+    fixture.store.dispose()
+  })
+
   durabilityTest("fast head verification is disk-bound and fails closed for mismatch, cache mutation, and below-head recovery", async () => {
     const fixture = await createFixture()
     const scope = projectIndexScope()
@@ -232,6 +333,47 @@ describe("NodeCollaborationPersistence", () => {
     })
     expect((await reopened.loadInstalledBase(scope)).fullUpdate).toEqual(checkpoint.accepted.fullUpdate)
     reopened.dispose()
+  })
+
+  durabilityTest("does not let checkpoint hot-cache installation failure deny its durable metadata head", async () => {
+    let failCacheInstall = true
+    const fixture = await createFixture(
+      {
+        beforeHeadCacheInstall: async () => {
+          if (!failCacheInstall) return
+          failCacheInstall = false
+          throw new Error("simulated checkpoint cache failure after the head barrier")
+        },
+      },
+      undefined,
+      { verifyCurrent: async () => true },
+    )
+    const scope = projectIndexScope()
+    const genesis = await initialize(fixture.store, scope)
+    const checkpoint = fixture.frames.createCheckpoint(
+      await fixture.store.loadReplicaHead(scope) as NodeAcceptedReplicaHead,
+    )
+    const contentCertificate = encoder.encode("checkpoint-cache-failure-certificate")
+
+    const result = await fixture.store.installCheckpointSet({
+      scope,
+      expectedReplicaHeadRecordDigest: genesis.headDigest,
+      bootstrapCheckpointObjectDigest: checkpoint.objectDigest,
+      checkpointObjects: [checkpoint],
+      contentCertificateObjects: [{
+        objectDigest: digestBytes(contentCertificate),
+        exactBytes: contentCertificate,
+      }],
+      prunableSetCertificateObjects: [],
+    })
+
+    expect(result.status).toBe("committed")
+    if (result.status !== "committed") throw new Error("expected committed checkpoint metadata head")
+    expect((await fixture.store.loadReplicaHead(scope) as NodeAcceptedReplicaHead).headDigest)
+      .toBe(result.resultingReplicaHeadRecordDigest)
+    expect((await fixture.store.loadInstalledBase(scope)).canonicalStateDigest)
+      .toBe(checkpoint.accepted.canonicalStateDigest)
+    fixture.store.dispose()
   })
 
   durabilityTest("does not write checkpoint candidates for a stale sole head", async () => {
@@ -406,7 +548,6 @@ describe("NodeCollaborationPersistence", () => {
       "outbox:directory-sync",
       "journal:file-sync",
       "journal:directory-sync",
-      "journal:directory-sync",
       "head:file-sync",
       "head:directory-sync",
     ])
@@ -418,7 +559,7 @@ describe("NodeCollaborationPersistence", () => {
       "object-frame": 2,
       "object-operation-sidecar": 2,
       outbox: 2,
-      journal: 3,
+      journal: 2,
       head: 2,
     })
 
@@ -791,6 +932,7 @@ class FakeFrameMaterializer implements NodeReplicaHeadMaterializer {
   readonly checkpoints = new Map<string, { bytes: Uint8Array; accepted: Omit<NodeAcceptedReplicaHead, "headDigest"> }>()
   applyCount = 0
   inspectCount = 0
+  failObserveAcceptedFrame = false
 
   readonly create = (scope: DocumentScope, actorId: ActorId, actorSequence: string, operationId: Id128) => {
     const seed = encoder.encode(`${actorId}:${actorSequence}:${operationId}:${this.records.size}`)
@@ -840,6 +982,10 @@ class FakeFrameMaterializer implements NodeReplicaHeadMaterializer {
     return digest(canonical(actorHeads))
   }
 
+  observeAcceptedFrame(): void {
+    if (this.failObserveAcceptedFrame) throw new Error("simulated causal-closure observer failure")
+  }
+
   createCheckpoint(accepted: NodeAcceptedReplicaHead) {
     const bytes = encoder.encode(`checkpoint-install:${accepted.canonicalStateDigest}:${this.checkpoints.size}`)
     const objectDigest = digestBytes(bytes)
@@ -874,6 +1020,14 @@ class FakeFrameMaterializer implements NodeReplicaHeadMaterializer {
       }],
     }))
   }
+}
+
+function internalReachabilitySet(store: NodeCollaborationPersistence): ReadonlySet<Digest> {
+  const caches = (store as unknown as {
+    materializedHeadCaches: Map<string, { reachableFrameDigests: ReadonlySet<Digest> }>
+  }).materializedHeadCaches
+  if (caches.size !== 1) throw new Error("expected exactly one materialized head cache")
+  return [...caches.values()][0]!.reachableFrameDigests
 }
 
 async function createFixture(

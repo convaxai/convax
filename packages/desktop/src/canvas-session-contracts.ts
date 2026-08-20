@@ -54,7 +54,10 @@ export interface CanvasRendererSessionMutationResult {
   }>
 }
 
-export interface CanvasRendererApplicationMutationResult extends Omit<CanvasApplicationCommandResult, "document"> {
+export interface CanvasRendererApplicationMutationResult extends Omit<
+  CanvasApplicationCommandResult,
+  "createdResourceNodeIds" | "document"
+> {
   readonly projection: CanvasSessionProjectionDto
   readonly acceptedFrameDigest: Digest
 }

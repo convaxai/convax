@@ -8,10 +8,15 @@ import {
 import type { CanvasDocument } from "@convax/canvas/core"
 import { parseProjectId } from "@convax/collaboration"
 import type { ProjectDirectoryListing, ProjectFileInfo, ProjectTextFileContents } from "@convax/project-files"
-import type { ProjectIndexCurrentBlobReferencePort } from "../../collaboration/blob-replication"
+import type {
+  ProjectIndexCurrentBlobReferencePort,
+  ProjectIndexCurrentResourceProjectionEntry,
+} from "../../collaboration/blob-replication"
+import { projectIndexResourceReferenceDigest } from "../../collaboration/project-index"
 import {
   hydrateProjectCanvasDocument,
   hydrateStaleProjectCanvasResources,
+  isEditableProjectTextPath,
   projectResourceReferenceKey,
   requireProjectResourceReference,
   resolveCurrentProjectResource,
@@ -132,18 +137,43 @@ export class ProjectCanvasResourceHydrator implements ProjectCanvasImageReadPort
     if (resources.size === 0) return { document: input.document, unavailableNodeIds: new Set() }
 
     const projectId = parseProjectId(input.projectId)
-    const currentResources = await this.#currentResources.queryCurrentResources({ projectId })
+    const queryExact = this.#currentResources.queryCurrentResourcesExact
+    if (!queryExact) {
+      return {
+        document: input.document,
+        unavailableNodeIds: new Set([...resources.keys()].map((index) => input.document.nodes[index]!.id)),
+      }
+    }
+    const currentResources = await queryExact.call(this.#currentResources, {
+      projectId,
+      targets: Object.freeze([...resources.values()].map((resource) => Object.freeze({
+        uri: resource.uri,
+        ownerProofDigest: resource.ownerProofDigest,
+      }))),
+    })
+    const currentByProof = new Map<string, ProjectIndexCurrentResourceProjectionEntry | null>()
+    for (const current of currentResources) {
+      const key = currentResourceProofKey(
+        current.reference.canonicalUri,
+        projectIndexResourceReferenceDigest(current.reference),
+      )
+      currentByProof.set(key, currentByProof.has(key) ? null : current)
+    }
     let changed = false
     const unavailableNodeIds = new Set<string>()
     const nodes = input.document.nodes.map((node, index) => {
       const resource = resources.get(index)
       if (!resource) return node
+      const current = currentByProof.get(currentResourceProofKey(resource.uri, resource.ownerProofDigest))
       const resolution = resolveCurrentProjectResource({
-        currentResources,
+        currentResources: current ? [current] : [],
         name: node.data.label || resource.contentDigest,
         resource,
       })
-      if (resolution.status === "unavailable") return node
+      if (resolution.status === "unavailable") {
+        unavailableNodeIds.add(node.id)
+        return node
+      }
       if (resolution.status === "missing") {
         unavailableNodeIds.add(node.id)
         changed = true
@@ -242,7 +272,7 @@ export class ProjectCanvasResourceHydrator implements ProjectCanvasImageReadPort
   ): Promise<ProjectResourceSnapshot> {
     const mediaType = mimeTypeForPath(reference.path)
     const name = path.posix.basename(reference.path)
-    if (isEditableTextPath(reference.path)) {
+    if (isEditableProjectTextPath(reference.path)) {
       try {
         const contents = await this.files.readTextFile({ path: reference.path, projectId })
         if (!contents.exists) return { status: "missing" }
@@ -290,7 +320,7 @@ export class ProjectCanvasResourceHydrator implements ProjectCanvasImageReadPort
     }
 
     const mediaType = reference.mediaType ?? mimeTypeForPath(reference.name)
-    if (isEditableTextPath(reference.name)) {
+    if (isEditableProjectTextPath(reference.name)) {
       try {
         const contents = await readStableProjectUtf8File(
           absolutePath,
@@ -328,6 +358,10 @@ export class ProjectCanvasResourceHydrator implements ProjectCanvasImageReadPort
   }
 }
 
+function currentResourceProofKey(uri: string, ownerProofDigest: string): string {
+  return `${uri}\u0000${ownerProofDigest}`
+}
+
 function restoreCanvasResourceMetadata(source: CanvasDocument, hydrated: CanvasDocument): CanvasDocument {
   const sourceById = new Map(source.nodes.map((node) => [node.id, node] as const))
   let changed = false
@@ -359,11 +393,6 @@ function restoreUnavailableCanvasResourceStates(
     return { ...node, data: { ...node.data, resourceState: state } }
   })
   return { ...hydrated, nodes }
-}
-
-function isEditableTextPath(value: string) {
-  const extension = path.posix.extname(value).toLowerCase()
-  return extension === ".md" || extension === ".txt"
 }
 
 function imageReadLabel(reference: Exclude<ProjectResourceReference, { kind: "project-directory" }>) {

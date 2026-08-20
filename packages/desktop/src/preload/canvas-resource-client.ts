@@ -1,5 +1,5 @@
 import { CanvasTextResourceConflictError } from "@convax/canvas/application/errors"
-import { parseCanvasDocument } from "@convax/canvas/core"
+import type { CanvasResourceRuntimeState } from "@convax/canvas/core"
 import {
   canvasResourceHydrateStaleIpcChannel,
   canvasResourceIpcChannel,
@@ -11,13 +11,20 @@ import {
   type CanvasResourceAddResult,
   type CanvasResourceAddInput,
   type CanvasResourceClient,
+  type CanvasResourceHydrationTarget,
+  type CanvasResourceRuntimePatch,
   type CanvasTextResourceClient,
 } from "../desktop-protocol"
 import {
   isCanvasResourcePartialFailureResponse,
   isCanvasTextResourceConflictResponse,
 } from "../canvas-resource-private-contract"
-import { assertOperationReceiptDto, requireDigestDto, requireId128Dto } from "./canvas-operation-receipt-codec"
+import {
+  assertEntityRefDto,
+  assertOperationReceiptDto,
+  requireDigestDto,
+  requireId128Dto,
+} from "./canvas-operation-receipt-codec"
 import { requireCanvasSessionProjection } from "./canvas-session-client"
 
 interface CanvasResourcePreloadClientOptions {
@@ -175,15 +182,14 @@ export function createCanvasResourcePreloadClient(options: CanvasResourcePreload
       return token
     },
     async hydrateStale(input) {
+      const request = requireCanvasResourceHydrateStaleInput(input)
       let result: unknown
       try {
-        result = await options.invoke(canvasResourceHydrateStaleIpcChannel, input)
+        result = await options.invoke(canvasResourceHydrateStaleIpcChannel, request)
       } catch {
         throw new Error("Could not refresh Canvas resources")
       }
-      const document = parseCanvasDocument(result, input.canvasId)
-      if (!document) throw new Error("Canvas resource refresh response is invalid")
-      return document
+      return Object.freeze({ patches: requireCanvasResourceRuntimePatches(result, request.targets) })
     },
     async relink(input) {
       let source: Parameters<CanvasResourceClient["relink"]>[0]["source"]
@@ -351,8 +357,10 @@ function requireCanvasResourceAddResult(
     throw new Error("Canvas resource response is invalid")
   }
   if (
-    Object.keys(value).length !== 4 ||
-    !["createdNodeIds", "delivery", "operationReceipt", "warnings"].every((key) => key in value)
+    Object.keys(value).length !== 5 ||
+    !["createdNodeIds", "delivery", "operationReceipt", "preparedResources", "warnings"].every(
+      (key) => key in value,
+    )
   ) {
     throw new Error("Canvas resource response has an invalid field set")
   }
@@ -364,12 +372,185 @@ function requireCanvasResourceAddResult(
   }
   assertOperationReceiptDto(value.operationReceipt)
   const delivery = requireCanvasResourceProjectionDelivery(value.delivery, expected)
+  const preparedResources = requireCanvasPreparedResourceRuntimePatches(value.preparedResources, value.createdNodeIds)
   return {
     createdNodeIds: value.createdNodeIds,
     delivery,
     operationReceipt: structuredClone(value.operationReceipt),
+    preparedResources,
     warnings: value.warnings,
   }
+}
+
+function requireCanvasResourceHydrateStaleInput(value: unknown) {
+  const record = exactDataRecord(
+    value,
+    ["canvasId", "sessionId", "targets"],
+    "Canvas resource refresh request",
+  )
+  const canvasId = requireBoundedIdentifier(record.canvasId, "Canvas resource refresh canvas id")
+  const sessionId = requireId128Dto(record.sessionId, "Canvas resource refresh session id")
+  if (!isDenseDataArray(record.targets) || record.targets.length < 1 || record.targets.length > 4_096) {
+    throw new Error("Canvas resource refresh targets are invalid")
+  }
+  const nodeIds = new Set<string>()
+  const targets = record.targets.map((value): CanvasResourceHydrationTarget => {
+    const target = exactDataRecord(value, ["entity", "nodeId"], "Canvas resource refresh target")
+    const nodeId = requireBoundedIdentifier(target.nodeId, "Canvas resource refresh node id")
+    assertEntityRefDto(target.entity, "node")
+    if (target.entity.id !== nodeId || nodeIds.has(nodeId)) {
+      throw new Error("Canvas resource refresh target is invalid")
+    }
+    nodeIds.add(nodeId)
+    const entity = target.entity as CanvasResourceHydrationTarget["entity"]
+    return Object.freeze({ entity: Object.freeze(structuredClone(entity)), nodeId })
+  })
+  return Object.freeze({ canvasId, sessionId, targets: Object.freeze(targets) })
+}
+
+function requireCanvasResourceRuntimePatches(
+  value: unknown,
+  targets: readonly CanvasResourceHydrationTarget[],
+): readonly CanvasResourceRuntimePatch[] {
+  const record = exactDataRecord(value, ["patches"], "Canvas resource refresh response")
+  const expectedNodeIds = new Set(targets.map((target) => target.nodeId))
+  const patches = requireRuntimePatches(record.patches, expectedNodeIds, true, "Canvas resource refresh")
+  return Object.freeze(patches)
+}
+
+function requireCanvasPreparedResourceRuntimePatches(
+  value: unknown,
+  createdNodeIds: readonly string[],
+): readonly CanvasResourceRuntimePatch[] {
+  return Object.freeze(
+    requireRuntimePatches(value, new Set(createdNodeIds), false, "Canvas prepared resource runtime"),
+  )
+}
+
+function requireRuntimePatches(
+  value: unknown,
+  allowedNodeIds: ReadonlySet<string>,
+  requireComplete: boolean,
+  label: string,
+): CanvasResourceRuntimePatch[] {
+  if (!isDenseDataArray(value) || value.length > 4_096) throw new Error(`${label} patches are invalid`)
+  const seen = new Set<string>()
+  const patches = value.map((value): CanvasResourceRuntimePatch => {
+    const patch = exactDataRecord(value, ["nodeId", "state"], `${label} patch`)
+    const nodeId = requireBoundedIdentifier(patch.nodeId, `${label} node id`)
+    if (!allowedNodeIds.has(nodeId) || seen.has(nodeId)) throw new Error(`${label} patch target is invalid`)
+    seen.add(nodeId)
+    return Object.freeze({ nodeId, state: requireCanvasResourceRuntimeState(patch.state, label) })
+  })
+  if (requireComplete && seen.size !== allowedNodeIds.size) throw new Error(`${label} patches are incomplete`)
+  return patches
+}
+
+const canvasResourceRuntimeStatuses = new Set([
+  "stale",
+  "ready",
+  "missing",
+  "corrupt",
+  "unsupported",
+  "conflict",
+])
+const canvasResourceRuntimeKeys = new Set([
+  "canSaveEditableCopy",
+  "contentRevision",
+  "editableText",
+  "error",
+  "mediaType",
+  "name",
+  "posterUrl",
+  "status",
+  "text",
+  "url",
+])
+
+function requireCanvasResourceRuntimeState(value: unknown, label: string): CanvasResourceRuntimeState {
+  const record = requirePlainDataRecord(value, `${label} state`)
+  const keys = Object.keys(record)
+  if (
+    !Object.hasOwn(record, "status") ||
+    keys.some((key) => !canvasResourceRuntimeKeys.has(key)) ||
+    typeof record.status !== "string" ||
+    !canvasResourceRuntimeStatuses.has(record.status)
+  ) {
+    throw new Error(`${label} state is invalid`)
+  }
+  for (const key of ["canSaveEditableCopy", "editableText"] as const) {
+    if (record[key] !== undefined && typeof record[key] !== "boolean") throw new Error(`${label} state is invalid`)
+  }
+  for (const key of ["contentRevision", "error", "mediaType", "name", "posterUrl", "text", "url"] as const) {
+    if (record[key] !== undefined && typeof record[key] !== "string") throw new Error(`${label} state is invalid`)
+  }
+  if (record.contentRevision !== undefined && !isSha256(record.contentRevision)) {
+    throw new Error(`${label} state is invalid`)
+  }
+  if (
+    exceedsUtf8Bytes(record.error, 4_096) ||
+    exceedsUtf8Bytes(record.mediaType, 255) ||
+    exceedsUtf8Bytes(record.name, 4_096) ||
+    exceedsUtf8Bytes(record.posterUrl, 16_384) ||
+    exceedsUtf8Bytes(record.text, 16 * 1024 * 1024) ||
+    exceedsUtf8Bytes(record.url, 16_384)
+  ) {
+    throw new Error(`${label} state is invalid`)
+  }
+  return Object.freeze(structuredClone(record)) as unknown as CanvasResourceRuntimeState
+}
+
+function exceedsUtf8Bytes(value: unknown, maximum: number): boolean {
+  return typeof value === "string" && new TextEncoder().encode(value).byteLength > maximum
+}
+
+function requireBoundedIdentifier(value: unknown, label: string): string {
+  if (
+    typeof value !== "string" ||
+    value.length < 1 ||
+    value.includes("\0") ||
+    new TextEncoder().encode(value).byteLength > 1_024
+  ) {
+    throw new Error(`${label} is invalid`)
+  }
+  return value
+}
+
+function exactDataRecord(value: unknown, keys: readonly string[], label: string): Record<string, unknown> {
+  const record = requirePlainDataRecord(value, label)
+  const actualKeys = Reflect.ownKeys(record)
+  const expectedKeys = [...keys].sort()
+  if (
+    actualKeys.length !== expectedKeys.length ||
+    actualKeys.map(String).sort().some((key, index) => key !== expectedKeys[index])
+  ) {
+    throw new Error(`${label} field set is invalid`)
+  }
+  return record
+}
+
+function requirePlainDataRecord(value: unknown, label: string): Record<string, unknown> {
+  if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error(`${label} is invalid`)
+  const prototype = Object.getPrototypeOf(value)
+  if (prototype !== Object.prototype && prototype !== null) throw new Error(`${label} is invalid`)
+  const record = value as Record<string, unknown>
+  const actualKeys = Reflect.ownKeys(record)
+  if (actualKeys.some((key) => typeof key !== "string")) throw new Error(`${label} is invalid`)
+  for (const key of actualKeys as string[]) {
+    const descriptor = Object.getOwnPropertyDescriptor(record, key)
+    if (!descriptor?.enumerable || !("value" in descriptor)) throw new Error(`${label} is invalid`)
+  }
+  return record
+}
+
+function isDenseDataArray(value: unknown): value is unknown[] {
+  if (!Array.isArray(value)) return false
+  for (let index = 0; index < value.length; index += 1) {
+    const descriptor = Object.getOwnPropertyDescriptor(value, String(index))
+    if (!descriptor?.enumerable || !("value" in descriptor)) return false
+  }
+  const allowedKeys = new Set(["length", ...value.map((_, index) => String(index))])
+  return Reflect.ownKeys(value).every((key) => typeof key === "string" && allowedKeys.has(key))
 }
 
 function requireCanvasResourceProjectionDelivery(

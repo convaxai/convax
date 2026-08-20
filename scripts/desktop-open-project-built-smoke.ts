@@ -257,7 +257,7 @@ const child = Bun.spawn(
     env: {
       ...process.env,
       CONVAX_ALLOW_MULTIPLE_INSTANCES: "1",
-      ...(latencyMode
+      ...(latencyMode && forwardLatencyDiagnostics
         ? {
             CONVAX_CANVAS_RESOURCE_LATENCY_RECORD_ALL: "1",
             CONVAX_COLLABORATION_LATENCY_RECORD_ALL: "1",

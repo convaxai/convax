@@ -1,11 +1,11 @@
 import type { CanvasResourceSource } from "@convax/canvas/application"
-import type { BoundedOperationReceipt } from "@convax/canvas/collaboration"
-import type { CanvasDocument, CanvasPoint } from "@convax/canvas/core"
+import type { BoundedOperationReceipt, CanvasEntityRef } from "@convax/canvas/collaboration"
+import type { CanvasPoint, CanvasResourceRuntimeState } from "@convax/canvas/core"
 import type { Digest, Id128 } from "@convax/collaboration"
 import type { CanvasSessionProjectionDto } from "./canvas-session-contracts"
 
 export const desktopProtocolChannel = "desktop:protocol-version"
-export const desktopProtocolVersion = "convax.desktop-ipc/43"
+export const desktopProtocolVersion = "convax.desktop-ipc/44"
 export const canvasResourceIpcChannel = "canvas:resource-add"
 export const canvasResourceHydrateStaleIpcChannel = "canvas:resource-hydrate-stale"
 export const canvasResourceLocalFileRegisterIpcChannel = "canvas:resource-local-file-register"
@@ -40,7 +40,28 @@ export interface CanvasResourceAddResult {
   createdNodeIds: readonly string[]
   operationReceipt: BoundedOperationReceipt
   delivery: CanvasResourceProjectionDelivery
+  preparedResources: readonly CanvasResourceRuntimePatch[]
   warnings: readonly string[]
+}
+
+export interface CanvasResourceRuntimePatch {
+  readonly nodeId: string
+  readonly state: CanvasResourceRuntimeState
+}
+
+export interface CanvasResourceHydrationTarget {
+  readonly entity: CanvasEntityRef & { readonly kind: "node" }
+  readonly nodeId: string
+}
+
+export interface CanvasResourceHydrateStaleInput {
+  readonly canvasId: string
+  readonly sessionId: Id128
+  readonly targets: readonly CanvasResourceHydrationTarget[]
+}
+
+export interface CanvasResourceHydrateStaleResult {
+  readonly patches: readonly CanvasResourceRuntimePatch[]
 }
 
 export interface CanvasResourceAddInput {
@@ -107,7 +128,7 @@ export interface CanvasConnectedImageReadResult {
 export interface CanvasResourceClient {
   add(input: CanvasResourceAddInput): Promise<CanvasResourceAddResult>
   createLocalFileToken(file: File): string
-  hydrateStale(input: { canvasId: string }): Promise<CanvasDocument>
+  hydrateStale(input: CanvasResourceHydrateStaleInput): Promise<CanvasResourceHydrateStaleResult>
   readConnectedImage(input: CanvasConnectedImageReadInput): Promise<CanvasConnectedImageReadResult>
   relink(input: CanvasResourceRelinkInput): Promise<CanvasResourceRelinkResult>
   saveEditableCopy(input: CanvasResourceSaveEditableCopyInput): Promise<CanvasResourceRelinkResult>

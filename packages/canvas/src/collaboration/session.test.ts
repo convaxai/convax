@@ -1,5 +1,9 @@
 import { describe, expect, test } from "bun:test"
-import { CanvasIntentApplicationService, CanvasReactFlowTransientState } from "./session"
+import {
+  CanvasIntentApplicationService,
+  CanvasReactFlowTransientState,
+  canvasSnapshotFromValidatedOwnerState,
+} from "./session"
 import type { CanvasCallerIntent, CanvasIntentCommitPort } from "./session"
 import { context, createAgent, id128, newCanvas, U0 } from "./test-fixtures.test"
 import { derivedNodeRef } from "./validation"
@@ -12,6 +16,10 @@ describe("Canvas v2 caller and React Flow boundaries", () => {
     expect("selectedCanvasDocumentOwnerArtifactDefinition" in publicSurface).toBeFalse()
     expect("armCanvasDuplicateCandidateCapture" in publicSurface).toBeFalse()
     expect("consumeCanvasDuplicateValidatedPost" in publicSurface).toBeFalse()
+    expect("installCanvasResourceAppendProjectionIndex" in publicSurface).toBeFalse()
+    expect("canvasProjectionBuildCounts" in publicSurface).toBeFalse()
+    expect("canvasTopLevelObstacles" in publicSurface).toBeFalse()
+    expect("canvasYDocValidationCounts" in publicSurface).toBeFalse()
   })
   test("UI, Agent and Plugin use the same typed-intent commit service", async () => {
     const calls: CanvasCallerIntent[] = []
@@ -29,6 +37,17 @@ describe("Canvas v2 caller and React Flow boundaries", () => {
     const intent = nodeCreate()
     for (const caller of ["ui", "agent", "plugin"] as const) await service.apply(caller, intent)
     expect(calls).toEqual([intent, intent, intent])
+  })
+
+  test("accepts only the sealed owner snapshot maps rather than forgeable mutable Maps", () => {
+    const snapshot = validateCanvasYDoc(newCanvas())
+    expect(canvasSnapshotFromValidatedOwnerState({ value: snapshot } as never)).toBe(snapshot)
+    expect(canvasSnapshotFromValidatedOwnerState({
+      value: {
+        ...snapshot,
+        nodes: new Map(snapshot.nodes),
+      },
+    } as never)).toBeNull()
   })
 
   test("pre-commit cancellation and commit failure do not fabricate a projection", async () => {

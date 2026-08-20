@@ -38,6 +38,7 @@ import {
   NodeProjectManager,
   NodeProjectCollaborationRecoveryService,
   NodeProjectCollaborationRuntimeCoordinator,
+  NodeProjectFilesystemEventCoverage,
   type NodeLocalCommitDurabilityDiagnostics,
   type NodeLocalCommitDurabilityMeasurement,
   ProjectAssetGc,
@@ -217,8 +218,6 @@ import {
 import { ProjectAssetGcScheduler } from "./project-asset-gc-scheduler"
 import { loadCurrentCollaborationProtocol } from "./current-protocol-loader"
 import {
-  createLocalFirstCurrentLocalReplicaAuthoritySource,
-  createLocalProjectOwnerCurrentLocalReplicaAuthoritySource,
   createOfflineCurrentLocalReplicaAuthoritySource,
   createProjectCollaborationMaterializerRegistry,
 } from "./collaboration-production-runtime"
@@ -234,6 +233,10 @@ import { ElectronReplicaSigningVault } from "./electron-replica-signing-vault"
 import { ElectronTeamIdentityVault } from "./electron-team-identity-vault"
 import { NodeDurableLocalProjectOwnerAuthority } from "./local-project-owner-authority"
 import { LocalProjectResetAuthority } from "./local-project-reset-authority"
+import {
+  createProjectRuntimeAuthorityIdentityPort,
+  ProjectRuntimeAuthorityCache,
+} from "./project-runtime-authority-cache"
 import type { CanvasCollaborationSessionOwner } from "./canvas-collaboration-session-owner"
 import {
   createLocalProjectOwnerIndexRegistrationPort,
@@ -791,7 +794,9 @@ function startApplication() {
     const createCollaborationId = () => parseId128(randomBytes(16).toString("base64url"))
     const openCodeConfigDirectory = join(userDataDirectory, "opencode")
     const projectCreationDirectory = desktopProjectWorkspaceDirectory(app.getPath("documents"))
+    const projectFilesystemEventCoverage = new NodeProjectFilesystemEventCoverage()
     const projectManager = new NodeProjectManager({
+      filesystemEventCoverage: projectFilesystemEventCoverage,
       registryFile: join(userDataDirectory, "projects.json"),
       trash: (targetPath: string) => shell.trashItem(targetPath),
     })
@@ -875,12 +880,27 @@ function startApplication() {
         }
       })
     const durabilityDiagnostics = createPackagedDurabilityDiagnostics()
+    const teamLocalCollaborationAuthority = createOfflineCurrentLocalReplicaAuthoritySource({
+      cache: collaborationAuthorityCache,
+      vault: collaborationReplicaVault,
+    })
+    const readTeamState = async (projectId: import("@convax/collaboration").ProjectId) => {
+      const state = await collaborationTeamStore.open(projectId)
+      return state === "missing" ? "missing" as const : state === "rejected" ? "rejected" as const : "active" as const
+    }
+    const projectRuntimeAuthorityCache = new ProjectRuntimeAuthorityCache({
+      protocolDigest: collaborationAuthority.protocolDigest,
+      team: teamLocalCollaborationAuthority,
+      teamState: readTeamState,
+      localOwnerChanges: localProjectOwnerAuthority,
+    })
     const collaborationProjects = new NodeProjectCollaborationRuntimeCoordinator({
       ...(durabilityDiagnostics === undefined ? {} : { durabilityDiagnostics }),
       materializer: collaborationMaterializers,
       projects: projectManager,
-      identity: {
-        async resolveLocalActorId({ projectId, projectRoot }) {
+      identity: createProjectRuntimeAuthorityIdentityPort({
+        cache: projectRuntimeAuthorityCache,
+        async resolve({ projectId, projectRoot }) {
           const manifest = await readProjectNativeStoreManifest(join(projectRoot, ".convax", "collaboration"), {
             protocolDigest: collaborationAuthority.protocolDigest,
             schemaDigest: PROJECT_INDEX_PROTOCOL_SCHEMA_ARTIFACT_DIGEST,
@@ -893,19 +913,28 @@ function startApplication() {
             projectId: manifest.projectIndexScope.projectId,
             projectEpoch: manifest.projectIndexScope.projectEpoch,
           })
+          let localActorId: import("@convax/collaboration").ActorId
+          let localOwner: Awaited<ReturnType<typeof localProjectOwnerAuthority.resolveCurrent>> | undefined
           if (binding === "pending") {
-            const localOwner = await localProjectOwnerAuthority.resolveCurrent({
+            localOwner = await localProjectOwnerAuthority.resolveCurrent({
               projectId: manifest.projectIndexScope.projectId,
               projectEpoch: manifest.projectIndexScope.projectEpoch,
             })
             if (localOwner === "missing") throw new Error("Local Project replica enrollment is pending")
             if (localOwner === "rejected") throw new Error("Local Project owner authority is rejected")
-            return localOwner.binding.actorId
+            localActorId = localOwner.binding.actorId
+          } else {
+            if (binding === "rejected") throw new Error("Local Project replica enrollment is rejected")
+            localActorId = binding.actorId
           }
-          if (binding === "rejected") throw new Error("Local Project replica enrollment is rejected")
-          return binding.actorId
+          return Object.freeze({
+            projectId: manifest.projectIndexScope.projectId,
+            projectEpoch: manifest.projectIndexScope.projectEpoch,
+            localActorId,
+            ...(localOwner && localOwner !== "missing" && localOwner !== "rejected" ? { localOwner } : {}),
+          })
         },
-      },
+      }),
       quiescence: {
         async quiesceProject({ projectId }) {
           await quiesceCollaborationProject(projectId)
@@ -920,10 +949,6 @@ function startApplication() {
       }),
       gate: collaborationProjects,
       projects: collaborationProjects,
-    })
-    const teamLocalCollaborationAuthority = createOfflineCurrentLocalReplicaAuthoritySource({
-      cache: collaborationAuthorityCache,
-      vault: collaborationReplicaVault,
     })
     const resolveLocalProjectOwner = async (identity: {
       readonly projectId: import("@convax/collaboration").ProjectId
@@ -945,18 +970,8 @@ function startApplication() {
         projectEpoch: identity.projectEpoch,
       })
     }
-    const localOwnerCollaborationAuthority = createLocalProjectOwnerCurrentLocalReplicaAuthoritySource({
-      protocolDigest: collaborationAuthority.protocolDigest,
-      resolveOwner: resolveLocalProjectOwner,
-    })
-    const localCollaborationAuthority = createLocalFirstCurrentLocalReplicaAuthoritySource({
-      team: teamLocalCollaborationAuthority,
-      localOwner: localOwnerCollaborationAuthority,
-      async teamState(projectId) {
-        const state = await collaborationTeamStore.open(projectId)
-        return state === "missing" ? "missing" : state === "rejected" ? "rejected" : "active"
-      },
-    })
+    const localCollaborationAuthority = (project: import("@convax/project/node").ProjectCollaborationRuntimeLease) =>
+      projectRuntimeAuthorityCache.authorityFor(project)
     const incomingCollaborationAuthority = createCurrentIncomingReplicaAuthoritySource({
       localOwner: createLocalProjectOwnerIncomingReplicaAuthoritySource({
         protocolDigest: collaborationAuthority.protocolDigest,
@@ -1310,7 +1325,9 @@ function startApplication() {
       },
     })
     const projectAssets = new ProjectManagedAssetStore(projectManager)
-    const projectFilePublisher = new ProjectFilePublisher(projectManager, projectAssets)
+    const projectFilePublisher = new ProjectFilePublisher(projectManager, projectAssets, {
+      filesystemEventCoverage: projectFilesystemEventCoverage,
+    })
     const projectAssetGcScheduler = new ProjectAssetGcScheduler({
       gc: new ProjectAssetGc({
         assets: projectAssets,
@@ -2725,6 +2742,7 @@ function startApplication() {
       ...ipcSecurity,
       prepareProjectCanvasAccess: (projectId) => projectAssetGcScheduler.prepareOpen(projectId),
       resolveActiveCanvas,
+      sessions: collaborationCanvasSessions,
     })
     const disposeCanvasExternalMediaDragIpc = registerCanvasExternalMediaDragIpc(canvasExternalMediaDrag, {
       isTrustedSender: ipcSecurity.isTrustedSender,
@@ -3012,6 +3030,7 @@ function startApplication() {
         await collaborationCanvasComposition?.dispose()
         await collaborationProjectIndexes?.dispose()
         await collaborationProjects.dispose()
+        projectRuntimeAuthorityCache.dispose()
         // Browser authorization may be between exact-origin Cookie capture,
         // checkpoint fsync, and sidecar persistence. Drain that handoff before
         // disposing the shared sidecar runtime or starting an installer.
@@ -3128,6 +3147,7 @@ function startApplication() {
             console.warn("Could not dispose Project collaboration runtime", error)
           })
         },
+        () => projectRuntimeAuthorityCache.dispose(),
       ],
       (error, index) => console.warn(`Convax will-quit cleanup ${index + 1} failed`, error),
     )

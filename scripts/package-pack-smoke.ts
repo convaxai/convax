@@ -272,7 +272,33 @@ try {
   const consumerSource = sortedTypeEntrypoints
     .map((specifier, index) => `import * as package${index} from ${JSON.stringify(specifier)}`)
     .join("\n")
-  await Bun.write(join(consumerDirectory, "index.ts"), `${consumerSource}\nvoid [${sortedTypeEntrypoints.map((_, index) => `package${index}`).join(", ")}]\n`)
+  const portableProjectWatcherAssertion = `
+import type {
+  NodeProjectFilesystemWatchFilename,
+  NodeProjectFilesystemWatchPort,
+} from "@convax/project/node"
+
+const portableProjectWatchFilename: NodeProjectFilesystemWatchFilename = {
+  toString(encoding: "utf8") {
+    return encoding === "utf8" ? "Notes/example.md" : ""
+  },
+}
+const portableProjectWatchPort: NodeProjectFilesystemWatchPort = (_rootPath, _options, listener) => {
+  listener("change", portableProjectWatchFilename)
+  const watcher = {
+    close() {},
+    once(_event: "error", _listener: (error: unknown) => void) {
+      return watcher
+    },
+  }
+  return watcher
+}
+void portableProjectWatchPort
+`
+  await Bun.write(
+    join(consumerDirectory, "index.ts"),
+    `${consumerSource}\nvoid [${sortedTypeEntrypoints.map((_, index) => `package${index}`).join(", ")}]\n${portableProjectWatcherAssertion}`,
+  )
   await Bun.write(
     join(consumerDirectory, "tsconfig.json"),
     JSON.stringify(

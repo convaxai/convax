@@ -15,7 +15,11 @@ import { projectResourceReferenceKey } from "@convax/project/canvas"
 import { ProjectTextFileConflictError } from "@convax/project-files"
 
 import { canvasTextResourceConflictKind } from "../canvas-resource-private-contract"
-import { canvasResourceIpcChannel, canvasTextResourceIpcChannel } from "../desktop-protocol"
+import {
+  canvasResourceHydrateStaleIpcChannel,
+  canvasResourceIpcChannel,
+  canvasTextResourceIpcChannel,
+} from "../desktop-protocol"
 import { canvasDocumentIpcChannels } from "../canvas-document-contracts"
 import { configureElectronMock, resetElectronMock } from "./electron-test-mock"
 
@@ -175,11 +179,172 @@ describe("Canvas document IPC", () => {
     ).rejects.toThrow("untrusted renderer")
     expect(execute).not.toHaveBeenCalled()
   })
+
+  test("hydrates only exact live session entities without querying the whole Canvas application", async () => {
+    const suffix = encodeBase64url(new Uint8Array(32).fill(7))
+    const nodeId = `n_${suffix}`
+    const entity = { id: nodeId, incarnation: `ni_${suffix}`, kind: "node" as const }
+    const staleNode = createTextNode({
+      id: nodeId,
+      metadata: { resource: "exact" },
+      position: { x: 0, y: 0 },
+      resourceState: { status: "stale" },
+    })
+    const projection = Object.freeze({
+      format: "convax.canvas-session-projection" as const,
+      ref: { canvasId: "canvas-main", scopeId: "project-one" },
+      sessionId,
+      document: createCanvasDocument({ id: "canvas-main", nodes: [staleNode] }),
+      edgeEntities: [],
+      nodeEntities: [{ entity, nodeId }],
+      canUndo: true,
+      canRedo: false,
+    })
+    const query = mock(async (): Promise<CanvasApplicationQueryResult> => ({ nodes: [], projection: document }))
+    const queryRendererResourceTargets = mock(async () => projection.document)
+    const hydrateStale = mock(async ({ document: selected }: { document: typeof projection.document }) => ({
+      ...selected,
+      nodes: selected.nodes.map((node) => ({
+        ...node,
+        data: { ...node.data, resourceState: { status: "ready" as const, text: "fresh" } },
+      })),
+    }))
+    registerCanvasDocumentIpc(
+      { execute: mock(), query },
+      { hydrate: async ({ document: input }) => input, hydrateStale },
+      {
+        isTrustedSender: () => true,
+        resolveActiveCanvas: async () => ({ canvasId: "canvas-main", projectId: "project-one" }),
+        sessions: { queryRendererResourceTargets },
+      },
+    )
+
+    await expect(
+      handlers.get(canvasResourceHydrateStaleIpcChannel)!(event, {
+        canvasId: "canvas-main",
+        sessionId,
+        targets: [{ entity, nodeId }],
+      }),
+    ).resolves.toEqual({ patches: [{ nodeId, state: { status: "ready", text: "fresh" } }] })
+    expect(query).not.toHaveBeenCalled()
+    expect(queryRendererResourceTargets).toHaveBeenCalledTimes(2)
+    expect(hydrateStale).toHaveBeenCalledWith({
+      document: { ...projection.document, edges: [], nodes: [staleNode] },
+      projectId: "project-one",
+    })
+  })
+
+  test("rejects non-data and widened hydration DTOs before observing a session", async () => {
+    const suffix = encodeBase64url(new Uint8Array(32).fill(6))
+    const nodeId = `n_${suffix}`
+    const entity = { id: nodeId, incarnation: `ni_${suffix}`, kind: "node" as const }
+    const queryRendererResourceTargets = mock(async () => document)
+    const hydrateStale = mock(async ({ document: input }: { document: typeof document }) => input)
+    registerCanvasDocumentIpc(
+      { execute: mock(), query: mock() },
+      { hydrate: async ({ document: input }) => input, hydrateStale },
+      {
+        isTrustedSender: () => true,
+        resolveActiveCanvas: async () => ({ canvasId: "canvas-main", projectId: "project-one" }),
+        sessions: { queryRendererResourceTargets },
+      },
+    )
+
+    await expect(
+      handlers.get(canvasResourceHydrateStaleIpcChannel)!(event, {
+        canvasId: "canvas-main",
+        sessionId,
+        targets: [{ entity, extra: true, nodeId }],
+      }),
+    ).rejects.toThrow("field set")
+
+    let getterObserved = false
+    const accessorRequest = Object.create(null) as Record<string, unknown>
+    Object.defineProperties(accessorRequest, {
+      canvasId: {
+        enumerable: true,
+        get() {
+          getterObserved = true
+          return "canvas-main"
+        },
+      },
+      sessionId: { enumerable: true, value: sessionId },
+      targets: { enumerable: true, value: [{ entity, nodeId }] },
+    })
+    await expect(handlers.get(canvasResourceHydrateStaleIpcChannel)!(event, accessorRequest)).rejects.toThrow(
+      "request is invalid",
+    )
+    expect(getterObserved).toBeFalse()
+    expect(queryRendererResourceTargets).not.toHaveBeenCalled()
+    expect(hydrateStale).not.toHaveBeenCalled()
+  })
+
+  test("rejects a widened or changed hydration target before publishing a stale patch", async () => {
+    const suffix = encodeBase64url(new Uint8Array(32).fill(8))
+    const changedSuffix = encodeBase64url(new Uint8Array(32).fill(9))
+    const nodeId = `n_${suffix}`
+    const entity = { id: nodeId, incarnation: `ni_${suffix}`, kind: "node" as const }
+    const staleNode = createTextNode({
+      id: nodeId,
+      metadata: { resource: "before" },
+      position: { x: 0, y: 0 },
+      resourceState: { status: "stale" },
+    })
+    const baseProjection = {
+      format: "convax.canvas-session-projection" as const,
+      ref: { canvasId: "canvas-main", scopeId: "project-one" },
+      sessionId,
+      document: createCanvasDocument({ id: "canvas-main", nodes: [staleNode] }),
+      edgeEntities: [],
+      nodeEntities: [{ entity, nodeId }],
+      canUndo: true,
+      canRedo: false,
+    }
+    let queryCount = 0
+    const queryRendererResourceTargets = mock(async () => {
+      queryCount += 1
+      return queryCount === 1
+        ? baseProjection.document
+        : {
+            ...baseProjection.document,
+            nodes: baseProjection.document.nodes.map((node) => ({
+              ...node,
+              data: { ...node.data, metadata: { resource: `changed-${changedSuffix}` } },
+            })),
+          }
+    })
+    const hydrateStale = mock(async ({ document: selected }: { document: typeof baseProjection.document }) => ({
+      ...selected,
+      nodes: selected.nodes.map((node) => ({
+        ...node,
+        data: { ...node.data, resourceState: { status: "ready" as const } },
+      })),
+    }))
+    registerCanvasDocumentIpc(
+      { execute: mock(), query: mock() },
+      { hydrate: async ({ document: input }) => input, hydrateStale },
+      {
+        isTrustedSender: () => true,
+        resolveActiveCanvas: async () => ({ canvasId: "canvas-main", projectId: "project-one" }),
+        sessions: { queryRendererResourceTargets },
+      },
+    )
+
+    await expect(
+      handlers.get(canvasResourceHydrateStaleIpcChannel)!(event, {
+        canvasId: "canvas-main",
+        sessionId,
+        targets: [{ entity, nodeId }],
+      }),
+    ).rejects.toThrow("stale or outside the live session")
+    expect(hydrateStale).toHaveBeenCalledTimes(1)
+  })
 })
 
 describe("Canvas resource IPC", () => {
   test("binds resource creation to the invoking Workbench scope and returns receipt plus projection", async () => {
-    const addResources = mock(async () => commandResult())
+    const preparedResources = [{ nodeId: "created", state: { status: "ready" as const, text: "hello" } }]
+    const addResources = mock(async () => ({ ...commandResult(), preparedResources }))
     const diagnostics: Array<{ byteLength: number; callCount: number; stage: string }> = []
     registerCanvasResourceIpc(
       { addPreparedResources: mock(), addResources },
@@ -211,6 +376,7 @@ describe("Canvas resource IPC", () => {
       createdNodeIds: ["created"],
       delivery: await resourceSessions.deliverApplicationCommit(),
       operationReceipt: receipt,
+      preparedResources,
       warnings: ["normalized"],
     })
     expect(addResources).toHaveBeenCalledWith({
@@ -230,7 +396,7 @@ describe("Canvas resource IPC", () => {
   })
 
   test("rejects an unknown resource anchor origin before invoking the typed Canvas application", async () => {
-    const addResources = mock(async () => commandResult())
+    const addResources = mock(async () => ({ ...commandResult(), preparedResources: [] }))
     registerCanvasResourceIpc(
       { addPreparedResources: mock(), addResources },
       { withAdmittedLocalFiles: mock() },
@@ -258,7 +424,7 @@ describe("Canvas resource IPC", () => {
   })
 
   test("retains strict relation validation before invoking the typed Canvas application", async () => {
-    const addResources = mock(async () => commandResult())
+    const addResources = mock(async () => ({ ...commandResult(), preparedResources: [] }))
     registerCanvasResourceIpc(
       { addPreparedResources: mock(), addResources },
       { withAdmittedLocalFiles: mock() },
@@ -286,7 +452,7 @@ describe("Canvas resource IPC", () => {
   })
 
   test("rejects a stale Project/Canvas scope before resource preparation", async () => {
-    const addResources = mock(async () => commandResult())
+    const addResources = mock(async () => ({ ...commandResult(), preparedResources: [] }))
     registerCanvasResourceIpc(
       { addPreparedResources: mock(), addResources },
       { withAdmittedLocalFiles: mock() },

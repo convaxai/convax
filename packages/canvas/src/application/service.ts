@@ -14,6 +14,11 @@ export interface CanvasApplicationCommandRequest extends CanvasDocumentRef {
 /** A read-only UI/application projection, never a persistence payload. */
 export interface CanvasApplicationCommandResult extends CanvasBusinessCommandResult {
   operationReceipt: BoundedOperationReceipt
+  /**
+   * Resource-create nodes in command ordinal order. Present only when Main
+   * verified that the durable receipt contains the exact same entity set.
+   */
+  createdResourceNodeIds?: readonly string[]
   /** Accepted frame marker for host/session reconciliation; never a command input. */
   acceptedFrameDigest?: Digest
 }

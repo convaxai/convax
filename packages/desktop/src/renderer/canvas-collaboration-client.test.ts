@@ -425,6 +425,7 @@ describe("Desktop Canvas renderer collaboration client", () => {
             createdNodeIds: [createdEntity.id],
             delivery: { status: "accepted", acceptedFrameDigest: frameDigest("d"), projection: next },
             operationReceipt: receipt,
+            preparedResources: [],
             warnings: [],
           })
         }

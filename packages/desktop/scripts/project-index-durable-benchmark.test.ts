@@ -76,7 +76,7 @@ describe("ProjectIndex durable benchmark", () => {
           expect(one.durability.barriers).toEqual([])
           expect(thirtyTwo.durability.barriers).toEqual([])
         } else {
-          expect(one.durability.physicalSyncCount).toBe(11)
+          expect(one.durability.physicalSyncCount).toBe(10)
           const expected = [
             ["object-frame", "file-sync"],
             ["object-frame", "directory-sync"],
@@ -85,7 +85,6 @@ describe("ProjectIndex durable benchmark", () => {
             ["outbox", "file-sync"],
             ["outbox", "directory-sync"],
             ["journal", "file-sync"],
-            ["journal", "directory-sync"],
             ["journal", "directory-sync"],
             ["head", "file-sync"],
             ["head", "directory-sync"],
@@ -99,8 +98,8 @@ describe("ProjectIndex durable benchmark", () => {
             journal: barriers.filter(({ stage }) => stage === "journal").length,
             head: barriers.filter(({ stage }) => stage === "head").length,
           })
-          expect(groupCounts(one.durability.barriers)).toEqual({ object: 4, outbox: 2, journal: 3, head: 2 })
-          expect(groupCounts(thirtyTwo.durability.barriers)).toEqual({ object: 4, outbox: 2, journal: 3, head: 2 })
+          expect(groupCounts(one.durability.barriers)).toEqual({ object: 4, outbox: 2, journal: 2, head: 2 })
+          expect(groupCounts(thirtyTwo.durability.barriers)).toEqual({ object: 4, outbox: 2, journal: 2, head: 2 })
         }
       }
     }

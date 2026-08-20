@@ -67,6 +67,12 @@ projection or downgrade malformed markers into a refresh.
 Pointer-originated resource adds may carry only the closed `center | top-left`
 anchor-origin marker. Preload validates and forwards it without calculating card
 geometry; Main and Canvas remain authoritative for final resource size and placement.
+`convax.desktop-ipc/44` resource-add results may carry only validated prepared-runtime
+patches whose ids belong to the returned created-node set. Stale hydration requests
+carry the originating session and a bounded unique exact-node incarnation set;
+responses must contain exactly the corresponding bounded runtime patches. Preload
+rejects unknown fields, malformed runtime state, duplicate/missing ids and
+whole-document-shaped payloads rather than synthesizing a fallback.
 
 ## Validation
 

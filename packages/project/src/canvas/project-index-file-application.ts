@@ -17,7 +17,9 @@ import {
   constructProjectEntryTombstoneIntent,
   constructProjectFileCreateIntent,
   constructProjectFileWriteIntent,
+  projectIndexCurrentBlobReferencesForFamiliesFromValidatedOwnerState,
   projectIndexCurrentBlobReferencesFromValidatedOwnerState,
+  projectIndexEntryAtPortablePathFromSnapshot,
   projectEntryLocationProjection,
   projectIndexIntentDependencies,
   projectIndexIntentDigest,
@@ -27,6 +29,7 @@ import {
   type ProjectBlobRef,
   type ProjectContentPolicy,
   type ProjectDirectoryId,
+  type ProjectEntryRecord,
   type ProjectEntryLocationClaim,
   type ProjectIndexIntent,
   type ProjectIndexSnapshot,
@@ -113,6 +116,10 @@ export interface ProjectIndexFileMaterializationProjectionPort {
   queryFileMaterializationPlan(input: {
     readonly projectId: ProjectId
   }): Promise<ProjectIndexFileMaterializationPlan>
+  queryFileMaterializationEntries?(input: {
+    readonly projectId: ProjectId
+    readonly paths: readonly string[]
+  }): Promise<ProjectIndexFileMaterializationPlan>
 }
 
 export class ProjectIndexFileApplication implements ProjectIndexFileApplicationPort, ProjectIndexFileMaterializationProjectionPort {
@@ -164,6 +171,61 @@ export class ProjectIndexFileApplication implements ProjectIndexFileApplicationP
         const depth = left.path.split("/").length - right.path.split("/").length
         return depth === 0 ? left.path.localeCompare(right.path, "en-US") : depth
       })
+      return Object.freeze({ projectId: snapshot.identity.projectId, entries: Object.freeze(entries) })
+    })
+  }
+
+  async queryFileMaterializationEntries(input: {
+    readonly projectId: ProjectId
+    readonly paths: readonly string[]
+  }): Promise<ProjectIndexFileMaterializationPlan> {
+    this.requireProject(input.projectId)
+    const paths = Object.freeze([...new Set(input.paths.map((item) => parsePortablePath(item).path))])
+    return this.options.session.query((state) => {
+      const snapshot = requireSnapshot(state)
+      const resolvePath = createPathResolver(snapshot)
+      const resolvedEntries: Array<{
+        readonly entry: ProjectEntryRecord
+        readonly path: string
+      }> = []
+      const primaryFileIds = new Set<ProjectFileId>()
+      for (const requestedPath of paths) {
+        const resolved = resolvePath(requestedPath)
+        if (resolved === null) continue
+        const entry = snapshot.entries.get(resolved.entryId)
+        if (!entry || entry.storageClass === "managed-blob") continue
+        if (entry.kind === "file") {
+          primaryFileIds.add(
+            entry.provenance === "content-conflict-copy"
+              ? entry.conflictSource!.primaryFileId
+              : entry.entryId as ProjectFileId,
+          )
+        }
+        resolvedEntries.push(Object.freeze({ entry, path: requestedPath }))
+      }
+      const references = new Map(
+        (primaryFileIds.size === 0
+          ? []
+          : projectIndexCurrentBlobReferencesForFamiliesFromValidatedOwnerState(
+              state,
+              Object.freeze([...primaryFileIds]),
+            )).map((candidate) => [candidate.entryFileId, candidate] as const),
+      )
+      const entries: ProjectIndexFileMaterializationEntry[] = []
+      for (const { entry, path: requestedPath } of resolvedEntries) {
+        const reference = entry.kind === "file"
+          ? references.get(entry.entryId as ProjectFileId) ?? null
+          : null
+        if (entry.kind === "file" && reference === null) {
+          throw new FileApplicationError("index-commit-failed")
+        }
+        entries.push(Object.freeze({
+          entryId: parseProjectEntryId(entry.entryId),
+          kind: entry.kind,
+          path: requestedPath,
+          reference,
+        }))
+      }
       return Object.freeze({ projectId: snapshot.identity.projectId, entries: Object.freeze(entries) })
     })
   }
@@ -416,26 +478,21 @@ function requireSnapshot(base: Parameters<ProjectIndexDocumentSessionPort["query
 function createPathResolver(snapshot: ProjectIndexSnapshot): (
   path: string,
 ) => { readonly entryId: ProjectEntryId; readonly kind: "file" | "directory" } | null {
-  const index = createReachableOrdinaryPathIndex(snapshot)
-  return (path) => {
-    if (path === "") return { entryId: snapshot.identity.rootDirectoryId, kind: "directory" }
-    const winner = index.entryIdByPath.get(path)
-    if (winner === undefined) return null
-    const entry = snapshot.entries.get(winner)!
-    // Conflict-copy activation has additional family semantics. Keep that rare
-    // case on the complete projection path; ordinary path lookup remains linear.
-    if (entry.provenance === "content-conflict-copy") {
-      const projection = projectEntryLocationProjection(snapshot, winner)
-      if (projection.state !== "live-linked" || projection.portablePath !== path) return null
-    }
-    return { entryId: parseProjectEntryId(entry.entryId), kind: entry.kind }
-  }
+  return (path) => projectIndexEntryAtPortablePathFromSnapshot(snapshot, path)
 }
 
-function createReachableOrdinaryPathIndex(snapshot: ProjectIndexSnapshot): Readonly<{
+type ReachableOrdinaryPathIndex = Readonly<{
   entryIdByPath: ReadonlyMap<string, ProjectEntryId>
   pathByEntryId: ReadonlyMap<string, string>
-}> {
+}>
+
+// Owner-validated snapshots and their map views are immutable. Cache only by
+// exact snapshot identity so a newly accepted state can never inherit stale paths.
+const reachableOrdinaryPathIndexes = new WeakMap<ProjectIndexSnapshot, ReachableOrdinaryPathIndex>()
+
+function createReachableOrdinaryPathIndex(snapshot: ProjectIndexSnapshot): ReachableOrdinaryPathIndex {
+  const cached = reachableOrdinaryPathIndexes.get(snapshot)
+  if (cached !== undefined) return cached
   const tombstoned = new Set([...snapshot.entryTombstones.values()].map((record) => record.entryId))
   const selectedClaims = new Map<ProjectEntryId, ProjectEntryLocationClaim>()
   for (const claim of snapshot.entryLocations.values()) {
@@ -488,7 +545,9 @@ function createReachableOrdinaryPathIndex(snapshot: ProjectIndexSnapshot): Reado
       }
     }
   }
-  return Object.freeze({ entryIdByPath, pathByEntryId })
+  const index = Object.freeze({ entryIdByPath, pathByEntryId })
+  reachableOrdinaryPathIndexes.set(snapshot, index)
+  return index
 }
 
 function parsePortablePath(input: string): { readonly path: string; readonly parentPath: string; readonly basename: string } {

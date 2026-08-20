@@ -490,28 +490,161 @@ export interface ProjectIndexSnapshot {
   readonly operations: ReadonlyMap<string, ProjectOperationReceipt>
 }
 
-class ProjectIndexReadonlyMapView<K, V> implements ReadonlyMap<K, V> {
-  readonly #map: Map<K, V>
+interface ProjectIndexTrieEdge<V> {
+  readonly unit: number
+  readonly node: ProjectIndexTrieNode<V>
+}
 
-  constructor(source: ReadonlyMap<K, V>) {
-    this.#map = source instanceof Map ? source : new Map(source)
+interface ProjectIndexTrieNode<V> {
+  readonly terminal: Readonly<{ value: V }> | null
+  readonly edges: readonly ProjectIndexTrieEdge<V>[]
+}
+
+interface ProjectIndexMapAdditionLog<K extends string, V> {
+  readonly previous: ProjectIndexMapAdditionLog<K, V> | null
+  readonly entries: readonly (readonly [K, V])[]
+}
+
+class ProjectIndexReadonlyMapView<K extends string, V> implements ReadonlyMap<K, V> {
+  readonly #base: ReadonlyMap<K, V>
+  readonly #overlay: ProjectIndexTrieNode<V> | null
+  readonly #additions: ProjectIndexMapAdditionLog<K, V> | null
+  readonly #overlaySize: number
+
+  constructor(
+    source: ReadonlyMap<K, V>,
+    overlay: ProjectIndexTrieNode<V> | null = null,
+    additions: ProjectIndexMapAdditionLog<K, V> | null = null,
+    overlaySize = 0,
+  ) {
+    this.#base = source instanceof Map ? source : new Map(source)
+    this.#overlay = overlay
+    this.#additions = additions
+    this.#overlaySize = overlaySize
     Object.freeze(this)
   }
 
-  get size(): number { return this.#map.size }
-  has(key: K): boolean { return this.#map.has(key) }
-  get(key: K): V | undefined { return this.#map.get(key) }
-  entries(): MapIterator<[K, V]> { return this.#map.entries() }
-  keys(): MapIterator<K> { return this.#map.keys() }
-  values(): MapIterator<V> { return this.#map.values() }
+  get size(): number { return this.#base.size + this.#overlaySize }
+  has(key: K): boolean { return projectIndexTrieGet(this.#overlay, key) !== null || this.#base.has(key) }
+  get(key: K): V | undefined { return projectIndexTrieGet(this.#overlay, key)?.value ?? this.#base.get(key) }
+  entries(): MapIterator<[K, V]> { return this.#iterateEntries() as MapIterator<[K, V]> }
+  keys(): MapIterator<K> { return this.#iterateKeys() as MapIterator<K> }
+  values(): MapIterator<V> { return this.#iterateValues() as MapIterator<V> }
   forEach(callbackfn: (value: V, key: K, map: ReadonlyMap<K, V>) => void, thisArg?: unknown): void {
-    this.#map.forEach((value, key) => callbackfn.call(thisArg, value, key, this))
+    for (const [key, value] of this.#iterateEntries()) callbackfn.call(thisArg, value, key, this)
   }
-  [Symbol.iterator](): MapIterator<[K, V]> { return this.#map[Symbol.iterator]() }
+  [Symbol.iterator](): MapIterator<[K, V]> { return this.entries() }
+
+  withInsertions(entries: readonly (readonly [K, V])[]): ProjectIndexReadonlyMapView<K, V> {
+    if (entries.length === 0) return this
+    let overlay = this.#overlay
+    const seen = new Set<K>()
+    const retained: Array<readonly [K, V]> = []
+    for (const [key, value] of entries) {
+      if (seen.has(key) || this.has(key)) throw new Error("ProjectIndex persistent map insertion is not append-only")
+      seen.add(key)
+      overlay = projectIndexTrieInsert(overlay, key, value, 0, false)
+      retained.push(Object.freeze([key, value] as const))
+    }
+    return new ProjectIndexReadonlyMapView(
+      this.#base,
+      overlay,
+      Object.freeze({ previous: this.#additions, entries: Object.freeze(retained) }),
+      this.#overlaySize + retained.length,
+    )
+  }
+
+  *#iterateEntries(): Generator<[K, V]> {
+    yield* this.#base.entries()
+    const logs: ProjectIndexMapAdditionLog<K, V>[] = []
+    for (let current = this.#additions; current !== null; current = current.previous) logs.push(current)
+    for (let index = logs.length - 1; index >= 0; index -= 1) {
+      for (const [key, value] of logs[index]!.entries) yield [key, value]
+    }
+  }
+
+  *#iterateKeys(): Generator<K> {
+    for (const [key] of this.#iterateEntries()) yield key
+  }
+
+  *#iterateValues(): Generator<V> {
+    for (const [, value] of this.#iterateEntries()) yield value
+  }
 }
 
-function readonlyProjectIndexMap<K, V>(source: ReadonlyMap<K, V>): ReadonlyMap<K, V> {
+class ProjectIndexPersistentLookup<K extends string, V> implements ProjectIndexLookup<K, V> {
+  readonly #base: ProjectIndexLookup<K, V>
+  readonly #overlay: ProjectIndexTrieNode<V> | null
+
+  constructor(base: ProjectIndexLookup<K, V>, overlay: ProjectIndexTrieNode<V> | null = null) {
+    this.#base = base instanceof ProjectIndexPersistentLookup ? base.#base : base
+    this.#overlay = base instanceof ProjectIndexPersistentLookup && overlay === null ? base.#overlay : overlay
+    Object.freeze(this)
+  }
+
+  get(key: K): V | undefined {
+    return projectIndexTrieGet(this.#overlay, key)?.value ?? this.#base.get(key)
+  }
+
+  withOverrides(entries: readonly (readonly [K, V])[]): ProjectIndexPersistentLookup<K, V> {
+    let overlay = this.#overlay
+    for (const [key, value] of entries) {
+      overlay = projectIndexTrieInsert(overlay, key, value, 0, true)
+    }
+    return new ProjectIndexPersistentLookup(this.#base, overlay)
+  }
+}
+
+function projectIndexTrieGet<V>(
+  root: ProjectIndexTrieNode<V> | null,
+  key: string,
+): Readonly<{ value: V }> | null {
+  let node = root
+  for (let offset = 0; offset < key.length; offset += 1) {
+    if (node === null) return null
+    const unit = key.charCodeAt(offset)
+    const edge = node.edges.find((candidate) => candidate.unit === unit)
+    if (edge === undefined) return null
+    node = edge.node
+  }
+  return node?.terminal ?? null
+}
+
+function projectIndexTrieInsert<V>(
+  node: ProjectIndexTrieNode<V> | null,
+  key: string,
+  value: V,
+  offset: number,
+  replaceExisting: boolean,
+): ProjectIndexTrieNode<V> {
+  const current = node ?? Object.freeze({ terminal: null, edges: Object.freeze([]) })
+  if (offset === key.length) {
+    if (current.terminal !== null && !replaceExisting) throw new Error("ProjectIndex persistent trie key already exists")
+    return Object.freeze({ terminal: Object.freeze({ value }), edges: current.edges })
+  }
+  const unit = key.charCodeAt(offset)
+  const edgeIndex = current.edges.findIndex((candidate) => candidate.unit === unit)
+  const child = edgeIndex < 0 ? null : current.edges[edgeIndex]!.node
+  const next = projectIndexTrieInsert(child, key, value, offset + 1, replaceExisting)
+  const edges = [...current.edges]
+  const edge = Object.freeze({ unit, node: next })
+  if (edgeIndex < 0) edges.push(edge)
+  else edges[edgeIndex] = edge
+  return Object.freeze({ terminal: current.terminal, edges: Object.freeze(edges) })
+}
+
+function readonlyProjectIndexMap<K extends string, V>(source: ReadonlyMap<K, V>): ReadonlyMap<K, V> {
   return source instanceof ProjectIndexReadonlyMapView ? source : new ProjectIndexReadonlyMapView(source)
+}
+
+function readonlyProjectIndexMapInsertions<K extends string, V>(
+  base: ReadonlyMap<K, V>,
+  entries: readonly (readonly [K, V])[],
+): ReadonlyMap<K, V> {
+  if (!(base instanceof ProjectIndexReadonlyMapView)) {
+    throw new Error("ProjectIndex incremental base map is not persistent")
+  }
+  return base.withInsertions(entries)
 }
 
 interface ProjectIndexValidatedViewCacheEntry {
@@ -906,8 +1039,18 @@ export function validateProjectIndexYDoc(document: Y.Doc, scope?: ProjectIndexSc
   if ([...entryLocations.values()].some((claim) => claim.entryId === identity.rootDirectoryId) || [...entryTombstones.values()].some((fact) => fact.entryId === identity.rootDirectoryId)) {
     fail("invalid-root-entry", "Project root cannot have location or tombstone facts")
   }
-  validateRelations({ identity, entries, entryLocations, entryTombstones, contentFamilies, contentConflictCopies, pathReservations, canvasRoutes, operations })
-  return Object.freeze({
+  const resourceFamilyIndex = validateRelations({
+    identity,
+    entries,
+    entryLocations,
+    entryTombstones,
+    contentFamilies,
+    contentConflictCopies,
+    pathReservations,
+    canvasRoutes,
+    operations,
+  })
+  const snapshot: ProjectIndexSnapshot = Object.freeze({
     [PROJECT_INDEX_VALIDATED_SNAPSHOT_BRAND]: true,
     identity,
     entries: readonlyProjectIndexMap(entries),
@@ -919,6 +1062,8 @@ export function validateProjectIndexYDoc(document: Y.Doc, scope?: ProjectIndexSc
     canvasRoutes: readonlyProjectIndexMap(canvasRoutes),
     operations: readonlyProjectIndexMap(operations),
   })
+  currentResourceFamilyIndexes.set(snapshot, resourceFamilyIndex)
+  return snapshot
 }
 
 export function extractProjectCanonicalState(document: Y.Doc): ProjectCanonicalState {
@@ -1122,9 +1267,173 @@ export function projectIndexCurrentBlobReferencesFromValidatedOwnerState(
   return projectIndexCurrentBlobReferencesFromSnapshot(snapshot)
 }
 
+/**
+ * Projects current references only for exact resource families. The immutable
+ * family index is prepared with owner validation, so this path neither builds
+ * nor sorts the complete current-resource projection.
+ */
+export function projectIndexCurrentBlobReferencesForFamiliesFromValidatedOwnerState(
+  state: OwnerValidatedState<"project-index">,
+  primaryFileIds: readonly ProjectFileId[],
+): readonly ProjectIndexResourceReference[] {
+  const snapshot = projectIndexSnapshotFromValidatedOwnerState(state)
+  if (snapshot === null) fail("invalid-owner-state", "ProjectIndex owner returned an invalid validated state")
+  const index = currentResourceFamilyIndex(snapshot)
+  const selected = new Set<ProjectFileId>()
+  const references: ProjectIndexResourceReference[] = []
+  for (const value of primaryFileIds) {
+    const primaryFileId = parseProjectFileId(value)
+    if (selected.has(primaryFileId)) continue
+    selected.add(primaryFileId)
+    const versions = index.versionsByFamily.get(primaryFileId) ?? []
+    if (versions.length === 0) continue
+    const entry = snapshot.entries.get(primaryFileId)
+    let current: ProjectContentVersionRecord | null = null
+    if (entry?.kind === "file" && !index.tombstonedEntryIds.has(primaryFileId)) {
+      const superseded = new Set(versions.flatMap((version) => [...version.supersedesVersionIds]))
+      const live = versions.filter((version) => !superseded.has(version.versionId))
+      if (entry.contentPolicy === "overwritable-binary") current = maxBinary(versions)
+      else if (entry.contentPolicy === "immutable") current = versions[0] ?? null
+      else current = maxStamp(live)
+    }
+    if (current !== null) references.push(resourceReference(snapshot.identity, current, primaryFileId))
+    const conflicts = index.conflictsByFamily.get(primaryFileId) ?? []
+    for (const conflictFileId of activeConflictCopies(snapshot, versions, conflicts)) {
+      const conflictEntry = snapshot.entries.get(conflictFileId)
+      const sourceVersionId = conflictEntry?.conflictSource?.sourceVersionId
+      const source = sourceVersionId === undefined
+        ? undefined
+        : snapshot.contentFamilies.get(`v:${primaryFileId}:${sourceVersionId}`)
+      if (!conflictEntry || !source) fail("invalid-conflict-copy", "Active conflict copy lacks its source version")
+      references.push(resourceReference(snapshot.identity, source, conflictFileId))
+    }
+  }
+  return Object.freeze(references)
+}
+
+/** Resolves one canonical portable path through the validated head's exact slot index. */
+export function projectIndexEntryAtPortablePathFromValidatedOwnerState(
+  state: OwnerValidatedState<"project-index">,
+  portablePath: string,
+): Readonly<{ entryId: ProjectEntryId; kind: "file" | "directory" }> | null {
+  const snapshot = projectIndexSnapshotFromValidatedOwnerState(state)
+  if (snapshot === null) fail("invalid-owner-state", "ProjectIndex owner returned an invalid validated state")
+  return projectIndexEntryAtPortablePathFromSnapshot(snapshot, portablePath)
+}
+
+export function projectIndexEntryAtPortablePathFromSnapshot(
+  snapshot: ProjectIndexSnapshot,
+  portablePath: string,
+): Readonly<{ entryId: ProjectEntryId; kind: "file" | "directory" }> | null {
+  if (portablePath === "") {
+    return Object.freeze({ entryId: snapshot.identity.rootDirectoryId, kind: "directory" as const })
+  }
+  const segments = portablePath.split("/")
+  if (segments.some((segment) => segment === "" || segment === "." || segment === "..")) {
+    fail("invalid-location", "Exact Project path is not canonical")
+  }
+  const index = currentResourceFamilyIndex(snapshot)
+  let parentDirectoryId = snapshot.identity.rootDirectoryId
+  for (let offset = 0; offset < segments.length; offset += 1) {
+    const entryId = index.pathWinnerBySlot.get(projectPathClaimSlot(parentDirectoryId, segments[offset]!))
+    if (entryId === undefined) return null
+    const entry = snapshot.entries.get(entryId)
+    if (!entry || index.tombstonedEntryIds.has(entryId)) return null
+    if (offset === segments.length - 1) {
+      return Object.freeze({ entryId: parseProjectEntryId(entryId), kind: entry.kind })
+    }
+    if (entry.kind !== "directory") return null
+    parentDirectoryId = entry.entryId as ProjectDirectoryId
+  }
+  return null
+}
+
+/**
+ * Resolves native materialization only from the exact validated head's indexed
+ * location claims. It deliberately omits counterfactual projection evidence.
+ */
+export function projectIndexMaterializedPathForCurrentResourceFromValidatedOwnerState(
+  state: OwnerValidatedState<"project-index">,
+  referenceInput: ProjectIndexResourceReference,
+): string | null {
+  const snapshot = projectIndexSnapshotFromValidatedOwnerState(state)
+  if (snapshot === null) fail("invalid-owner-state", "ProjectIndex owner returned an invalid validated state")
+  const reference = parseProjectIndexResourceReference(referenceInput)
+  if (
+    reference.projectId !== snapshot.identity.projectId ||
+    reference.projectEpoch !== snapshot.identity.projectEpoch
+  ) {
+    fail("invalid-resource-reference", "Project resource reference crossed its validated owner")
+  }
+  const entry = snapshot.entries.get(reference.entryFileId)
+  if (!entry || entry.kind !== "file" || entry.storageClass === null) {
+    fail("invalid-resource-reference", "Current Project resource has no file owner")
+  }
+  if (entry.storageClass === "managed-blob") return null
+  const index = currentResourceFamilyIndex(snapshot)
+  if (index.tombstonedEntryIds.has(entry.entryId)) return null
+  const selected = index.selectedLocationByEntryId.get(entry.entryId)
+  if (entry.provenance === "content-conflict-copy") {
+    if (!index.activeConflictEntryIds.has(entry.entryId as ProjectFileId)) return null
+    const reservation = snapshot.pathReservations.get(`x:${entry.conflictSource!.reservationId}`)
+    if (!reservation) fail("invalid-location", "Active conflict resource lacks its reservation")
+    if (selected === undefined || selected.state === "declared-missing") return reservation.canonicalPath
+  }
+  if (selected === undefined) fail("invalid-location", "Live Project file lacks a selected location")
+  if (selected.state === "declared-missing") return null
+  return currentIndexedLinkedPath(snapshot, entry, selected, index)
+}
+
+function currentIndexedLinkedPath(
+  snapshot: ProjectIndexSnapshot,
+  entry: ProjectEntryRecord,
+  selected: ProjectEntryLocationClaim,
+  index: ProjectIndexCurrentResourceFamilyIndex,
+): string {
+  const chain: Array<Readonly<{ entry: ProjectEntryRecord; claim: ProjectEntryLocationClaim }>> = []
+  const seen = new Set<ProjectEntryId>([entry.entryId])
+  let currentEntry = entry
+  let currentClaim = selected
+  while (true) {
+    chain.push(Object.freeze({ entry: currentEntry, claim: currentClaim }))
+    const parentId = currentClaim.parentDirectoryId
+    if (parentId === snapshot.identity.rootDirectoryId) break
+    const parent = snapshot.entries.get(parentId)
+    if (!parent || parent.kind !== "directory" || index.tombstonedEntryIds.has(parentId)) {
+      return `.convax-conflicts/orphans/${entry.entryId}/content`
+    }
+    if (seen.has(parent.entryId)) {
+      return `.convax-conflicts/directory-cycles/${entry.entryId}/content`
+    }
+    seen.add(parent.entryId)
+    const parentClaim = index.selectedLocationByEntryId.get(parent.entryId)
+    if (!parentClaim || parentClaim.state !== "linked") {
+      return `.convax-conflicts/orphans/${entry.entryId}/content`
+    }
+    currentEntry = parent
+    currentClaim = parentClaim
+  }
+  const rootToEntry = [...chain].reverse()
+  const pathSegments = rootToEntry.map((item) => item.claim.basename)
+  for (let offset = 0; offset < rootToEntry.length; offset += 1) {
+    const segment = rootToEntry[offset]!
+    const winner = index.pathWinnerBySlot.get(
+      projectPathClaimSlot(segment.claim.parentDirectoryId, segment.claim.basename),
+    )
+    if (winner !== segment.entry.entryId) {
+      const suffix = pathSegments.slice(offset + 1)
+      const conflictRoot = `.convax-conflicts/path-claims/${segment.entry.entryId}/content`
+      return suffix.length === 0 ? conflictRoot : `${conflictRoot}/${suffix.join("/")}`
+    }
+  }
+  return pathSegments.join("/")
+}
+
 function projectIndexCurrentBlobReferencesFromSnapshot(
   snapshot: ProjectIndexSnapshot,
 ): readonly ProjectIndexResourceReference[] {
+  const cached = currentBlobReferencesBySnapshot.get(snapshot)
+  if (cached !== undefined) return cached
   const projection = projectProjectIndexSnapshot(snapshot)
   const references: ProjectIndexResourceReference[] = []
   for (const family of projection.contentFamilies) {
@@ -1138,10 +1447,139 @@ function projectIndexCurrentBlobReferencesFromSnapshot(
       references.push(resourceReference(snapshot.identity, version, conflictFileId))
     }
   }
-  return Object.freeze(references.sort((left, right) => {
+  const result = Object.freeze(references.sort((left, right) => {
     const entry = compareUtf8(left.entryFileId, right.entryFileId)
     return entry === 0 ? compareUtf8(left.versionId, right.versionId) : entry
   }))
+  currentBlobReferencesBySnapshot.set(snapshot, result)
+  return result
+}
+
+// Owner snapshots are immutable and identity-bound. Current-resource
+// projection is shared by materialization and Canvas proof validation, so cache
+// it once per exact accepted head instead of rebuilding the whole Project view.
+const currentBlobReferencesBySnapshot = new WeakMap<
+  ProjectIndexSnapshot,
+  readonly ProjectIndexResourceReference[]
+>()
+
+interface ProjectIndexCurrentResourceFamilyIndex {
+  readonly versionsByFamily: ProjectIndexLookup<ProjectFileId, readonly ProjectContentVersionRecord[]>
+  readonly conflictsByFamily: ProjectIndexLookup<ProjectFileId, readonly ProjectContentConflictCopyRecord[]>
+  readonly tombstonedEntryIds: ProjectIndexMembership<string>
+  readonly selectedLocationByEntryId: ProjectIndexLookup<ProjectEntryId, ProjectEntryLocationClaim>
+  readonly pathWinnerBySlot: ProjectIndexLookup<string, ProjectEntryId>
+  readonly activeConflictEntryIds: ProjectIndexMembership<ProjectFileId>
+}
+
+interface ProjectIndexLookup<K, V> {
+  get(key: K): V | undefined
+}
+
+interface ProjectIndexMembership<K> {
+  has(key: K): boolean
+}
+
+const currentResourceFamilyIndexes = new WeakMap<ProjectIndexSnapshot, ProjectIndexCurrentResourceFamilyIndex>()
+
+function currentResourceFamilyIndex(snapshot: ProjectIndexSnapshot): ProjectIndexCurrentResourceFamilyIndex {
+  const existing = currentResourceFamilyIndexes.get(snapshot)
+  if (existing !== undefined) return existing
+  const versionsByFamily = new Map<ProjectFileId, ProjectContentVersionRecord[]>()
+  for (const version of snapshot.contentFamilies.values()) {
+    const family = versionsByFamily.get(version.primaryFileId) ?? []
+    family.push(version)
+    versionsByFamily.set(version.primaryFileId, family)
+  }
+  const conflictsByFamily = new Map<ProjectFileId, ProjectContentConflictCopyRecord[]>()
+  for (const conflict of snapshot.contentConflictCopies.values()) {
+    const family = conflictsByFamily.get(conflict.primaryFileId) ?? []
+    family.push(conflict)
+    conflictsByFamily.set(conflict.primaryFileId, family)
+  }
+  const tombstonedEntryIds = new Set([...snapshot.entryTombstones.values()].map((fact) => fact.entryId))
+  const selectedLocationByEntryId = currentSelectedLocationClaims(snapshot)
+  const activeConflictEntryIds = currentActiveConflictEntryIds(snapshot, versionsByFamily, conflictsByFamily)
+  const value = Object.freeze({
+    versionsByFamily: new ProjectIndexPersistentLookup(versionsByFamily),
+    conflictsByFamily: new ProjectIndexPersistentLookup(conflictsByFamily),
+    tombstonedEntryIds,
+    selectedLocationByEntryId: new ProjectIndexPersistentLookup(selectedLocationByEntryId),
+    pathWinnerBySlot: new ProjectIndexPersistentLookup(currentPathClaimWinners(
+      snapshot,
+      selectedLocationByEntryId,
+      tombstonedEntryIds,
+      activeConflictEntryIds,
+    )),
+    activeConflictEntryIds,
+  })
+  currentResourceFamilyIndexes.set(snapshot, value)
+  return value
+}
+
+function currentSelectedLocationClaims(
+  snapshot: ProjectIndexSnapshot,
+): ReadonlyMap<ProjectEntryId, ProjectEntryLocationClaim> {
+  const selected = new Map<ProjectEntryId, ProjectEntryLocationClaim>()
+  for (const claim of snapshot.entryLocations.values()) {
+    const current = selected.get(claim.entryId)
+    if (current === undefined || comparePortableStamps(current.stamp, claim.stamp) <= 0) {
+      selected.set(claim.entryId, claim)
+    }
+  }
+  return selected
+}
+
+function currentActiveConflictEntryIds(
+  snapshot: ProjectIndexSnapshot,
+  versionsByFamily: ReadonlyMap<ProjectFileId, readonly ProjectContentVersionRecord[]>,
+  conflictsByFamily: ReadonlyMap<ProjectFileId, readonly ProjectContentConflictCopyRecord[]>,
+): ReadonlySet<ProjectFileId> {
+  const active = new Set<ProjectFileId>()
+  for (const [primaryFileId, versions] of versionsByFamily) {
+    for (const entryId of activeConflictCopies(
+      snapshot,
+      versions,
+      conflictsByFamily.get(primaryFileId) ?? [],
+    )) {
+      active.add(entryId)
+    }
+  }
+  return active
+}
+
+function currentPathClaimWinners(
+  snapshot: ProjectIndexSnapshot,
+  selectedLocationByEntryId: ReadonlyMap<ProjectEntryId, ProjectEntryLocationClaim>,
+  tombstonedEntryIds: ReadonlySet<string>,
+  activeConflictEntryIds: ReadonlySet<ProjectFileId>,
+): ReadonlyMap<string, ProjectEntryId> {
+  const winners = new Map<string, ProjectEntryId>()
+  for (const [entryId, claim] of selectedLocationByEntryId) {
+    const entry = snapshot.entries.get(entryId)
+    if (
+      !entry ||
+      tombstonedEntryIds.has(entryId) ||
+      claim.state !== "linked" ||
+      (entry.provenance === "content-conflict-copy" && !activeConflictEntryIds.has(entryId as ProjectFileId))
+    ) {
+      continue
+    }
+    const slot = projectPathClaimSlot(claim.parentDirectoryId, claim.basename)
+    const selectedEntryId = winners.get(slot)
+    const selectedClaim = selectedEntryId === undefined
+      ? undefined
+      : selectedLocationByEntryId.get(selectedEntryId)
+    const byStamp = selectedClaim === undefined ? 1 : comparePortableStamps(claim.stamp, selectedClaim.stamp)
+    if (byStamp > 0 || (byStamp === 0 && selectedEntryId !== undefined && compareUtf8(entryId, selectedEntryId) > 0)) {
+      winners.set(slot, entryId)
+    }
+  }
+  return winners
+}
+
+function projectPathClaimSlot(parentDirectoryId: ProjectDirectoryId, basename: string): string {
+  return `${parentDirectoryId}\u0000${basename}`
 }
 
 export function projectProjectIndexSnapshot(snapshot: ProjectIndexSnapshot): ProjectIndexProjection {
@@ -2274,18 +2712,14 @@ function tryValidateProjectIndexCreatePost(
       }
     }
 
-    const entries = new Map(base.entries)
-    const entryLocations = new Map(base.entryLocations)
-    const contentFamilies = new Map(base.contentFamilies)
-    const operationMap = new Map(base.operations)
     const entryItems = byRoot.get("entries")
     const locationItems = byRoot.get("entryLocations")
     const versionItems = byRoot.get("contentFamilies")
+    let createdVersion: ProjectContentVersionRecord | null = null
     if (entryItems?.size !== 1) return null
     const [entryKey] = [...entryItems][0]!
     const entry = parseEntry(childMap(root, "entries").get(entryKey))
     if (entry.entryId !== entryKey || !recordMatchesContext(entry, capture.context, entry.kind, "0")) return null
-    entries.set(entryKey as ProjectEntryId, entry)
 
     let location: ProjectEntryLocationClaim | null = null
     if (locationItems !== undefined) {
@@ -2293,7 +2727,6 @@ function tryValidateProjectIndexCreatePost(
       const [locationKey] = [...locationItems][0]!
       location = parseLocation(childMap(root, "entryLocations").get(locationKey))
       if (locationKey !== `l:${location.entryId}:${location.claimId}` || !recordMatchesContext(location, capture.context, "location", "1")) return null
-      entryLocations.set(locationKey, location)
     }
     const parent = location === null ? null : base.entries.get(location.parentDirectoryId)
     if (location !== null && (location.entryId !== entry.entryId || !parent || parent.kind !== "directory" || !isLiveEntry(base, location.parentDirectoryId))) return null
@@ -2312,7 +2745,7 @@ function tryValidateProjectIndexCreatePost(
         || ((entry.provenance === "generated" || entry.provenance === "managed-admission") && entry.contentPolicy !== "immutable")
       ) return null
       validateVersionDag(version.primaryFileId, [version])
-      contentFamilies.set(versionKey, version)
+      createdVersion = version
     }
 
     const nonReceipt = applyResult.inserted.filter((item) => item.root !== "operations")
@@ -2330,14 +2763,26 @@ function tryValidateProjectIndexCreatePost(
       stampLamport: capture.context.lamport,
     }
     if (operationKey !== `o:${receipt.actorId}:${receipt.operationId}` || !encodeEqual(receipt, expectedReceipt)) return null
-    operationMap.set(operationKey, receipt)
+    const resourceIndex = projectIndexCreatePostCurrentResourceIndex(base, entry, location, createdVersion)
+    const entries = readonlyProjectIndexMapInsertions(base.entries, [[entryKey, entry]])
+    const entryLocations = location === null
+      ? base.entryLocations
+      : readonlyProjectIndexMapInsertions(base.entryLocations, [[`l:${location.entryId}:${location.claimId}`, location]])
+    const contentFamilies = createdVersion === null
+      ? base.contentFamilies
+      : readonlyProjectIndexMapInsertions(
+          base.contentFamilies,
+          [[`v:${createdVersion.primaryFileId}:${createdVersion.versionId}`, createdVersion]],
+        )
+    const operationMap = readonlyProjectIndexMapInsertions(base.operations, [[operationKey, receipt]])
     const snapshot = Object.freeze({
       ...base,
-      entries: readonlyProjectIndexMap(entries),
-      entryLocations: readonlyProjectIndexMap(entryLocations),
-      contentFamilies: readonlyProjectIndexMap(contentFamilies),
-      operations: readonlyProjectIndexMap(operationMap),
+      entries,
+      entryLocations,
+      contentFamilies,
+      operations: operationMap,
     })
+    currentResourceFamilyIndexes.set(snapshot, resourceIndex)
     if (capture.baseCanonicalFragments !== null) {
       const fragments = createProjectIndexCanonicalFragments(
         snapshot,
@@ -2353,6 +2798,59 @@ function tryValidateProjectIndexCreatePost(
   } catch {
     return null
   }
+}
+
+function projectIndexCreatePostCurrentResourceIndex(
+  base: ProjectIndexSnapshot,
+  entry: ProjectEntryRecord,
+  location: ProjectEntryLocationClaim | null,
+  version: ProjectContentVersionRecord | null,
+): ProjectIndexCurrentResourceFamilyIndex {
+  const baseIndex = currentResourceFamilyIndex(base)
+  const versions = new Map<ProjectFileId, readonly ProjectContentVersionRecord[]>()
+  if (version !== null) versions.set(version.primaryFileId, Object.freeze([version]))
+  const selectedLocations = new Map<ProjectEntryId, ProjectEntryLocationClaim>()
+  const pathWinners = new Map<string, ProjectEntryId>()
+  if (location !== null) {
+    selectedLocations.set(entry.entryId, location)
+    const slot = projectPathClaimSlot(location.parentDirectoryId, location.basename)
+    const currentWinner = baseIndex.pathWinnerBySlot.get(slot)
+    const currentClaim = currentWinner === undefined
+      ? undefined
+      : baseIndex.selectedLocationByEntryId.get(currentWinner)
+    const byStamp = currentClaim === undefined ? 1 : comparePortableStamps(location.stamp, currentClaim.stamp)
+    if (byStamp > 0 || (byStamp === 0 && currentWinner !== undefined && compareUtf8(entry.entryId, currentWinner) > 0)) {
+      pathWinners.set(slot, entry.entryId)
+    }
+  }
+  return Object.freeze({
+    versionsByFamily: projectIndexLookupOverlay(
+      baseIndex.versionsByFamily,
+      [...versions.entries()],
+    ),
+    conflictsByFamily: baseIndex.conflictsByFamily,
+    tombstonedEntryIds: baseIndex.tombstonedEntryIds,
+    selectedLocationByEntryId: projectIndexLookupOverlay(
+      baseIndex.selectedLocationByEntryId,
+      [...selectedLocations.entries()],
+    ),
+    pathWinnerBySlot: projectIndexLookupOverlay(
+      baseIndex.pathWinnerBySlot,
+      [...pathWinners.entries()],
+    ),
+    activeConflictEntryIds: baseIndex.activeConflictEntryIds,
+  })
+}
+
+function projectIndexLookupOverlay<K extends string, V>(
+  base: ProjectIndexLookup<K, V>,
+  entries: readonly (readonly [K, V])[],
+): ProjectIndexLookup<K, V> {
+  if (entries.length === 0) return base
+  if (!(base instanceof ProjectIndexPersistentLookup)) {
+    throw new Error("ProjectIndex incremental authority index is not persistent")
+  }
+  return base.withOverrides(entries)
 }
 
 function mapOfStringArraysEqual(left: ReadonlyMap<string, readonly string[]>, right: ReadonlyMap<string, readonly string[]>): boolean {
@@ -3342,13 +3840,17 @@ function resourceReference(
   })
 }
 
-function activeConflictCopies(snapshot: ProjectIndexSnapshot, versions: readonly ProjectContentVersionRecord[]): ProjectFileId[] {
+function activeConflictCopies(
+  snapshot: ProjectIndexSnapshot,
+  versions: readonly ProjectContentVersionRecord[],
+  conflictCopies: Iterable<ProjectContentConflictCopyRecord> = snapshot.contentConflictCopies.values(),
+): ProjectFileId[] {
   const result = new Set<ProjectFileId>()
   for (const source of versions) {
     if (source.writeClass !== "text-write") continue
     const activated = versions.some((other) => comparePortableStamps(other.stamp, source.stamp) > 0 && !reaches(versions, other.versionId, source.versionId) && !reaches(versions, source.versionId, other.versionId))
     if (!activated) continue
-    for (const conflictCopy of snapshot.contentConflictCopies.values()) if (conflictCopy.primaryFileId === source.primaryFileId && conflictCopy.versionId === source.versionId) result.add(conflictCopy.reservedConflictFileId)
+    for (const conflictCopy of conflictCopies) if (conflictCopy.primaryFileId === source.primaryFileId && conflictCopy.versionId === source.versionId) result.add(conflictCopy.reservedConflictFileId)
   }
   return [...result].sort(compareUtf8)
 }
@@ -3524,17 +4026,24 @@ function tombstonedEntries(snapshot: ProjectIndexSnapshot): Set<string> {
   return new Set([...snapshot.entryTombstones.values()].map((fact) => fact.entryId))
 }
 
-function validateRelations(snapshot: ProjectIndexSnapshot): void {
+function validateRelations(snapshot: ProjectIndexSnapshot): ProjectIndexCurrentResourceFamilyIndex {
+  const selectedLocationByEntryId = new Map<ProjectEntryId, ProjectEntryLocationClaim>()
   for (const claim of snapshot.entryLocations.values()) {
     if (!snapshot.entries.has(claim.entryId)) fail("dangling-location", "Location names an absent entry")
     const parent = snapshot.entries.get(claim.parentDirectoryId)
     if (!parent || parent.kind !== "directory") fail("invalid-location-parent", "Location parent is not a directory")
+    const selected = selectedLocationByEntryId.get(claim.entryId)
+    if (selected === undefined || comparePortableStamps(selected.stamp, claim.stamp) <= 0) {
+      selectedLocationByEntryId.set(claim.entryId, claim)
+    }
   }
+  const tombstonedEntryIds = new Set<string>()
   for (const tombstone of snapshot.entryTombstones.values()) {
     const entry = snapshot.entries.get(tombstone.entryId)
     if (!entry || projectIndexRecordDigest(entry) !== tombstone.observedEntryDigest) fail("invalid-tombstone", "Entry tombstone does not bind the accepted entry")
+    tombstonedEntryIds.add(tombstone.entryId)
   }
-  const byFamily = new Map<string, ProjectContentVersionRecord[]>()
+  const byFamily = new Map<ProjectFileId, ProjectContentVersionRecord[]>()
   for (const version of snapshot.contentFamilies.values()) {
     const entry = snapshot.entries.get(version.primaryFileId)
     if (!entry || entry.kind !== "file" || entry.provenance === "content-conflict-copy") fail("invalid-family", "Content family has no primary file")
@@ -3543,15 +4052,33 @@ function validateRelations(snapshot: ProjectIndexSnapshot): void {
     list.push(version); byFamily.set(version.primaryFileId, list)
   }
   for (const [family, versions] of byFamily) validateVersionDag(family, versions)
+  const conflictsByFamily = new Map<ProjectFileId, ProjectContentConflictCopyRecord[]>()
   for (const conflictCopy of snapshot.contentConflictCopies.values()) {
     const version = snapshot.contentFamilies.get(`v:${conflictCopy.primaryFileId}:${conflictCopy.versionId}`)
     const reservation = snapshot.pathReservations.get(`x:${conflictCopy.reservationId}`)
     const conflict = snapshot.entries.get(conflictCopy.reservedConflictFileId)
     if (!version || !reservation || !conflict || conflict.provenance !== "content-conflict-copy" || reservation.reservedEntryId !== conflictCopy.reservedConflictFileId) fail("invalid-conflict-copy", "Conflict-copy records do not cross-bind")
+    const list = conflictsByFamily.get(conflictCopy.primaryFileId) ?? []
+    list.push(conflictCopy)
+    conflictsByFamily.set(conflictCopy.primaryFileId, list)
   }
   for (const canvasId of new Set([...snapshot.canvasRoutes.values()].map((fact) => fact.canvasId))) {
     projectCanvasRouteProjection(snapshot, canvasId)
   }
+  const activeConflictEntryIds = currentActiveConflictEntryIds(snapshot, byFamily, conflictsByFamily)
+  return Object.freeze({
+    versionsByFamily: new ProjectIndexPersistentLookup(byFamily),
+    conflictsByFamily: new ProjectIndexPersistentLookup(conflictsByFamily),
+    tombstonedEntryIds,
+    selectedLocationByEntryId: new ProjectIndexPersistentLookup(selectedLocationByEntryId),
+    pathWinnerBySlot: new ProjectIndexPersistentLookup(currentPathClaimWinners(
+      snapshot,
+      selectedLocationByEntryId,
+      tombstonedEntryIds,
+      activeConflictEntryIds,
+    )),
+    activeConflictEntryIds,
+  })
 }
 
 function validateVersionDag(family: string, versions: readonly ProjectContentVersionRecord[]): void {

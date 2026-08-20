@@ -62,6 +62,13 @@ authority and lifecycle coordination, not reusable domain semantics.
   background commits invalidate mounted projections but never mutate renderer undo
   stacks. Resource commit delivery verifies the operation receipt against the live
   owner and returns `unavailable` for a stale lease without reversing the commit.
+- Resource-add delivery may carry only bounded prepared runtime for the returned
+  created-node ids after durable acceptance. Stale-resource hydration validates one
+  bounded exact `{nodeId, incarnation}` target set against the originating live
+  session, clones only those nodes from the accepted-snapshot projection, and
+  rechecks targets plus Workbench scope after hydration before returning runtime
+  patches. It never runs a full Canvas query or turns runtime presentation into
+  authority.
 - Keep native paths and private storage behind typed scoped capabilities. Renderer,
   Preload, Agent tools, sandboxed frames, and companions never receive paths merely
   because Main resolved them.
@@ -338,6 +345,12 @@ For any matching change, read the full routed reference before planning or editi
 - Compose one local-first authority source: durable Team state selects Team signing;
   only an exact `missing` Team state permits local-owner signing. Rejected or
   ambiguous Team state fails closed, and UI adapters never synthesize authorization.
+- Cache verified manifest, local-owner binding, actor and signer material only under
+  one live opaque Project runtime identity. Every authority resolve still rereads
+  durable Team state and checks the exact runtime/Project/root/actor binding. Team
+  transition or rejection, owner rotation/reset, Project quiesce, final release, or
+  disposal sticky-revokes the old identity; never use a Project-global or TTL cache,
+  reseed a revoked entry, or fall back to cached material after a contradiction.
 - When an editable Project has no live Canvas, Desktop coordination may invoke the
   Project-owned typed Canvas-create command and open its committed result. It must
   not fabricate a route or document projection. Register the exact Canvas owner

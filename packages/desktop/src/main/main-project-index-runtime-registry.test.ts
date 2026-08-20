@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, test } from "bun:test"
+import { afterEach, describe, expect, mock, test } from "bun:test"
 import fs from "node:fs/promises"
 import os from "node:os"
 import path from "node:path"
@@ -14,6 +14,7 @@ import {
   CollaborationEnrollmentRequiredError,
   createExistingProjectIndexRegistrationPort,
   createLocalProjectOwnerIndexRegistrationPort,
+  MainProjectIndexRuntimeRegistry,
   queryMainProjectIndexCurrentBlobDigests,
 } from "./main-project-index-runtime-registry"
 
@@ -190,5 +191,54 @@ describe("ProjectIndex current blob-reference Main bridge", () => {
     )
     expect(result).toEqual(ownerValues)
     expect(result).not.toBe(ownerValues)
+  })
+})
+
+describe("ProjectIndex exact file materialization Main bridge", () => {
+  test("forwards only the requested portable paths to the live file application", async () => {
+    const projectId = parseProjectId("project-exact-materialization")
+    const queryFileMaterializationEntries = mock(async (input: { projectId: string; paths: readonly string[] }) =>
+      Object.freeze({ projectId: input.projectId, entries: Object.freeze([]) }))
+    const registry = Object.create(MainProjectIndexRuntimeRegistry.prototype) as MainProjectIndexRuntimeRegistry
+    Object.defineProperty(registry, "open", {
+      value: mock(async () => ({ fileApplication: { queryFileMaterializationEntries } })),
+    })
+
+    await expect(registry.queryFileMaterializationEntries({
+      projectId,
+      paths: ["Notes/a.md", "Assets/hero.png"],
+    })).resolves.toEqual({ projectId, entries: [] })
+    expect(queryFileMaterializationEntries).toHaveBeenCalledWith({
+      projectId,
+      paths: ["Notes/a.md", "Assets/hero.png"],
+    })
+  })
+})
+
+describe("ProjectIndex exact current-resource Main bridge", () => {
+  test("forwards only the requested proof targets to the live ProjectIndex application", async () => {
+    const projectId = parseProjectId("project-exact-current-resources")
+    const targets = [{ uri: "convax-project://resource", ownerProofDigest: parseDigest("b".repeat(64)) }]
+    const queryCurrentResourcesExact = mock(async () => [])
+    const registry = Object.create(MainProjectIndexRuntimeRegistry.prototype) as MainProjectIndexRuntimeRegistry
+    Object.defineProperty(registry, "open", {
+      value: mock(async () => ({ application: { queryCurrentResourcesExact } })),
+    })
+
+    await expect(registry.queryCurrentResourcesExact({ projectId, targets })).resolves.toEqual([])
+    expect(queryCurrentResourcesExact).toHaveBeenCalledWith({ projectId, targets })
+  })
+
+  test("forwards only requested reference proofs without materializing resource paths", async () => {
+    const projectId = parseProjectId("project-exact-current-resource-references")
+    const targets = [{ uri: "convax-project://resource", ownerProofDigest: parseDigest("c".repeat(64)) }]
+    const queryCurrentResourceReferencesExact = mock(async () => [])
+    const registry = Object.create(MainProjectIndexRuntimeRegistry.prototype) as MainProjectIndexRuntimeRegistry
+    Object.defineProperty(registry, "open", {
+      value: mock(async () => ({ application: { queryCurrentResourceReferencesExact } })),
+    })
+
+    await expect(registry.queryCurrentResourceReferencesExact({ projectId, targets })).resolves.toEqual([])
+    expect(queryCurrentResourceReferencesExact).toHaveBeenCalledWith({ projectId, targets })
   })
 })

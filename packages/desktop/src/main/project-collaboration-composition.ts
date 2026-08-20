@@ -77,6 +77,13 @@ export function createMainProjectCollaborationComposition(input: Readonly<{
     async queryCurrentResources(request) {
       return (await runtimeFor(request.projectId)).projectIndexes.queryCurrentResources(request)
     },
+    async queryCurrentResourcesExact(request) {
+      const projection = (await runtimeFor(request.projectId)).projectIndexes
+      if (!projection.queryCurrentResourcesExact) {
+        throw new Error("ProjectIndex exact current-resource projection is unavailable")
+      }
+      return projection.queryCurrentResourcesExact(request)
+    },
     async createDirectory(request) {
       return (await runtimeFor(request.projectId)).projectIndexes.createDirectory(request)
     },
@@ -94,6 +101,13 @@ export function createMainProjectCollaborationComposition(input: Readonly<{
     },
     async queryFileMaterializationPlan(request) {
       return (await runtimeFor(request.projectId)).projectIndexes.queryFileMaterializationPlan(request)
+    },
+    async queryFileMaterializationEntries(request) {
+      const projection = (await runtimeFor(request.projectId)).projectIndexes
+      if (!projection.queryFileMaterializationEntries) {
+        throw new Error("ProjectIndex exact file materialization projection is unavailable")
+      }
+      return projection.queryFileMaterializationEntries(request)
     },
   }
   Object.freeze(projectIndexes)
@@ -118,6 +132,9 @@ export function createMainProjectCollaborationComposition(input: Readonly<{
     },
     queryRenderer(ref, sessionId) {
       return requireSession(ref, sessionId).owner.queryRenderer(ref, sessionId)
+    },
+    queryRendererResourceTargets(ref, sessionId, targets) {
+      return requireSession(ref, sessionId).owner.queryRendererResourceTargets(ref, sessionId, targets)
     },
     submitRenderer(request) {
       return requireSession(request.ref, request.sessionId).owner.submitRenderer(request)

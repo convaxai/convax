@@ -1,5 +1,5 @@
 import { createHash, randomUUID } from "node:crypto"
-import { watch as watchFileSystem, type FSWatcher } from "node:fs"
+import { watch as watchFileSystem } from "node:fs"
 import fs from "node:fs/promises"
 import path from "node:path"
 import type {
@@ -74,15 +74,42 @@ import {
   sameProjectFileSnapshot,
 } from "./stable-project-file"
 import { resolvePortableProjectData, PortableProjectResetError } from "./collaboration/portable-cutover"
+import type { ProjectFilesystemEventCoverage } from "./project-filesystem-event-coverage"
+
+const maximumPendingProjectFilesystemPaths = 1_024
+
+export interface NodeProjectFilesystemWatchFilenameBytes {
+  toString(encoding: "utf8"): string
+}
+
+export type NodeProjectFilesystemWatchFilename =
+  | string
+  | NodeProjectFilesystemWatchFilenameBytes
+  | null
+
+export interface NodeProjectFilesystemWatcher {
+  close(): void
+  once(event: "error", listener: (error: unknown) => void): NodeProjectFilesystemWatcher
+}
+
+export interface NodeProjectFilesystemWatchPort {
+  (
+    rootPath: string,
+    options: { persistent: boolean; recursive?: boolean },
+    listener: (eventType: string, filename: NodeProjectFilesystemWatchFilename) => void,
+  ): NodeProjectFilesystemWatcher
+}
 
 export interface NodeProjectManagerOptions {
   caseInsensitivePaths?: boolean
+  filesystemEventCoverage?: ProjectFilesystemEventCoverage
   maxReadableFileBytes?: number
   maxTextFileBytes?: number
   now?: () => number
   registryFile: string
   trash?: (targetPath: string) => Promise<void>
   watchDebounceMs?: number
+  watchFileSystem?: NodeProjectFilesystemWatchPort
 }
 
 export interface RegisteredProjectPrivateStorageRecoveryPort {
@@ -902,22 +929,63 @@ export class NodeProjectManager
     const rootPath = await fs.realpath(project.rootPath)
     let timer: ReturnType<typeof setTimeout> | undefined
     let restartTimer: ReturnType<typeof setTimeout> | undefined
-    let latestPath: string | undefined
+    const pendingPaths = new Map<string, string>()
+    let pendingUnknownPath = false
     let restartAttempts = 0
     let stopped = false
-    let watcher: FSWatcher | undefined
+    let watcher: NodeProjectFilesystemWatcher | undefined
+    let flushChain = Promise.resolve()
     const notify = () => {
       if (timer) clearTimeout(timer)
       timer = setTimeout(() => {
         timer = undefined
-        listener({ kind: "filesystem", path: latestPath, projectId })
+        const eventPaths = [...pendingPaths.values()]
+        const unknownPath = pendingUnknownPath
+        pendingPaths.clear()
+        pendingUnknownPath = false
+        const flush = async () => {
+          if (stopped) return
+          const uncoveredPaths: string[] = []
+          for (const eventPath of eventPaths) {
+            if (stopped) return
+            if (!(await this.options.filesystemEventCoverage?.consume({ path: eventPath, projectId }))) {
+              uncoveredPaths.push(eventPath)
+            }
+          }
+          if (stopped || (!unknownPath && uncoveredPaths.length === 0)) return
+          if (unknownPath || uncoveredPaths.length > 1) {
+            listener({ kind: "filesystem", projectId })
+            return
+          }
+          listener({ kind: "filesystem", path: uncoveredPaths[0], projectId })
+        }
+        flushChain = flushChain.then(flush, flush)
+        void flushChain.catch(() => undefined)
       }, this.options.watchDebounceMs ?? 120)
     }
-    const onChange = (_eventType: string, filename: string | Buffer | null) => {
+    const onChange = (_eventType: string, filename: NodeProjectFilesystemWatchFilename) => {
       restartAttempts = 0
-      const relativePath = filename ? String(filename).replaceAll("\\", "/").replace(/^\/+/, "") : undefined
+      let relativePath: string | undefined
+      if (filename) {
+        try {
+          const rawFilename = typeof filename === "string" ? filename : filename.toString("utf8")
+          const rawPath = rawFilename.replaceAll("\\", "/").replace(/^\/+/, "")
+          relativePath = normalizeRelativePath(rawPath).normalize("NFC") || undefined
+        } catch {
+          relativePath = undefined
+        }
+      }
       if (relativePath && isIgnoredName(relativePath.split("/")[0] ?? "")) return
-      latestPath = relativePath
+      if (relativePath && !pendingUnknownPath) {
+        pendingPaths.delete(relativePath)
+        pendingPaths.set(relativePath, relativePath)
+        if (pendingPaths.size > maximumPendingProjectFilesystemPaths) {
+          pendingPaths.clear()
+          pendingUnknownPath = true
+        }
+      } else {
+        pendingUnknownPath = true
+      }
       notify()
     }
     const scheduleRestart = () => {
@@ -932,21 +1000,25 @@ export class NodeProjectManager
     const startWatcher = () => {
       if (stopped) return
       try {
+        const openWatcher = this.options.watchFileSystem ?? ((watchRootPath, options, listener) =>
+          watchFileSystem(watchRootPath, options, listener))
         try {
-          watcher = watchFileSystem(rootPath, { persistent: false, recursive: true }, onChange)
+          watcher = openWatcher(rootPath, { persistent: false, recursive: true }, onChange)
         } catch {
-          watcher = watchFileSystem(rootPath, { persistent: false }, onChange)
+          watcher = openWatcher(rootPath, { persistent: false }, onChange)
         }
         watcher.once("error", () => {
           watcher?.close()
           watcher = undefined
-          latestPath = undefined
+          pendingPaths.clear()
+          pendingUnknownPath = true
           notify()
           scheduleRestart()
         })
       } catch {
         watcher = undefined
-        latestPath = undefined
+        pendingPaths.clear()
+        pendingUnknownPath = true
         notify()
         scheduleRestart()
       }

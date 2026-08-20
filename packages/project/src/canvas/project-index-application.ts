@@ -1,5 +1,6 @@
 import {
   encodeRestrictedJcs,
+  parseDigest,
   parseId128,
   type CanvasId,
   type DecodedCausalEditFrame,
@@ -14,6 +15,7 @@ import {
   type PreparedLocalIntent,
   type ProjectId,
 } from "@convax/collaboration"
+import { parseProjectUri } from "@convax/uri"
 
 import {
   constructProjectCanvasRouteActivationIntent,
@@ -22,17 +24,21 @@ import {
   constructProjectCanvasRouteTombstoneIntent,
   projectCanvasRouteProjection,
   projectCanvasRouteProjectionDigest,
+  projectIndexCurrentBlobReferencesForFamiliesFromValidatedOwnerState,
   projectIndexCurrentBlobReferencesFromValidatedOwnerState,
   projectIndexIntentDigest,
   projectIndexIntentDependencies,
   projectIndexSnapshotFromValidatedOwnerState,
-  projectEntryLocationProjection,
+  projectIndexResourceReferenceDigest,
+  projectIndexMaterializedPathForCurrentResourceFromValidatedOwnerState,
   projectProjectIndexSnapshot,
   type ProjectIndexResourceReference,
   type ProjectIndexSnapshot,
 } from "../collaboration/project-index"
 import type {
   ProjectIndexCurrentBlobReferencePort,
+  ProjectIndexCurrentResourceProjectionEntry,
+  ProjectIndexCurrentResourceProofTarget,
   ProjectIndexCurrentResourceReferenceQueryPort,
 } from "../collaboration/blob-replication"
 import {
@@ -148,25 +154,38 @@ export class ProjectIndexCanvasApplication implements
     return this.options.session.query(projectIndexCurrentBlobReferencesFromValidatedOwnerState)
   }
 
+  async queryCurrentResourceReferencesExact(input: {
+    readonly projectId: ProjectId
+    readonly targets: readonly ProjectIndexCurrentResourceProofTarget[]
+  }): Promise<readonly ProjectIndexResourceReference[]> {
+    this.requireProject(input.projectId)
+    const targets = parseCurrentResourceProofTargets(input.targets)
+    if (targets.length === 0) return Object.freeze([])
+    return this.options.session.query((state) => selectExactCurrentResourceReferences(state, targets).references)
+  }
+
   async queryCurrentResources(input: {
     readonly projectId: ProjectId
   }) {
     this.requireProject(input.projectId)
     return this.options.session.query((state) => {
       const snapshot = requireProjectIndexSnapshot(state)
-      return Object.freeze(projectIndexCurrentBlobReferencesFromValidatedOwnerState(state).map((reference) => {
-        const entry = snapshot.entries.get(reference.entryFileId)
-        if (!entry || entry.kind !== "file" || entry.storageClass === null) {
-          throw new Error("Current Project resource has no live file owner")
-        }
-        const location = projectEntryLocationProjection(snapshot, reference.entryFileId)
-        const materializedPath =
-          entry.storageClass === "project-file" &&
-          (location.state === "live-linked" || location.state === "conflict-path")
-            ? location.portablePath
-            : null
-        return Object.freeze({ materializedPath, reference, storageClass: entry.storageClass })
-      }))
+      return Object.freeze(projectIndexCurrentBlobReferencesFromValidatedOwnerState(state).map((reference) =>
+        projectCurrentResourceProjectionEntry(state, snapshot, reference)))
+    })
+  }
+
+  async queryCurrentResourcesExact(input: {
+    readonly projectId: ProjectId
+    readonly targets: readonly ProjectIndexCurrentResourceProofTarget[]
+  }): Promise<readonly ProjectIndexCurrentResourceProjectionEntry[]> {
+    this.requireProject(input.projectId)
+    const targets = parseCurrentResourceProofTargets(input.targets)
+    if (targets.length === 0) return Object.freeze([])
+    return this.options.session.query((state) => {
+      const { snapshot, references } = selectExactCurrentResourceReferences(state, targets)
+      return Object.freeze(references.map((reference) =>
+        projectCurrentResourceProjectionEntry(state, snapshot, reference)))
     })
   }
 
@@ -322,6 +341,89 @@ class ProjectCanvasRouteRejection extends Error {
     super(code)
     this.name = "ProjectCanvasRouteRejection"
   }
+}
+
+const maximumCurrentResourceProofTargets = 4_096
+
+function selectExactCurrentResourceReferences(
+  state: OwnerValidatedState<"project-index">,
+  targets: readonly ProjectIndexCurrentResourceProofTarget[],
+): Readonly<{
+  snapshot: ProjectIndexSnapshot
+  references: readonly ProjectIndexResourceReference[]
+}> {
+  const snapshot = requireProjectIndexSnapshot(state)
+  const requested = new Set<string>()
+  const primaryFileIds = new Set<ProjectIndexResourceReference["familyPrimaryFileId"]>()
+  for (const target of targets) {
+    let uri: ReturnType<typeof parseProjectUri>
+    try {
+      uri = parseProjectUri(target.uri)
+    } catch {
+      continue
+    }
+    if (
+      uri.projectId !== snapshot.identity.projectId ||
+      uri.projectEpoch !== snapshot.identity.projectEpoch ||
+      !uri.entryId.startsWith("pf_")
+    ) {
+      continue
+    }
+    primaryFileIds.add(uri.entryId as ProjectIndexResourceReference["familyPrimaryFileId"])
+    requested.add(currentResourceProofKey(target.uri, target.ownerProofDigest))
+  }
+  if (primaryFileIds.size === 0) return Object.freeze({ snapshot, references: Object.freeze([]) })
+  const references = projectIndexCurrentBlobReferencesForFamiliesFromValidatedOwnerState(
+    state,
+    Object.freeze([...primaryFileIds]),
+  ).filter((reference) => requested.has(currentResourceProofKey(
+    reference.canonicalUri,
+    projectIndexResourceReferenceDigest(reference),
+  )))
+  return Object.freeze({ snapshot, references: Object.freeze(references) })
+}
+
+function parseCurrentResourceProofTargets(
+  value: readonly ProjectIndexCurrentResourceProofTarget[],
+): readonly ProjectIndexCurrentResourceProofTarget[] {
+  if (!Array.isArray(value) || value.length > maximumCurrentResourceProofTargets) {
+    throw new TypeError("ProjectIndex exact current-resource targets are invalid")
+  }
+  const targets = new Map<string, ProjectIndexCurrentResourceProofTarget>()
+  for (let index = 0; index < value.length; index += 1) {
+    const candidate = value[index]
+    if (!(index in value) || typeof candidate !== "object" || candidate === null) {
+      throw new TypeError("ProjectIndex exact current-resource target is invalid")
+    }
+    if (typeof candidate.uri !== "string") {
+      throw new TypeError("ProjectIndex exact current-resource URI is invalid")
+    }
+    const target = Object.freeze({
+      uri: candidate.uri,
+      ownerProofDigest: parseDigest(candidate.ownerProofDigest),
+    })
+    targets.set(currentResourceProofKey(target.uri, target.ownerProofDigest), target)
+  }
+  return Object.freeze([...targets.values()])
+}
+
+function currentResourceProofKey(uri: string, ownerProofDigest: Digest): string {
+  return `${uri}\u0000${ownerProofDigest}`
+}
+
+function projectCurrentResourceProjectionEntry(
+  state: OwnerValidatedState<"project-index">,
+  snapshot: ProjectIndexSnapshot,
+  reference: ProjectIndexResourceReference,
+): ProjectIndexCurrentResourceProjectionEntry {
+  const entry = snapshot.entries.get(reference.entryFileId)
+  if (!entry || entry.kind !== "file" || entry.storageClass === null) {
+    throw new Error("Current Project resource has no live file owner")
+  }
+  const materializedPath = entry.storageClass === "project-file"
+    ? projectIndexMaterializedPathForCurrentResourceFromValidatedOwnerState(state, reference)
+    : null
+  return Object.freeze({ materializedPath, reference, storageClass: entry.storageClass })
 }
 
 function routeRejection(snapshot: ProjectIndexSnapshot, canvasId: CanvasId) {

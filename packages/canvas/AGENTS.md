@@ -57,6 +57,12 @@ Canvas owns document and editor semantics independently of Project and Agent.
   live incarnation; a mismatch retains authority. Keep each session bounded to 32
   pending operations and 512 ghost entities and coalesce authority/overlay changes
   into one presentation snapshot.
+- Prepared and hydrated resource runtime state is another bounded transient overlay,
+  never a typed-intent or Y.Doc field. Install prepared state only after the accepted
+  projection proves the returned created id and exact live incarnation, canonical
+  resource identity and renderer identity. Exact-target hydration may merge only a
+  still-stale, metadata-identical live node; Host adapters must not query or
+  transport the whole Canvas or replace its authoritative projection.
 - Visual undo/redo history stores only bounded complete presentation snapshots with
   exact node/edge incarnation guards. Every local mutation may reserve an opaque
   provisional root before Main's durable lane; Renderer must not execute the business
@@ -200,6 +206,11 @@ Canvas owns document and editor semantics independently of Project and Agent.
   can affect authority only through the exact final replica-signed frame after the
   durable head barrier. `initialDocument` and renderer state are immutable/read-only
   projections, never editable or persistent fallbacks.
+- Missing incremental owner evidence may fall back to full validation, but a sealed
+  Canvas candidate whose exact transaction evidence is widened or followed by any
+  transaction is stale and must be rejected. Full validation also requires every
+  receipt result entity to retain its node/edge record and operation ids to be unique
+  across actor receipts.
 - Undo/redo is session-only selection in the collaboration-owned session undo
   coordinator; Canvas materializes a fresh closed semantic
   inverse/forward intent against the latest `replicaDoc`. Remote/bootstrap/recovery
@@ -231,6 +242,10 @@ Canvas owns document and editor semantics independently of Project and Agent.
   cross-artifact runtime fails closed as unsupported data; archived authority
   releases, drafts, and live implementation bytes never provide fallback semantics,
   and Canvas never selects a second schema, codec, or reducer.
+- Derived projection, placement and digest indexes may be weakly cached only by one
+  exact immutable validated `CanvasSnapshot` identity. A newly accepted state must
+  receive a new snapshot identity; cache presence or eviction cannot change reducer
+  output, frame bytes, protocol digest or wire behavior.
 - Application and resource requests may carry `AbortSignal`. Check it after every
   awaited preparation/load/conflict step and immediately before persistence; caller
   cancellation must never become a late durable write.

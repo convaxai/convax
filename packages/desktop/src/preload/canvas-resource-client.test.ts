@@ -78,6 +78,7 @@ function resourceAddResult(createdNodeIds: readonly string[] = ["created"]) {
       },
     },
     operationReceipt,
+    preparedResources: createdNodeIds.map((nodeId) => ({ nodeId, state: { status: "ready" as const } })),
     warnings: [],
   }
 }
@@ -191,32 +192,45 @@ describe("preload Canvas resource client", () => {
     expect(serialized).not.toContain("path")
   })
 
-  test("requests stale runtime hydration without exposing a native path", async () => {
-    const document = createCanvasDocument({
-      id: "canvas-main",
-      nodes: [
-        createTextNode({
-          id: "note",
-          metadata: { convaxProjectResource: { kind: "project-file", path: "Notes/a.md" } },
-          position: { x: 0, y: 0 },
-          resourceState: { status: "stale" },
-        }),
-      ],
-    })
-    const hydrated = {
-      ...document,
-      nodes: document.nodes.map((node) => ({
-        ...node,
-        data: { ...node.data, resourceState: { status: "ready", text: "fresh" } },
-      })),
+  test("requests exact session-bound stale targets and accepts only their runtime patches", async () => {
+    const suffix = encodeBase64url(new Uint8Array(32).fill(4))
+    const target = {
+      entity: { id: `n_${suffix}`, incarnation: `ni_${suffix}`, kind: "node" as const },
+      nodeId: `n_${suffix}`,
     }
-    const invoke = mock(async () => hydrated)
+    const response = { patches: [{ nodeId: target.nodeId, state: { status: "ready" as const, text: "fresh" } }] }
+    const invoke = mock(async () => response)
     const { client } = setup(invoke)
 
-    await expect(client.hydrateStale({ canvasId: "canvas-main" })).resolves.toEqual(hydrated)
+    await expect(
+      client.hydrateStale({ canvasId: "canvas-main", sessionId: resourceSessionId, targets: [target] }),
+    ).resolves.toEqual(response)
     expect(invoke).toHaveBeenCalledWith(canvasResourceHydrateStaleIpcChannel, {
       canvasId: "canvas-main",
+      sessionId: resourceSessionId,
+      targets: [target],
     })
+    expect(JSON.stringify(invoke.mock.calls)).not.toContain("Notes/a.md")
+  })
+
+  test("rejects widened, mismatched, incomplete, or malformed runtime hydration patches", async () => {
+    const suffix = encodeBase64url(new Uint8Array(32).fill(5))
+    const target = {
+      entity: { id: `n_${suffix}`, incarnation: `ni_${suffix}`, kind: "node" as const },
+      nodeId: `n_${suffix}`,
+    }
+    const input = { canvasId: "canvas-main", sessionId: resourceSessionId, targets: [target] }
+    for (const response of [
+      { patches: [], extra: true },
+      { patches: [] },
+      { patches: [{ nodeId: "different", state: { status: "ready" } }] },
+      { patches: [{ extra: true, nodeId: target.nodeId, state: { status: "ready" } }] },
+      { patches: [{ nodeId: target.nodeId, state: { nativePath: "/private/a", status: "ready" } }] },
+      { patches: [{ nodeId: target.nodeId, state: { status: "ready", text: 42 } }] },
+    ]) {
+      const { client } = setup(mock(async () => response))
+      await expect(client.hydrateStale(input)).rejects.toThrow(/Canvas resource refresh/)
+    }
   })
 
   test("reads a connected image using only Canvas guards and node ids", async () => {

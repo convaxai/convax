@@ -25,9 +25,25 @@ describe("Project collaboration composition", () => {
       format: "convax.project-canvas-route-command", kind: "project.canvas.route.create", title: "Canvas",
     } })).toBe(harness.routeResult)
     expect(await harness.composition.projectIndexes.queryCurrentBlobDigests({ projectId: PROJECT_A })).toEqual(new Set())
+    expect(await harness.composition.projectIndexes.queryCurrentResourcesExact?.({
+      projectId: PROJECT_A,
+      targets: [{ uri: "convax-project://resource", ownerProofDigest: FRAME }],
+    })).toEqual([])
+    expect(harness.projectIndexes.queryCurrentResourcesExact).toHaveBeenCalledWith({
+      projectId: PROJECT_A,
+      targets: [{ uri: "convax-project://resource", ownerProofDigest: FRAME }],
+    })
     expect(await harness.composition.projectIndexes.queryFileMaterializationPlan({ projectId: PROJECT_A })).toEqual({
       projectId: PROJECT_A,
       entries: [],
+    })
+    expect(await harness.composition.projectIndexes.queryFileMaterializationEntries?.({
+      projectId: PROJECT_A,
+      paths: ["Notes/a.md"],
+    })).toEqual({ projectId: PROJECT_A, entries: [] })
+    expect(harness.projectIndexes.queryFileMaterializationEntries).toHaveBeenCalledWith({
+      projectId: PROJECT_A,
+      paths: ["Notes/a.md"],
     })
     expect(await harness.composition.canvasSessions.query({ scopeId: PROJECT_A, canvasId: "canvas-main" }))
       .toBe(harness.queryResult)
@@ -129,12 +145,15 @@ function composition() {
     submitRouteCommand: mock(async () => routeResult),
     queryCurrentBlobDigests: mock(async () => new Set<Digest>()),
     queryCurrentResources: mock(async () => []),
+    queryCurrentResourcesExact: mock(async () => []),
     admitManagedBlob: mock(async () => Object.freeze({ status: "partial-success", code: "entry-not-found" }) as never),
     createDirectory: mock(async () => Object.freeze({ status: "partial-success", code: "entry-not-found" }) as never),
     publishFile: mock(async () => Object.freeze({ status: "partial-success", code: "entry-not-found" }) as never),
     relocateEntry: mock(async () => Object.freeze({ status: "partial-success", code: "entry-not-found" }) as never),
     tombstoneEntry: mock(async () => Object.freeze({ status: "partial-success", code: "entry-not-found" }) as never),
     queryFileMaterializationPlan: mock(async ({ projectId }: { projectId: string }) =>
+      Object.freeze({ projectId, entries: Object.freeze([]) })),
+    queryFileMaterializationEntries: mock(async ({ projectId }: { projectId: string; paths: readonly string[] }) =>
       Object.freeze({ projectId, entries: Object.freeze([]) })),
     quiesceProject: mock(async () => {
       events.push("index:quiesce")
@@ -144,6 +163,7 @@ function composition() {
     open: mock(async () => Object.freeze({ sessionId: SESSION_A }) as never),
     close,
     queryRenderer,
+    queryRendererResourceTargets: mock(async () => Object.freeze({ marker: "resource-targets" }) as never),
     submitRenderer: mock(async () => Object.freeze({ marker: "renderer-submit" }) as never),
     executeApplication: mock(async () => Object.freeze({ marker: "application-submit" }) as never),
     deliverApplicationCommit: mock(async () => Object.freeze({ status: "unavailable" as const })),

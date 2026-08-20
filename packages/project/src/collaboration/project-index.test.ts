@@ -40,6 +40,8 @@ import {
   projectCanvasRouteProjection,
   projectIndexIntentDigest,
   projectIndexCurrentBlobReferences,
+  projectIndexCurrentBlobReferencesForFamiliesFromValidatedOwnerState,
+  projectIndexEntryAtPortablePathFromValidatedOwnerState,
   projectIndexSnapshotFromValidatedOwnerState,
   parseProjectIndexResourceReference,
   projectIndexRecordDigest,
@@ -528,6 +530,90 @@ describe("ProjectIndex owner schema", () => {
     expect(calls()).toBe(1)
   })
 
+  test("keeps 256 consecutive file-create heads incremental with exact non-enumerating lookups", () => {
+    const protocol = ownerProtocol()
+    const candidate = genesis()
+    const initialSymbols = Object.getOwnPropertySymbols(validateProjectIndexYDoc(candidate))
+    const initialState = protocol.validateBase(candidate)
+    if (typeof initialState === "string") throw new Error("initial ProjectIndex validation rejected")
+    let state: OwnerValidatedState<"project-index"> = initialState
+    const fullTraversals = countFullProjectIndexValidations(candidate)
+    let lastFileId: `pf_${string}` | undefined
+    let lastPath = ""
+    const ownerFacts = {
+      resolveFact(requirement: { kind: string; factDigest: string; request: { sha256: string } }) {
+        return {
+          status: "resolved",
+          requirement,
+          value: {
+            format: "convax.project-index-external-fact-result",
+            kind: requirement.kind,
+            requestSha256: requirement.request.sha256,
+            factDigest: requirement.factDigest,
+            decision: "verified",
+          },
+        }
+      },
+    } as never
+
+    for (let index = 0; index < 256; index += 1) {
+      const snapshot = projectIndexSnapshotFromValidatedOwnerState(state)
+      if (snapshot === null) throw new Error("incremental ProjectIndex state lost its snapshot")
+      const draft = draftContext(actor(24), id128(index), String(index + 1))
+      lastPath = `notes-${index}.md`
+      const built = constructProjectFileCreateIntent({
+        snapshot,
+        context: draft,
+        parentDirectoryId: rootDirectoryId,
+        basename: lastPath,
+        blob: blobRef(`consecutive-${index}`),
+        contentPolicy: "immutable",
+        storageClass: "project-file",
+        provenance: "user",
+      })
+      if (built === "rejected") throw new Error(`file create ${index} rejected`)
+      lastFileId = built.fileId
+      const exact = withDigest(draft, built.intent)
+      selectedProjectIndexDocumentOwnerArtifactDefinition.armCandidateTransactionCapture?.({
+        base: state,
+        candidate,
+        context: exact.context,
+      })
+      let result: ReturnType<typeof protocol.applyIntent> = "rejected"
+      candidate.transact(() => {
+        result = protocol.applyIntent(state, candidate, exact.context, exact.intent, ownerFacts)
+      })
+      if (typeof result === "string") throw new Error(`file apply ${index} rejected`)
+      const validated = protocol.validatePost(state, candidate, result)
+      if (typeof validated === "string") throw new Error(`file post ${index} rejected`)
+      state = validated
+      expect(projectIndexCurrentBlobReferencesForFamiliesFromValidatedOwnerState(state, [built.fileId]))
+        .toHaveLength(1)
+      expect(projectIndexEntryAtPortablePathFromValidatedOwnerState(state, lastPath))
+        .toEqual({ entryId: built.fileId, kind: "file" })
+    }
+
+    expect(fullTraversals()).toBe(0)
+    const finalSnapshot = projectIndexSnapshotFromValidatedOwnerState(state)
+    if (finalSnapshot === null || lastFileId === undefined) throw new Error("final incremental snapshot is absent")
+    const finalSymbols = Object.getOwnPropertySymbols(finalSnapshot)
+    expect(finalSymbols).toEqual(initialSymbols)
+    expect(finalSymbols.map((symbol) => Reflect.get(finalSnapshot, symbol))).toEqual([true])
+    for (const collection of snapshotCollections(finalSnapshot)) {
+      expect(Object.getOwnPropertyNames(collection)).toEqual([])
+      expect(Object.getOwnPropertySymbols(collection)).toEqual([])
+      expect(typeof (collection as { set?: unknown }).set).toBe("undefined")
+      expect(typeof (collection as { delete?: unknown }).delete).toBe("undefined")
+      expect(typeof (collection as { clear?: unknown }).clear).toBe("undefined")
+    }
+    withRejectedProjectIndexSnapshotIteration(finalSnapshot, () => {
+      expect(projectIndexCurrentBlobReferencesForFamiliesFromValidatedOwnerState(state, [lastFileId!]))
+        .toHaveLength(1)
+      expect(projectIndexEntryAtPortablePathFromValidatedOwnerState(state, lastPath))
+        .toEqual({ entryId: lastFileId, kind: "file" })
+    })
+  })
+
   test("derives byte-identical 512 and 2k create canonical state from certified collection fragments", () => {
     for (const resourceCount of [512, 2048] as const) {
       const source = createProjectIndexBenchmarkFixture(resourceCount).document
@@ -600,7 +686,7 @@ describe("ProjectIndex owner schema", () => {
       expect(incremental).not.toBe("rejected")
       expect(fullTraversals(), `${resourceCount} incremental traversals`).toBe(0)
       expect(collectionVisits.calls(), `${resourceCount} changed collection visits`).toBe(0)
-      expect(snapshotCloneVisits.calls(), `${resourceCount} snapshot clone visits`).toBe(4)
+      expect(snapshotCloneVisits.calls(), `${resourceCount} snapshot clone visits`).toBe(0)
       expect(incremental).toEqual(encodeProjectCanonicalState(candidate))
       expect(fullTraversals(), `${resourceCount} differential full traversal`).toBe(1)
 
@@ -1622,6 +1708,43 @@ function countLargeMapIteratorVisits(minimumSize: number): { calls(): number; re
     calls: () => calls,
     restore() { Map.prototype[Symbol.iterator] = original },
   }
+}
+
+function withRejectedProjectIndexSnapshotIteration(snapshot: ReturnType<typeof validateProjectIndexYDoc>, run: () => void): void {
+  const prototypes = new Set(snapshotCollections(snapshot).map((collection) => Object.getPrototypeOf(collection) as object))
+  const keys: readonly PropertyKey[] = ["entries", "keys", "values", "forEach", Symbol.iterator]
+  const descriptors: Array<readonly [object, PropertyKey, PropertyDescriptor]> = []
+  for (const prototype of prototypes) {
+    for (const key of keys) {
+      const descriptor = Object.getOwnPropertyDescriptor(prototype, key)
+      if (descriptor === undefined) continue
+      descriptors.push([prototype, key, descriptor])
+      Object.defineProperty(prototype, key, {
+        configurable: true,
+        value() { throw new Error("exact ProjectIndex lookup enumerated historical snapshot data") },
+      })
+    }
+  }
+  try {
+    run()
+  } finally {
+    for (const [prototype, key, descriptor] of descriptors) {
+      Object.defineProperty(prototype, key, descriptor)
+    }
+  }
+}
+
+function snapshotCollections(snapshot: ReturnType<typeof validateProjectIndexYDoc>): ReadonlyMap<string, unknown>[] {
+  return [
+    snapshot.entries,
+    snapshot.entryLocations,
+    snapshot.entryTombstones,
+    snapshot.contentFamilies,
+    snapshot.contentConflictCopies,
+    snapshot.pathReservations,
+    snapshot.canvasRoutes,
+    snapshot.operations,
+  ]
 }
 
 function rawCloneProjectIndexYDoc(document: Y.Doc): Y.Doc {

@@ -128,6 +128,40 @@ describe("Project/node blob replication store", () => {
     } finally { await fs.rm(root, { recursive: true, force: true }) }
   })
 
+  durabilityTest("reuses an exact durable presence entry without republishing and still verifies its object", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "convax-blob-presence-fast-path-"))
+    try {
+      const directory = await collaborationDirectory(root, "project")
+      const store = await open(directory)
+      const bytes = new TextEncoder().encode("already-durable")
+      const reference = resource(bytes)
+      const published: string[] = []
+      store.subscribePublished((blobDigest) => published.push(blobDigest))
+
+      const first = await store.admitVerifiedBytes(reference, bytes)
+      await expect(store.admitVerifiedBytes(
+        reference,
+        new Uint8Array(bytes.byteLength).fill(0xff),
+      )).rejects.toThrow("match")
+      const second = await store.admitVerifiedBytes(reference, bytes)
+
+      expect(second).toEqual(first)
+      expect(published).toEqual([reference.blob.digest])
+
+      const digestPath = path.join(
+        directory,
+        "blob-replication",
+        "cache",
+        "sha256",
+        reference.blob.digest.slice(0, 2),
+        reference.blob.digest,
+      )
+      await fs.writeFile(digestPath, new Uint8Array(bytes.byteLength).fill(0xff))
+      await expect(store.admitVerifiedBytes(reference, bytes)).rejects.toThrow("digest")
+      expect(published).toEqual([reference.blob.digest])
+    } finally { await fs.rm(root, { recursive: true, force: true }) }
+  })
+
   durabilityTest("persists verified remote ACK but keeps it pending until the same current replica frame ACK exists", async () => {
     const root = await fs.mkdtemp(path.join(os.tmpdir(), "convax-blob-ack-"))
     try {

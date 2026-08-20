@@ -101,6 +101,11 @@ export interface LocalProjectOwnerAuthorityFaults {
   afterCurrentBindingFsync?(): Promise<void>
 }
 
+export interface LocalProjectOwnerAuthorityChange {
+  readonly projectId: ProjectId
+  readonly bindingDigest: Digest
+}
+
 /**
  * Main-private local owner authority. A claim makes random epoch/replica choices
  * retry-stable; the immutable binding is published before any Project bytes use
@@ -109,6 +114,7 @@ export interface LocalProjectOwnerAuthorityFaults {
 export class NodeDurableLocalProjectOwnerAuthority implements DurableLocalProjectOwnerAuthorityResolver {
   private readonly validationArtifacts: ValidationArtifactSet
   private readonly validationArtifactSetDigest: Digest
+  private readonly currentChangeListeners = new Set<(change: LocalProjectOwnerAuthorityChange) => void>()
 
   constructor(
     private readonly options: {
@@ -126,6 +132,13 @@ export class NodeDurableLocalProjectOwnerAuthority implements DurableLocalProjec
     if (!path.isAbsolute(options.rootDirectory)) throw new TypeError("Local Project owner root must be absolute")
     this.validationArtifacts = protocolValidationArtifacts(options.authority)
     this.validationArtifactSetDigest = structuredDigest("convax.validation-artifact-set", this.validationArtifacts)
+  }
+
+  /** Main runtime caches subscribe only to explicit durable current-binding publication. */
+  subscribeCurrentChange(listener: (change: LocalProjectOwnerAuthorityChange) => void): () => void {
+    if (typeof listener !== "function") throw new TypeError("Local Project owner change listener is required")
+    this.currentChangeListeners.add(listener)
+    return () => this.currentChangeListeners.delete(listener)
   }
 
   async ensureForDurableProject(input: {
@@ -235,6 +248,7 @@ export class NodeDurableLocalProjectOwnerAuthority implements DurableLocalProjec
       throw new Error("Local Project owner disappeared after reset preparation")
     }
     await replaceDurably(currentTarget, encodeRestrictedJcs(opened.owner.binding))
+    this.notifyCurrentChange(opened.owner.binding)
   }
 
   async verifyPreparedCheckpointSignature(
@@ -460,9 +474,12 @@ export class NodeDurableLocalProjectOwnerAuthority implements DurableLocalProjec
       "Local Project owner disappeared during rotation",
     )
     const current = parseBindingExact(currentBytes, this.expectedAuthority(previous.projectId))
-    if (current.bindingDigest === binding.bindingDigest)
+    if (current.bindingDigest === binding.bindingDigest) {
+      this.notifyCurrentChange(current)
       return this.openBinding(currentBytes, previous.projectId, currentTarget)
+    }
     if (current.bindingDigest !== previous.bindingDigest || !sameBytes(currentBytes, previousBytes)) {
+      this.notifyCurrentChange(current)
       return this.openOrRotateCurrentBinding(currentBytes, previous.projectId, currentTarget)
     }
     await writeCreateOrExact(
@@ -471,8 +488,20 @@ export class NodeDurableLocalProjectOwnerAuthority implements DurableLocalProjec
     )
     await this.options.faults?.afterRetiredBindingFsync?.()
     await replaceDurably(currentTarget, bindingBytes)
+    this.notifyCurrentChange(binding)
     await this.options.faults?.afterCurrentBindingFsync?.()
     return this.openBinding(bindingBytes, previous.projectId, currentTarget)
+  }
+
+  private notifyCurrentChange(binding: DurableLocalProjectOwnerBinding): void {
+    const change = Object.freeze({ projectId: binding.projectId, bindingDigest: binding.bindingDigest })
+    for (const listener of this.currentChangeListeners) {
+      try {
+        listener(change)
+      } catch {
+        // Authority publication is already durable; observers may only revoke caches.
+      }
+    }
   }
 
   private async assertDurableProjectRoot(projectId: ProjectId, projectRoot: string): Promise<void> {

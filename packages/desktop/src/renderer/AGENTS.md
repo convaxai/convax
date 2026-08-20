@@ -25,6 +25,12 @@ or durable domain authority.
   local response projection before covering its frame digest, skip the matching
   invalidation query, and preserve one trailing query for unknown frames arriving
   during refresh.
+- Prepared and hydrated resource runtime is Canvas-owned transient presentation.
+  Install prepared state only after the accepted projection proves its returned
+  created-node id and exact live owner identity. Send stale hydration as bounded
+  batches of exact live node incarnations and merge returned patches only while each
+  node is still stale and metadata-identical; never replace or request the whole
+  Canvas for resource presentation.
 - Every local Canvas mutation may reserve only a Canvas-owned opaque provisional root
   before the durable lane; Renderer never applies the business command or constructs
   a candidate document. Geometry may attach its already-known presentation result;
@@ -144,6 +150,11 @@ or durable domain authority.
 - Project-directory browsing is a transient read-only projection over the existing
   Project Files capability. Projected entries are not persisted, selected,
   connected, moved, or added to Canvas history.
+- A path-bearing Project filesystem event invalidates only overlapping mounted
+  Project-file nodes; pathless events retain the conservative all-resource fallback.
+  Treat an ancestor directory event as overlap for descendant files, and treat a
+  directory resource as overlapping both ancestors and descendants. Renderer does
+  not infer that a watcher event is an authoritative file mutation.
 - Project file rows render only bounded thumbnail data. Mounted video rows schedule
   bounded-concurrency thumbnail-purpose leases, capture one small Chromium frame,
   and immediately clear the media element and close the lease without waiting for

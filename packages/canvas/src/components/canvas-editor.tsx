@@ -219,8 +219,6 @@ import { snapCanvasNodePositionChanges } from "./canvas-node-snapping"
 import { resolveCanvasOnlyRenderVisibleElements } from "./canvas-node-visibility"
 import { createCanvasFileNode, type CanvasFileRendererRegistry } from "../file-renderer-registry"
 import {
-  assertResourceRef,
-  canvasProjectionResourceMetadataKey,
   canvasGeometryCommand,
   createReadonlyCanvasProjectionBootstrap,
   type CanvasEntityRef,
@@ -229,6 +227,10 @@ import {
 } from "../collaboration"
 import type { CanvasNodeRegistry } from "../node-registry"
 import { CanvasReloadQueue } from "../reload-queue"
+import {
+  canvasCanonicalResourceIdentity,
+  projectCanvasResourceRuntimeStates,
+} from "../resource-runtime-projection"
 import {
   CanvasSelectionActionExecutor,
   createCanvasSelectionActionContext,
@@ -248,19 +250,22 @@ import {
   type CanvasFolderBrowseListing,
   type CanvasFolderBrowsePathEntry,
   type CanvasPendingDraft,
+  type CanvasAcceptedPreparedResourceRuntime,
   type CanvasResourceMutationRequest,
   type CanvasResourceHydrationService,
   type CanvasServices,
   useCanvasService,
 } from "../services"
-import type {
-  CanvasDocument,
-  CanvasEdge,
-  CanvasNode,
-  CanvasPoint,
-  CanvasResourceRuntimeState,
-  CanvasSelection,
-  CanvasSize,
+// Runtime resource values stay at the Canvas-owned transient boundary.
+import {
+  parseCanvasResourceRuntimeState,
+  type CanvasDocument,
+  type CanvasEdge,
+  type CanvasNode,
+  type CanvasPoint,
+  type CanvasResourceRuntimeState,
+  type CanvasSelection,
+  type CanvasSize,
 } from "../types"
 import {
   canRunCanvasShortcutCommand,
@@ -462,35 +467,14 @@ function canvasFileRendererIdentity(node: CanvasNode, registry: CanvasFileRender
   return definition ? `renderer:${definition.id}` : `missing:${node.data.kind}`
 }
 
-function canvasCanonicalResourceIdentity(node: CanvasNode): string | undefined {
-  const metadata = node.data.metadata
-  if (!metadata || typeof metadata !== "object" || Array.isArray(metadata)) return undefined
-  const candidate = (metadata as Record<string, unknown>)[canvasProjectionResourceMetadataKey]
-  try {
-    assertResourceRef(candidate)
-  } catch {
-    return undefined
-  }
-  return [
-    candidate.format,
-    candidate.uri,
-    candidate.mediaClass,
-    candidate.mime,
-    candidate.byteLength,
-    candidate.contentDigest,
-    candidate.ownerProofDigest,
-  ].join("\u0000")
-}
-
 function sameCanvasTransientResourceOwner(
   transient: CanvasTransientResourceState,
   node: CanvasNode,
   entity: CanvasEntityRef | undefined,
 ) {
+  if (transient.entity && !sameCanvasEntity(transient.entity, entity)) return false
   const resourceIdentity = canvasCanonicalResourceIdentity(node)
-  return transient.resourceIdentity !== undefined
-    ? transient.resourceIdentity === resourceIdentity
-    : !transient.entity || sameCanvasEntity(transient.entity, entity)
+  return transient.resourceIdentity !== undefined ? transient.resourceIdentity === resourceIdentity : true
 }
 
 function submitCanvasTransientGeometry(
@@ -670,7 +654,8 @@ export interface CanvasEditorHandle {
   flush: () => Promise<CanvasDocument>
   /** Inserts one registered node type through the ordinary editor flow and returns its id when accepted. */
   insertNode: (type: string) => string | undefined
-  invalidateResources: () => Promise<void>
+  /** Marks and refreshes exact nodes, or every mounted resource when omitted. */
+  invalidateResources: (nodeIds?: readonly string[]) => Promise<void>
   /** Opens Canvas's existing generation surface without exposing its internal query state. */
   openGenerate: () => void
   /** Opens Canvas's existing search surface without exposing its internal query state. */
@@ -757,12 +742,33 @@ export class CanvasResourceRefreshController {
     this.#queue = options.queue ?? new CanvasReloadQueue()
   }
 
-  invalidateResources(): Promise<void> {
+  invalidateResources(nodeIds?: readonly string[]): Promise<void> {
     if (this.#disposed) return Promise.resolve()
+    const exactNodeIds = normalizeCanvasResourceRefreshNodeIds(nodeIds)
+    if (exactNodeIds?.length === 0) return Promise.resolve()
     const current = this.options.current()
-    this.options.replace(this.options.service.markStale(current.document))
+    const serviceMarked = this.options.service.markStale(current.document, exactNodeIds)
+    const marked = exactNodeIds
+      ? selectCanvasMarkedResourceStates(current.document, serviceMarked, exactNodeIds)
+      : serviceMarked
+    this.options.replace(marked)
+    const markedNodes = exactNodeIds ? new Map(marked.nodes.map((node) => [node.id, node])) : undefined
+    const refreshNodeIds = exactNodeIds?.filter((nodeId) => {
+      const node = markedNodes?.get(nodeId)
+      return Boolean(node && isStaleCanvasResourceState(canvasNodeResourceState(node)))
+    })
+    if (refreshNodeIds?.length === 0) return Promise.resolve()
     this.#invalidationGeneration += 1
-    return this.#requestRefresh()
+    return this.#requestRefresh(refreshNodeIds)
+  }
+
+  /** Refreshes already-stale runtime state without widening invalidation. */
+  refreshStaleResources(nodeIds?: readonly string[]): Promise<void> {
+    if (this.#disposed) return Promise.resolve()
+    const exactNodeIds = normalizeCanvasResourceRefreshNodeIds(nodeIds)
+    if (exactNodeIds?.length === 0) return Promise.resolve()
+    this.#invalidationGeneration += 1
+    return this.#requestRefresh(exactNodeIds)
   }
 
   abort() {
@@ -775,13 +781,13 @@ export class CanvasResourceRefreshController {
     this.abort()
   }
 
-  #requestRefresh() {
-    const pending = this.#queue.request(() => this.#refresh())
+  #requestRefresh(nodeIds?: readonly string[]) {
+    const pending = this.#queue.request(() => this.#refresh(nodeIds))
     void pending.catch((error) => this.options.onError?.(error))
     return pending
   }
 
-  async #refresh() {
+  async #refresh(nodeIds?: readonly string[]) {
     if (this.#disposed) return
     const invalidationGeneration = this.#invalidationGeneration
     const requested = this.options.current()
@@ -791,27 +797,35 @@ export class CanvasResourceRefreshController {
     try {
       hydrated = await this.options.service.hydrateStale({
         document: requested.document,
+        ...(nodeIds === undefined ? {} : { nodeIds }),
         signal: controller.signal,
       })
     } catch (error) {
       if (
         !this.#disposed &&
         !controller.signal.aborted &&
-        !isCanvasResourceRefreshTargetCurrent(requested, this.options.current())
+        !isCanvasResourceRefreshTargetCurrent(requested, this.options.current(), nodeIds)
       ) {
-        void this.#requestRefresh()
+        const trailingNodeIds = staleCanvasResourceNodeIds(this.options.current().document)
+        if (trailingNodeIds.length > 0) void this.#requestRefresh(trailingNodeIds)
         return
       }
       throw error
     } finally {
       this.#controllers.delete(controller)
     }
-    if (this.#disposed || controller.signal.aborted || invalidationGeneration !== this.#invalidationGeneration) return
+    if (this.#disposed || controller.signal.aborted) return
+    if (invalidationGeneration !== this.#invalidationGeneration) {
+      const trailingNodeIds = staleCanvasResourceNodeIds(this.options.current().document)
+      if (trailingNodeIds.length > 0) void this.#requestRefresh(trailingNodeIds)
+      return
+    }
 
     const current = this.options.current()
-    const merged = mergeCanvasResourceRefresh(requested, current, hydrated)
+    const merged = mergeCanvasResourceRefresh(requested, current, hydrated, nodeIds)
     if (!merged) {
-      void this.#requestRefresh()
+      const trailingNodeIds = staleCanvasResourceNodeIds(current.document)
+      if (trailingNodeIds.length > 0) void this.#requestRefresh(trailingNodeIds)
       return
     }
     this.options.replace(merged)
@@ -822,17 +836,21 @@ function mergeCanvasResourceRefresh(
   requested: CanvasResourceRefreshSnapshot,
   current: CanvasResourceRefreshSnapshot,
   hydrated: CanvasDocument,
+  nodeIds?: readonly string[],
 ): CanvasDocument | null {
-  if (!isCanvasResourceRefreshTargetCurrent(requested, current) || hydrated.id !== requested.document.id) {
+  if (!isCanvasResourceRefreshTargetCurrent(requested, current, nodeIds) || hydrated.id !== requested.document.id) {
     return null
   }
 
+  const targetNodeIds = nodeIds ? new Set(nodeIds) : undefined
+  const requestedNodes = new Map(requested.document.nodes.map((node) => [node.id, node]))
   const currentNodes = new Map(current.document.nodes.map((node) => [node.id, node]))
   const hydratedNodes = new Map(hydrated.nodes.map((node) => [node.id, node]))
   let changed = false
   let invalid = false
   const nodes = current.document.nodes.map((currentNode) => {
-    const requestedNode = requested.document.nodes.find((node) => node.id === currentNode.id)
+    if (targetNodeIds && !targetNodeIds.has(currentNode.id)) return currentNode
+    const requestedNode = requestedNodes.get(currentNode.id)
     const requestedState = requestedNode ? canvasNodeResourceState(requestedNode) : undefined
     if (!requestedNode || !isStaleCanvasResourceState(requestedState)) return currentNode
     const hydratedNode = hydratedNodes.get(currentNode.id)
@@ -857,6 +875,7 @@ function mergeCanvasResourceRefresh(
 
   for (const requestedNode of requested.document.nodes) {
     if (
+      (!targetNodeIds || targetNodeIds.has(requestedNode.id)) &&
       isStaleCanvasResourceState(canvasNodeResourceState(requestedNode)) &&
       (!currentNodes.has(requestedNode.id) || !hydratedNodes.has(requestedNode.id))
     ) {
@@ -869,14 +888,17 @@ function mergeCanvasResourceRefresh(
 function isCanvasResourceRefreshTargetCurrent(
   requested: CanvasResourceRefreshSnapshot,
   current: CanvasResourceRefreshSnapshot,
+  nodeIds?: readonly string[],
 ) {
   if (
     !isCanvasResourceMutationScopeCurrent(() => current.scope, requested.scope) ||
     current.document.id !== requested.document.id
   )
     return false
+  const targetNodeIds = nodeIds ? new Set(nodeIds) : undefined
   const currentNodes = new Map(current.document.nodes.map((node) => [node.id, node]))
   return requested.document.nodes.every((requestedNode) => {
+    if (targetNodeIds && !targetNodeIds.has(requestedNode.id)) return true
     const requestedState = canvasNodeResourceState(requestedNode)
     if (!isStaleCanvasResourceState(requestedState)) return true
     const currentNode = currentNodes.get(requestedNode.id)
@@ -892,38 +914,74 @@ function canvasNodeResourceState(node: CanvasNode): unknown {
   return node.data.resourceState
 }
 
-function parseCanvasResourceRuntimeState(value: unknown): CanvasResourceRuntimeState | null {
-  if (value === null || typeof value !== "object" || Array.isArray(value)) return null
-  const state = value as Record<string, unknown>
-  if (!["stale", "ready", "missing", "corrupt", "unsupported", "conflict"].includes(String(state.status))) {
-    return null
-  }
-  for (const key of ["contentRevision", "error", "mediaType", "name", "posterUrl", "text", "url"] as const) {
-    if (state[key] !== undefined && typeof state[key] !== "string") return null
-  }
-  for (const key of ["canSaveEditableCopy", "editableText"] as const) {
-    if (state[key] !== undefined && typeof state[key] !== "boolean") return null
-  }
-  return structuredClone(value) as CanvasResourceRuntimeState
-}
-
 function isStaleCanvasResourceState(value: unknown) {
   return value !== null && typeof value === "object" && "status" in value && value.status === "stale"
 }
 
-function canvasResourceHydrationTargetSignature(document: CanvasDocument) {
+function staleCanvasResourceNodeIds(document: CanvasDocument) {
   return document.nodes
-    .flatMap((node) => {
-      if (!isStaleCanvasResourceState(canvasNodeResourceState(node))) return []
-      const canonicalIdentity = canvasCanonicalResourceIdentity(node)
-      if (canonicalIdentity !== undefined) return [`${node.id}\u0000${canonicalIdentity}`]
-      try {
-        return [`${node.id}\u0000${JSON.stringify(node.data.metadata)}`]
-      } catch {
-        return [node.id]
-      }
-    })
-    .join("\u0001")
+    .filter((node) => isStaleCanvasResourceState(canvasNodeResourceState(node)))
+    .map((node) => node.id)
+}
+
+function canvasResourceHydrationTargets(document: CanvasDocument) {
+  const nodeIds: string[] = []
+  const signatures: string[] = []
+  for (const node of document.nodes) {
+    if (!isStaleCanvasResourceState(canvasNodeResourceState(node))) continue
+    nodeIds.push(node.id)
+    const canonicalIdentity = canvasCanonicalResourceIdentity(node)
+    if (canonicalIdentity !== undefined) {
+      signatures.push(`${node.id}\u0000${canonicalIdentity}`)
+      continue
+    }
+    try {
+      signatures.push(`${node.id}\u0000${JSON.stringify(node.data.metadata)}`)
+    } catch {
+      signatures.push(node.id)
+    }
+  }
+  return {
+    nodeIds,
+    signature: signatures.join("\u0001"),
+  }
+}
+
+function normalizeCanvasResourceRefreshNodeIds(nodeIds: readonly string[] | undefined): readonly string[] | undefined {
+  if (nodeIds === undefined) return undefined
+  const unique = new Set<string>()
+  for (const nodeId of nodeIds) {
+    if (typeof nodeId !== "string" || !nodeId.trim()) throw new TypeError("Canvas resource node id is invalid")
+    unique.add(nodeId)
+  }
+  return [...unique]
+}
+
+function selectCanvasMarkedResourceStates(
+  current: CanvasDocument,
+  marked: CanvasDocument,
+  nodeIds: readonly string[],
+): CanvasDocument {
+  if (marked.id !== current.id) return current
+  const targetNodeIds = new Set(nodeIds)
+  const markedNodes = new Map(marked.nodes.map((node) => [node.id, node]))
+  let changed = false
+  const nodes = current.nodes.map((node) => {
+    if (!targetNodeIds.has(node.id)) return node
+    const markedNode = markedNodes.get(node.id)
+    const state = markedNode ? parseCanvasResourceRuntimeState(canvasNodeResourceState(markedNode)) : null
+    if (
+      !markedNode ||
+      state?.status !== "stale" ||
+      !sameCanvasRuntimeValue(node.data.metadata, markedNode.data.metadata)
+    ) {
+      return node
+    }
+    if (sameCanvasRuntimeValue(canvasNodeResourceState(node), state)) return node
+    changed = true
+    return { ...node, data: { ...node.data, resourceState: state } }
+  })
+  return changed ? { ...current, nodes } : current
 }
 
 function sameCanvasRuntimeValue(left: unknown, right: unknown) {
@@ -1291,13 +1349,14 @@ function CanvasEditorContent(
               }
             }),
           }
-    for (const [nodeId, transient] of resourceStates) {
-      const currentNode = document.nodes.find((node) => node.id === nodeId)
-      if (!currentNode) continue
-      const currentEntity = projectionStore.resolveNodeEntity(nodeId)
-      if (!sameCanvasTransientResourceOwner(transient, currentNode, currentEntity)) continue
-      document = replaceCanvasNodeResourceState(document, nodeId, transient.state)
-    }
+    document = projectCanvasResourceRuntimeStates({
+      document,
+      resolve: (node, transient) => {
+        const currentEntity = projectionStore.resolveNodeEntity(node.id)
+        return sameCanvasTransientResourceOwner(transient, node, currentEntity) ? transient.state : null
+      },
+      states: resourceStates,
+    })
     return document
   }, [canonicalDocument, gestureGeometry, pendingGeometry, projectionStore, resourceStates])
   const history = useMemo(
@@ -1733,6 +1792,60 @@ function CanvasEditorContent(
   )
   const replaceRuntimeResourceStatesRef = useRef(replaceRuntimeResourceStates)
   replaceRuntimeResourceStatesRef.current = replaceRuntimeResourceStates
+  const installPreparedResourceStates = useCallback(
+    (preparedResources: readonly CanvasAcceptedPreparedResourceRuntime[] | undefined, createdNodeIds: readonly string[]) => {
+      if (!preparedResources?.length) return
+      const created = new Set(createdNodeIds)
+      setResourceStates((current) => {
+        const accepted = projectionStore.getProjection()
+        if (accepted.id !== documentRef.current.id) return current
+        const acceptedNodes = new Map(accepted.nodes.map((node) => [node.id, node]))
+        const next = new Map(current)
+        const installed = new Set<string>()
+        let changed = false
+        for (const prepared of preparedResources) {
+          if (
+            !prepared ||
+            typeof prepared.nodeId !== "string" ||
+            installed.has(prepared.nodeId) ||
+            !created.has(prepared.nodeId)
+          ) {
+            continue
+          }
+          installed.add(prepared.nodeId)
+          const node = acceptedNodes.get(prepared.nodeId)
+          const state = parseCanvasResourceRuntimeState(prepared.state)
+          const entity = projectionStore.resolveNodeEntity(prepared.nodeId)
+          if (
+            !node ||
+            !state ||
+            !entity ||
+            !sameCanvasEntity(prepared.entity, entity) ||
+            prepared.resourceIdentity !== canvasCanonicalResourceIdentity(node)
+          ) continue
+          const rendererId = canvasFileRendererIdentity(node, props.fileRendererRegistry)
+          const previous = next.get(prepared.nodeId)
+          if (
+            previous &&
+            sameCanvasTransientResourceOwner(previous, node, entity) &&
+            previous.rendererId === rendererId &&
+            sameCanvasRuntimeValue(previous.state, state)
+          ) {
+            continue
+          }
+          next.set(prepared.nodeId, {
+            entity: prepared.entity,
+            rendererId,
+            resourceIdentity: prepared.resourceIdentity,
+            state,
+          })
+          changed = true
+        }
+        return changed ? next : current
+      })
+    },
+    [projectionStore, props.fileRendererRegistry],
+  )
   const registryVersion = useSyncExternalStore(
     props.nodeRegistry.subscribe,
     props.nodeRegistry.getVersion,
@@ -3011,21 +3124,21 @@ function CanvasEditorContent(
             }),
             onError: (error) => notifyErrorRef.current("Could not refresh canvas resources", error),
             queue: reloadQueueRef.current,
-            replace: (document) => replaceRuntimeResourceStatesRef.current(document),
+            replace: (document) => {
+              documentRef.current = document
+              replaceRuntimeResourceStatesRef.current(document)
+            },
             service: hydrationService,
           })
         : undefined,
     [hydrationService],
   )
   useEffect(() => () => resourceRefreshController?.dispose(), [resourceRefreshController])
-  const resourceHydrationTargetSignature = useMemo(
-    () => canvasResourceHydrationTargetSignature(canonicalDocument),
-    [canonicalDocument],
-  )
+  const resourceHydrationTargets = useMemo(() => canvasResourceHydrationTargets(renderedDocument), [renderedDocument])
   useEffect(() => {
-    if (!resourceHydrationTargetSignature) return
-    void resourceRefreshController?.invalidateResources()
-  }, [resourceHydrationTargetSignature, resourceRefreshController])
+    if (!resourceHydrationTargets.signature) return
+    void resourceRefreshController?.refreshStaleResources(resourceHydrationTargets.nodeIds)
+  }, [resourceHydrationTargets.signature, resourceRefreshController])
   const [selectionActionStateVersion, refreshSelectionActionState] = useReducer((version: number) => version + 1, 0)
   const selectionActionsMountedRef = useRef(false)
   const selectionActionErrorRef = useRef(notifyError)
@@ -3468,6 +3581,7 @@ function CanvasEditorContent(
           // notification effects are optional and must not extend saving state.
           if (result.authoritativeProjectionDelivered) settleOptimistic()
           await completeCanvasResourceMutation({
+            afterReload: () => installPreparedResourceStates(result.preparedResources, result.createdNodeIds),
             cancelPreparedNodes: cancelNodeEntries,
             currentScope: () => resourceMutationScopeRef.current,
             operationScope,
@@ -3533,6 +3647,7 @@ function CanvasEditorContent(
       getPostMutationRevealGuard,
       focusCanvasNodes,
       focusOptimisticCanvasGhosts,
+      installPreparedResourceStates,
       mutationService,
       notificationService,
       notifyError,
@@ -3768,8 +3883,8 @@ function CanvasEditorContent(
       insertNode(type) {
         return addNode(type)
       },
-      invalidateResources() {
-        return resourceRefreshController?.invalidateResources() ?? Promise.resolve()
+      invalidateResources(nodeIds) {
+        return resourceRefreshController?.invalidateResources(nodeIds) ?? Promise.resolve()
       },
       openGenerate() {
         requestGenerate()

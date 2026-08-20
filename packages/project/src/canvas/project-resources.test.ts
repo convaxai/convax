@@ -23,6 +23,7 @@ import {
   getProjectResourceReference,
   hydrateProjectCanvasDocument,
   hydrateStaleProjectCanvasResources,
+  isEditableProjectTextPath,
   managedAssetPath,
   markProjectCanvasResourcesStale,
   projectResourceBindingsKey,
@@ -37,6 +38,18 @@ import {
 const readyState = { status: "ready" as const }
 
 describe("Project resource references", () => {
+  test("keeps the v1 Project text editing surface limited to Markdown .md and plain .txt files", () => {
+    expect(["Notes/a.md", "Notes/A.MD", "Notes/a.txt", "Notes/A.TXT"].map(isEditableProjectTextPath)).toEqual([
+      true,
+      true,
+      true,
+      true,
+    ])
+    expect(
+      ["Notes/a.markdown", "Notes/a.text", "Notes/a.rtf", "Notes/a.csv"].map(isEditableProjectTextPath),
+    ).toEqual([false, false, false, false])
+  })
+
   test.each([
     { kind: "project-file", path: "Notes/brief.md" },
     { kind: "project-directory", path: "references/images" },
@@ -219,6 +232,23 @@ describe("Current Project resource resolution", () => {
       resolveCurrentProjectResource({
         currentResources: [
           { materializedPath: "Media/source.mp4", reference: currentReference, storageClass: "project-file" },
+        ],
+        name: "source.mp4",
+        resource,
+      }),
+    ).toEqual({ reference: { kind: "project-file", path: "Media/source.mp4" }, status: "ready" })
+  })
+
+  test("does not make a same-URI different-owner proof ambiguous", () => {
+    const otherProof = {
+      ...currentReference,
+      versionRecordDigest: ordinarySha256(new TextEncoder().encode("different-owner-proof")),
+    }
+    expect(
+      resolveCurrentProjectResource({
+        currentResources: [
+          { materializedPath: "Media/source.mp4", reference: currentReference, storageClass: "project-file" },
+          { materializedPath: "Media/conflict.mp4", reference: otherProof, storageClass: "project-file" },
         ],
         name: "source.mp4",
         resource,

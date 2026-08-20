@@ -111,6 +111,15 @@ historical inputs to the same current decoder; sharing never rewrites or re-sign
 them. A Team handoff must close the local head set before remote admission, and no
 Team enrollment record may be used as a fallback for an absent local owner.
 
+Static local-owner material may be reused only inside one opaque, process-local
+identity of an already-open Project collaboration runtime. Every signing prepare
+still proves that runtime lease is live, rereads the durable Team authority state,
+and checks the exact Project/root/actor binding. A Team transition or rejected Team
+state, local-owner rotation or reset, Project quiesce, final lease release, or
+runtime disposal permanently revokes the old runtime identity and its cached
+material. The cache is never Project-global or TTL-based, cannot reseed a revoked
+identity, and is not a fallback for missing or contradictory authority.
+
 When a registry-bound unshared local Project still has its canonical root but no
 collaboration authority bytes, Project/node may restore a missing `project.json`
 and replay the exact durable local-owner genesis into a new current private store.
@@ -750,6 +759,7 @@ boundary checker fails closed until those admissions are complete.
 | Collaboration membership and control proofs                           | Signed service records plus collaboration kernel         | Service stores proofs, not Project/Canvas payload bytes or edit order                                              |
 | Project sharing activation                                            | Explicit Project sharing capability and durable binding  | Optional and lazy; opening a local Project never implies Team/control-plane startup                                |
 | React Flow graph and gesture state                                    | Transient `@convax/canvas` projection                    | React Flow never owns or persists a competing document                                                             |
+| Prepared and hydrated Canvas resource presentation                    | Transient Canvas-owned runtime overlay                   | Bound to exact node incarnation, canonical resource identity and renderer; never Canvas/Y.Doc persistence          |
 | Focused Project-directory listing                                     | Transient Canvas view plus Project Files port            | Read-only bounded projection; never Canvas document state                                                          |
 | Node generation preference and latest run                             | Owning Canvas `file` node                                | Separate bounded Canvas-owned namespaces; Main coordinates live work                                               |
 | Plugin surface node, Plugin requirement and initial state             | Canvas plugin-surface creation intent                    | Main derives every Plugin-bound fact from one exact ActiveSet lease; Renderer sends only ids                       |
@@ -783,6 +793,13 @@ of `replicaDoc`. A command may affect that authority only by validating one clos
 typed intent in an isolated `candidateDoc`, signing the final frame once, and
 committing those exact bytes through the object/outbox/journal/head barrier before
 applying the accepted delta to `replicaDoc`.
+
+Owner-validated Canvas and ProjectIndex snapshots are immutable values. Their
+process-local path, projection and digest indexes may therefore be weakly
+cached only against the exact snapshot object identity. A newly accepted Y.Doc state
+must produce a new snapshot identity, and cache loss must only repeat deterministic
+derivation. These caches are never serialized, never authorize mutation or recovery,
+and never change reducer output, frame bytes, protocol digest or wire semantics.
 
 Within a mounted Canvas, `CanvasSelection` is the sole selected-element state.
 `CanvasSelectionContext` classifies that set as none, single, multi or mixed so UI
@@ -1135,6 +1152,13 @@ replicates the stored bytes without replaying the intent or re-signing it. No JS
 repository, renderer history, delivery queue, service registry, or global revision
 counter may be kept as a mirror.
 
+Owner-side incremental validation is disposable acceleration: missing evidence falls
+back to full validation. Once an owner arms and seals one candidate transaction, any
+widened write, delete, nested mutation, or later transaction is a stale candidate and
+fails closed; full-schema validation cannot authorize those extra bytes. Every
+operation receipt names retained node/edge records, and one operation id may have only
+one actor receipt.
+
 Project/node may retain a process-local `VerifiedMaterializedHeadCache` only as a
 digest-bound, disposable projection of the exact durable head record, checkpoint
 base, journal tail and reachable frame closure. Every hot-path use first re-reads
@@ -1231,7 +1255,11 @@ ProjectIndex-selected winner. An untracked native edit is retained and reported 
 a reconciliation conflict rather than silently overwritten. Move IPC consumes the
 native operation's explicit source/target correspondence instead of reconstructing
 it by basename, and explicit deletion commits ProjectIndex tombstones before native
-removal. Watcher notifications remain invalidation hints, not an update log.
+removal. Resource publication may query the live ProjectIndex owner for only the
+requested target and ancestor paths; a directory-only result never scans or projects
+unrelated file content families. A complete materialization plan remains the
+compatibility and reconciliation surface, not a required resource-creation hot path.
+Watcher notifications remain invalidation hints, not an update log.
 Desktop owns transport and signer composition; it does not provide a native path or
 choose current content. Replication-cache GC requires a complete injected union of
 Project/Canvas/history/outbox/recovery roots, retains active transfers, waits seven
@@ -1246,9 +1274,21 @@ An ACK journal whose object is missing closes the shard as corrupt even when out
 cleanup is already visible; authorization currentness affects replication status,
 not reconstruction of accepted document state.
 
-Every coalesced Project filesystem event marks the current Project's mounted resource
-snapshots stale; an optional path only prioritizes lazy refresh. Watcher events are not
-an event log. File and directory moves do not rewrite Canvas references in v1. Users
+An external or unknown coalesced Project filesystem event remains fail-open
+invalidation. A bounded debounce batch emits one exact path only when that is the
+sole uncovered external path. Multiple uncovered paths, an unknown path or
+path-capacity overflow emit one pathless fallback that marks every mounted resource
+stale, avoiding work proportional to `watcher paths x Canvas nodes`. A path-bearing
+event marks only overlapping Project-file resources, while a directory resource also
+overlaps descendant events. Because native non-recursive watchers may report an
+ancestor directory, an ancestor path also invalidates its referenced descendants.
+One process-local, one-shot coverage token may suppress the exact same
+`{projectId,path}` event caused by Convax's own no-clobber publication only after the
+publisher re-verifies the published file identity, size and SHA-256 when the watcher
+consumes it. The token is removed before that asynchronous check; mismatch, error,
+duplicate, unknown-path and external events still invalidate. This coverage is not a
+watcher log, durable receipt, debounce window or permission to suppress another
+path. File and directory moves do not rewrite Canvas references in v1. Users
 explicitly relink missing nodes.
 
 Installed Plugins are user-global. Canvas documents persist only the existing file
@@ -2225,6 +2265,23 @@ paths retain the top-left default. The optimistic ghost follows the same origin
 semantics using only its non-authoritative size hint, so the committed card does not
 jump away from the pointer when the authoritative projection arrives.
 
+Prepared resource runtime state is a bounded presentation result, not part of the
+typed intent or durable Canvas node. Main returns it beside the accepted mutation;
+Canvas installs it only after the accepted projection proves the returned created
+node id and exact live incarnation, canonical resource identity and renderer
+identity. A stale or unavailable delivery falls back to ordinary exact-target
+hydration and cannot turn a durable mutation into failure.
+
+Mounted hydration carries a bounded list of exact `{nodeId, entity incarnation}`
+targets from the originating Canvas session. Main validates that lease and every
+live target against its accepted snapshot, clones only those selected nodes for the
+Project hydrator, and repeats the live-target and Workbench-scope checks before
+returning bounded runtime patches. Preload validates the closed DTO, and Renderer
+batches large target sets and merges only still-stale, metadata-identical nodes into
+the transient overlay. Hydration never performs a full Canvas application query,
+returns a whole Canvas projection, persists runtime state, or widens one resource
+invalidation to every node.
+
 ### Creating a generic Plugin Canvas surface
 
 ```text
@@ -2796,6 +2853,16 @@ one explicit refresh fallback. The incompatible bridge change is identified by
 `convax.desktop-ipc/38`; its Canvas session projection carries complete exact
 node- and edge-incarnation tables so guarded visual history cannot hide a reused
 React Flow id.
+
+Exact-target resource hydration and prepared-runtime delivery use the closed
+`convax.desktop-ipc/44` contract. Requests carry the originating Canvas session plus
+bounded exact node entity incarnations; responses carry only validated runtime
+patches for those targets, and resource-add responses may additionally carry
+prepared runtime for their returned created-node ids. Main does not answer this path
+with a full Canvas query, Preload does not synthesize state, and Renderer never treats
+the patches as document or persistence authority. This Desktop IPC release does not
+change the collaboration protocol descriptor, reducer semantics, frame bytes or
+`protocolDigest`.
 
 ## 11. Portable paths and trust boundaries
 

@@ -116,27 +116,43 @@ export function createRouteScopedCanvasFactResolver(input: {
 
 /** Resolves current-resource authority and retained immutable material through distinct Project ports. */
 export function createProjectIndexBackedCanvasExternalFactAuthority(input: {
-  readonly currentResources: Pick<ProjectIndexCurrentResourceReferenceQueryPort, "queryCurrentResourceReferences">
+  readonly currentResources: Pick<
+    ProjectIndexCurrentResourceReferenceQueryPort,
+    "queryCurrentResourceReferences" | "queryCurrentResourceReferencesExact"
+  >
   readonly availableBlobs: Pick<ProjectBlobAvailabilityQueryPort, "queryAvailableBlobs">
 }): CanvasRouteExternalFactAuthority {
   return Object.freeze({
     async verify(request: Parameters<CanvasRouteExternalFactAuthority["verify"]>[0]) {
       request.signal?.throwIfAborted()
       if (request.request.kind === "current-resources") {
-        const current = await input.currentResources.queryCurrentResourceReferences({
+        const queryExact = input.currentResources.queryCurrentResourceReferencesExact
+        if (!queryExact) return "rejected"
+        const current = await queryExact.call(input.currentResources, {
           projectId: request.scope.projectId,
+          targets: Object.freeze(request.request.proofs.map((proof) => Object.freeze({
+            uri: proof.resource.uri,
+            ownerProofDigest: proof.ownerProofDigest,
+          }))),
         })
         request.signal?.throwIfAborted()
-        return request.request.proofs.every((proof) => current.some((reference) => {
+        const currentByProof = new Map<string, (typeof current)[number]>()
+        for (const reference of current) {
+          const key = resourceProofKey(reference.canonicalUri, projectIndexResourceReferenceDigest(reference))
+          if (currentByProof.has(key)) return "rejected"
+          currentByProof.set(key, reference)
+        }
+        return request.request.proofs.every((proof) => {
+          const reference = currentByProof.get(resourceProofKey(proof.resource.uri, proof.ownerProofDigest))
+          if (!reference) return false
           const digest = projectIndexResourceReferenceDigest(reference)
           return proof.ownerProofDigest === digest &&
             proof.resource.ownerProofDigest === digest &&
-            proof.resource.uri === reference.canonicalUri &&
             proof.resource.contentDigest === reference.blob.digest &&
             proof.resource.byteLength === reference.blob.byteLength &&
             proof.resource.mime === reference.blob.mime &&
             proof.resource.mediaClass === mediaClassForMime(reference.blob.mime)
-        })) ? "verified" : "rejected"
+        }) ? "verified" : "rejected"
       }
       if (request.request.kind !== "retained-resources") return "pending"
       const wanted = request.request.proofs.map((proof) => Object.freeze({
@@ -216,6 +232,10 @@ function mediaClassForMime(mime: string): "text" | "image" | "video" | "audio" |
 
 function blobKey(blob: { readonly blobSha256: string; readonly byteLength: string }): string {
   return `${blob.blobSha256}\0${blob.byteLength}`
+}
+
+function resourceProofKey(uri: string, ownerProofDigest: string): string {
+  return `${uri}\0${ownerProofDigest}`
 }
 
 function sameScope(left: DocumentScope, right: DocumentScope): boolean {

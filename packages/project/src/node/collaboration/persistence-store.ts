@@ -235,6 +235,7 @@ export interface NodeCollaborationPersistenceFaultHooks {
   afterHeadTempFsync?(): Promise<void>
   afterHeadRename?(): Promise<void>
   afterHeadDirectoryFsync?(): Promise<void>
+  beforeHeadCacheInstall?(): Promise<void>
 }
 
 export type NodeDurabilityBarrierKind = "directory-sync" | "file-sync"
@@ -476,14 +477,20 @@ interface VerifiedMaterializedHeadCache {
   readonly journalBaseDigest: Digest
   readonly journalTailDigest: Digest
   readonly installedCheckpointSetDigest: Digest
-  readonly acceptedHead: NodeAcceptedReplicaHead
-  readonly reachableFrameDigests: ReadonlySet<Digest>
+  readonly acceptedHead: InternallyOwnedAcceptedHead
+  readonly reachableFrameDigests: InternallyOwnedReachableFrameDigests
 }
 
 const INTERNALLY_OWNED_HEAD = Symbol("convax.project.node.internally-owned-head")
 
 type InternallyOwnedAcceptedHead = NodeAcceptedReplicaHead & {
   readonly [INTERNALLY_OWNED_HEAD]: true
+}
+
+const INTERNALLY_OWNED_REACHABLE_FRAME_DIGESTS = Symbol("convax.project.node.internally-owned-reachable-frame-digests")
+
+type InternallyOwnedReachableFrameDigests = Set<Digest> & {
+  readonly [INTERNALLY_OWNED_REACHABLE_FRAME_DIGESTS]: true
 }
 
 interface PendingHeadTransition {
@@ -493,7 +500,8 @@ interface PendingHeadTransition {
   readonly frameDigest: Digest
   readonly resultingFrontierDigest: Digest
   readonly acceptedHead: InternallyOwnedAcceptedHead
-  readonly reachableFrameDigests: ReadonlySet<Digest>
+  /** The prior durable head's private set. The pending frame is added only after the head barrier. */
+  readonly reachableFrameDigests: InternallyOwnedReachableFrameDigests
 }
 
 interface IndexedOperationFrame {
@@ -709,7 +717,7 @@ export class NodeCollaborationPersistence implements CollaborationPersistencePor
         await fsyncProjectDirectory(layout.directory)
         const headDigest = localRecordDigest(head)
         const accepted = freezeHead(input.acceptedBase, headDigest)
-        this.storeMaterializedHeadCache(layout, head, headDigest, accepted, new Set())
+        this.storeMaterializedHeadCache(layout, head, headDigest, accepted, createOwnedReachableFrameDigests())
         return freezeHead(accepted, headDigest)
       } catch (error) {
         throw classifyNativeFailure(error)
@@ -839,7 +847,13 @@ export class NodeCollaborationPersistence implements CollaborationPersistencePor
       throw new NodeCollaborationPersistenceError("store-corrupt", "Canvas genesis retry bytes do not match the durable shard")
     }
     const accepted = freezeHead(input.acceptedBase, durable.digest)
-    this.storeMaterializedHeadCache(layout, durable.record, durable.digest, accepted, new Set())
+    this.storeMaterializedHeadCache(
+      layout,
+      durable.record,
+      durable.digest,
+      accepted,
+      createOwnedReachableFrameDigests(),
+    )
     return freezeHead(accepted, durable.digest)
   }
 
@@ -1000,7 +1014,6 @@ export class NodeCollaborationPersistence implements CollaborationPersistencePor
           if (existing.digest !== journalDigest) corrupt("Checkpoint journal sequence is occupied by another transition")
         } else {
           await writeDurableNewFile(journalPath, encodeRecord(journalRecord))
-          await fsyncProjectDirectory(layout.journalSegments)
           await this.hooks.afterJournalFileFsync?.()
         }
         const head: LocalDurableHead = {
@@ -1010,18 +1023,25 @@ export class NodeCollaborationPersistence implements CollaborationPersistencePor
           journalTailDigest: journalDigest,
           installedCheckpointSetDigest: installedSetDigest,
         }
-        await replaceDurableRecord(layout.durableHead, head, this.hooks)
         const resultingHeadDigest = localRecordDigest(head)
         const previousCache = this.requireMaterializedHeadCache(layout, current.record, current.digest)
-        this.storeMaterializedHeadCache(
-          layout,
-          head,
-          resultingHeadDigest,
-          currentAcceptedHead,
-          previousCache.reachableFrameDigests,
-        )
+        const transferredHead = rebindOwnedHead(previousCache.acceptedHead, resultingHeadDigest)
+        this.assertMaterializedHeadCacheMatches(head, transferredHead)
         const exposed = await this.materializeInstalledCheckpointBase(layout, input.scope, installedSet)
         assertSameAcceptedState(exposed, currentAcceptedHead, this.materializer)
+        await replaceDurableRecord(layout.durableHead, head, this.hooks)
+        try {
+          if (this.hooks.beforeHeadCacheInstall) await this.hooks.beforeHeadCacheInstall()
+          this.installTransferredMaterializedHeadCache(
+            layout,
+            head,
+            resultingHeadDigest,
+            transferredHead,
+            previousCache.reachableFrameDigests,
+          )
+        } catch {
+          this.invalidateMaterializedState(layout)
+        }
         return {
           status: "committed",
           installedCheckpointSetDigest: installedSetDigest,
@@ -1162,7 +1182,7 @@ export class NodeCollaborationPersistence implements CollaborationPersistencePor
           candidateHead,
           candidateHeadDigest,
           installedBase,
-          new Set(),
+          createOwnedReachableFrameDigests(),
         )
         await replaceDurableRecord(layout.activePrunePlan, activePrunePlan(input.scope, planDigest, "head-published"))
         const secondScan = normalizePruneRootScan(await rootScanner.scanComplete({
@@ -1390,7 +1410,6 @@ export class NodeCollaborationPersistence implements CollaborationPersistencePor
       const measurement = this.measurement(attemptId, ref, "journal")
       const encodedRecord = await this.profileLocalStep(attemptId, ref, "journal", "encode", () => encodeRecord(record))
       await writeDurableNewFile(target, encodedRecord, measurement, this.durabilityDiagnostics)
-      await syncDirectory(layout.journalSegments, measurement, this.durabilityDiagnostics)
       await this.hooks.afterJournalFileFsync?.()
       const previousCache = await this.profileLocalStep(attemptId, ref, "journal", "cache", () =>
         this.requireMaterializedHeadCache(layout, head.record, head.digest),
@@ -1402,7 +1421,7 @@ export class NodeCollaborationPersistence implements CollaborationPersistencePor
         frameDigest: ref.frameDigest,
         resultingFrontierDigest: next.frontierDigest,
         acceptedHead: freezeOwnedHead(next, head.digest),
-        reachableFrameDigests: new Set([...previousCache.reachableFrameDigests, ref.frameDigest]),
+        reachableFrameDigests: previousCache.reachableFrameDigests,
       })
       return Object.freeze({ ref, journalRecordDigest })
     })
@@ -1458,7 +1477,7 @@ export class NodeCollaborationPersistence implements CollaborationPersistencePor
         const pending = this.pendingHeadTransitions.get(layout.directory)
         let next: NodeAcceptedReplicaHead
         let transferredNext: InternallyOwnedAcceptedHead | undefined
-        let reachableFrameDigests: ReadonlySet<Digest>
+        let reachableFrameDigests: InternallyOwnedReachableFrameDigests
         if (
           pending &&
           pending.expectedHeadDigest === current.digest &&
@@ -1467,15 +1486,15 @@ export class NodeCollaborationPersistence implements CollaborationPersistencePor
           pending.frameDigest === input.ref.frameDigest &&
           pending.resultingFrontierDigest === input.resultingFrontierDigest
         ) {
-          transferredNext = rebindOwnedHead(pending.acceptedHead, current.digest)
-          next = transferredNext
+          transferredNext = pending.acceptedHead
+          next = pending.acceptedHead
           reachableFrameDigests = pending.reachableFrameDigests
         } else {
           this.pendingHeadTransitions.delete(layout.directory)
           const previous = await this.reconstructHead(layout, input.ref.scope, current.record, current.digest)
           const previousCache = this.requireMaterializedHeadCache(layout, current.record, current.digest)
           next = await this.materializer.applyAcceptedFrame({ previous, ref: input.ref, exactBytes: frame })
-          reachableFrameDigests = new Set([...previousCache.reachableFrameDigests, input.ref.frameDigest])
+          reachableFrameDigests = previousCache.reachableFrameDigests
         }
         validateAcceptedBase(next, input.ref.scope)
         if (next.frontierDigest !== input.resultingFrontierDigest) corrupt("Materialized frontier differs from journal and Kernel")
@@ -1490,6 +1509,11 @@ export class NodeCollaborationPersistence implements CollaborationPersistencePor
           acceptedFrontierDigest: next.frontierDigest,
           acceptedActorHeadsDigest: this.materializer.actorHeadsDigest(next.actorHeads),
         }
+        const headDigest = localRecordDigest(head)
+        const ownedNext = transferredNext
+          ? rebindOwnedHead(transferredNext, headDigest)
+          : freezeOwnedHead(next, headDigest)
+        this.assertMaterializedHeadCacheMatches(head, ownedNext)
         await replaceDurableRecord(
           layout.durableHead,
           head,
@@ -1497,15 +1521,16 @@ export class NodeCollaborationPersistence implements CollaborationPersistencePor
           this.measurement(attemptId, input.ref, "head"),
           this.durabilityDiagnostics,
         )
-        const headDigest = localRecordDigest(head)
-        await this.profileLocalStep(attemptId, input.ref, "head", "cache", () => {
-          if (transferredNext) {
-            this.storeTransferredMaterializedHeadCache(layout, head, headDigest, transferredNext, reachableFrameDigests)
-          } else {
-            this.storeMaterializedHeadCache(layout, head, headDigest, next, reachableFrameDigests)
+        await this.profileLocalStep(attemptId, input.ref, "head", "cache", async () => {
+          try {
+            if (this.hooks.beforeHeadCacheInstall) await this.hooks.beforeHeadCacheInstall()
+            reachableFrameDigests.add(input.ref.frameDigest)
+            this.installTransferredMaterializedHeadCache(layout, head, headDigest, ownedNext, reachableFrameDigests)
+          } catch {
+            this.invalidateMaterializedState(layout)
           }
           this.pendingHeadTransitions.delete(layout.directory)
-          this.materializer.observeAcceptedFrame?.(input.ref, frame)
+          this.observeAcceptedFrame(input.ref, frame)
         })
         return committedEvidence(input, headDigest)
       } catch (error) {
@@ -1763,7 +1788,6 @@ export class NodeCollaborationPersistence implements CollaborationPersistencePor
         if (existing.digest !== journalDigest) corrupt("ACK journal sequence is occupied by another transition")
       } else {
         await writeDurableNewFile(journalPath, encodeRecord(journalRecord))
-        await fsyncProjectDirectory(layout.journalSegments)
         await this.hooks.afterJournalFileFsync?.()
       }
       const head: LocalDurableHead = {
@@ -1886,15 +1910,14 @@ export class NodeCollaborationPersistence implements CollaborationPersistencePor
     await replaceDurableRecord(layout.durableHead, head)
     const headDigest = localRecordDigest(head)
     const priorCache = this.requireMaterializedHeadCache(layout, current.record, current.digest)
-    this.storeMaterializedHeadCache(
-      layout,
-      head,
-      headDigest,
-      next,
-      new Set([...priorCache.reachableFrameDigests, ref.frameDigest]),
-    )
+    priorCache.reachableFrameDigests.add(ref.frameDigest)
+    try {
+      this.storeMaterializedHeadCache(layout, head, headDigest, next, priorCache.reachableFrameDigests)
+    } catch {
+      this.invalidateMaterializedState(layout)
+    }
     this.pendingHeadTransitions.delete(layout.directory)
-    this.materializer.observeAcceptedFrame?.(ref, frame)
+    this.observeAcceptedFrame(ref, frame)
   }
 
   private async reconstructHead(
@@ -1923,7 +1946,7 @@ export class NodeCollaborationPersistence implements CollaborationPersistencePor
       base.digest,
     )
     const records = await this.readReachableJournals(layout, scope, head)
-    const reachableFrameDigests = new Set<Digest>()
+    const reachableFrameDigests = createOwnedReachableFrameDigests()
     for (const journal of records) {
       if (!isFrameJournal(journal.record)) {
         if (journal.record.resultingFrontierDigest !== current.frontierDigest) corrupt("Metadata journal changes the accepted frontier")
@@ -1940,7 +1963,7 @@ export class NodeCollaborationPersistence implements CollaborationPersistencePor
       current = freezeHead(await this.materializer.applyAcceptedFrame({ previous: current, ref, exactBytes: frame }), journal.digest)
       reachableFrameDigests.add(ref.frameDigest)
       if (current.frontierDigest !== journal.record.resultingFrontierDigest) corrupt("Reopened frame produces a different frontier")
-      this.materializer.observeAcceptedFrame?.(ref, frame)
+      this.observeAcceptedFrame(ref, frame)
     }
     if (current.frontierDigest !== head.acceptedFrontierDigest) corrupt("Reopened frontier differs from durable head")
     if (this.materializer.actorHeadsDigest(current.actorHeads) !== head.acceptedActorHeadsDigest) corrupt("Reopened actor heads differ from durable head")
@@ -2131,13 +2154,15 @@ export class NodeCollaborationPersistence implements CollaborationPersistencePor
     head: LocalDurableHead,
     headDigest: Digest,
     acceptedHead: NodeAcceptedReplicaHead,
-    reachableFrameDigests: ReadonlySet<Digest>,
+    reachableFrameDigests: InternallyOwnedReachableFrameDigests,
   ): void {
-    this.storeTransferredMaterializedHeadCache(
+    const defensiveHead = freezeOwnedHead(acceptedHead, headDigest)
+    this.assertMaterializedHeadCacheMatches(head, defensiveHead)
+    this.installTransferredMaterializedHeadCache(
       layout,
       head,
       headDigest,
-      freezeOwnedHead(acceptedHead, headDigest),
+      defensiveHead,
       reachableFrameDigests,
     )
   }
@@ -2147,12 +2172,9 @@ export class NodeCollaborationPersistence implements CollaborationPersistencePor
    * away from every caller-visible value. This is intentionally not a general
    * no-copy option: only freezeOwnedHead/rebindOwnedHead can construct its brand.
    */
-  private storeTransferredMaterializedHeadCache(
-    layout: DocumentLayout,
+  private assertMaterializedHeadCacheMatches(
     head: LocalDurableHead,
-    headDigest: Digest,
     defensiveHead: InternallyOwnedAcceptedHead,
-    reachableFrameDigests: ReadonlySet<Digest>,
   ): void {
     if (
       defensiveHead.frontierDigest !== head.acceptedFrontierDigest ||
@@ -2160,6 +2182,15 @@ export class NodeCollaborationPersistence implements CollaborationPersistencePor
     ) {
       corrupt("Materialized cache differs from the exact durable head")
     }
+  }
+
+  private installTransferredMaterializedHeadCache(
+    layout: DocumentLayout,
+    head: LocalDurableHead,
+    headDigest: Digest,
+    defensiveHead: InternallyOwnedAcceptedHead,
+    reachableFrameDigests: InternallyOwnedReachableFrameDigests,
+  ): void {
     this.materializedHeadCaches.set(layout.directory, {
       durableHeadDigest: headDigest,
       localHeadGeneration: head.localHeadGeneration,
@@ -2167,8 +2198,16 @@ export class NodeCollaborationPersistence implements CollaborationPersistencePor
       journalTailDigest: head.journalTailDigest,
       installedCheckpointSetDigest: head.installedCheckpointSetDigest,
       acceptedHead: defensiveHead,
-      reachableFrameDigests: new Set(reachableFrameDigests),
+      reachableFrameDigests,
     })
+  }
+
+  private observeAcceptedFrame(ref: FrameObjectRef, exactBytes: Readonly<Uint8Array>): void {
+    try {
+      this.materializer.observeAcceptedFrame?.(ref, exactBytes)
+    } catch {
+      // This observer accelerates causal-closure lookups; it cannot negate an accepted durable head.
+    }
   }
 
   private requireMaterializedHeadCache(
@@ -2644,6 +2683,19 @@ function rebindOwnedHead(
     canonicalStateDigest: input.canonicalStateDigest,
     [INTERNALLY_OWNED_HEAD]: true as const,
   })
+}
+
+function createOwnedReachableFrameDigests(
+  values: Iterable<Digest> = [],
+): InternallyOwnedReachableFrameDigests {
+  const result = new Set(values) as InternallyOwnedReachableFrameDigests
+  Object.defineProperty(result, INTERNALLY_OWNED_REACHABLE_FRAME_DIGESTS, {
+    value: true,
+    enumerable: false,
+    configurable: false,
+    writable: false,
+  })
+  return result
 }
 
 function validateAcceptedBase(input: Omit<NodeAcceptedReplicaHead, "headDigest"> | NodeAcceptedReplicaHead, scope: DocumentScope): void {

@@ -155,6 +155,12 @@ contract and its routed references.
   projection. Ghost/token/visual-history values never cross preload or IPC. Resource
   preparation remains in Main; post-commit session delivery may be unavailable
   without changing durable success, in which case Renderer performs one refresh.
+- Prepared resource runtime may cross only beside its accepted created-node ids, and
+  stale hydration carries bounded exact node incarnations and returns target-only
+  runtime patches. Main validates the originating session and live targets before
+  and after hydration; Preload strictly validates the closed DTO; Renderer batches
+  and installs patches only as Canvas-owned transient presentation. This path never
+  queries or transports a whole Canvas and never persists runtime state.
 - The strict session projection carries exact node and edge incarnation tables for
   guarded presentation only. Provisional visual roots and renderer-decoded image
   hints remain Canvas-owned transient state; Main binds history to durable roots and

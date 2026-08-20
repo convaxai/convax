@@ -27,6 +27,33 @@ export interface CanvasResourceRuntimeState {
   url?: string
 }
 
+const canvasResourceRuntimeStatuses = new Set<CanvasResourceStatus>([
+  "stale",
+  "ready",
+  "missing",
+  "corrupt",
+  "unsupported",
+  "conflict",
+])
+
+/**
+ * Parses host-prepared resource presentation state for Canvas's transient
+ * runtime overlay. The returned value is detached from the caller and is never
+ * a persistence payload.
+ */
+export function parseCanvasResourceRuntimeState(value: unknown): CanvasResourceRuntimeState | null {
+  if (value === null || typeof value !== "object" || Array.isArray(value)) return null
+  const state = value as Record<string, unknown>
+  if (!canvasResourceRuntimeStatuses.has(state.status as CanvasResourceStatus)) return null
+  for (const key of ["contentRevision", "error", "mediaType", "name", "posterUrl", "text", "url"] as const) {
+    if (state[key] !== undefined && typeof state[key] !== "string") return null
+  }
+  for (const key of ["canSaveEditableCopy", "editableText"] as const) {
+    if (state[key] !== undefined && typeof state[key] !== "boolean") return null
+  }
+  return structuredClone(value) as CanvasResourceRuntimeState
+}
+
 export interface CanvasBaseNodeData extends Record<string, unknown> {
   kind: string
   label: string

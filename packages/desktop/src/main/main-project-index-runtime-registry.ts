@@ -348,7 +348,7 @@ export class MainProjectIndexRuntimeRegistry
       readonly projects: Pick<NodeProjectCollaborationRuntimeCoordinator, "acquire" | "resolveProjectRoot">
       readonly firstRegistration: MainProjectIndexFirstRegistrationPort
       readonly materializers: ProjectCollaborationMaterializerRegistry
-      readonly localAuthority: CurrentLocalReplicaAuthoritySource
+      readonly localAuthority: (project: ProjectCollaborationRuntimeLease) => CurrentLocalReplicaAuthoritySource
       readonly incomingAuthority: IncomingReplicaAuthoritySource
       readonly signatureVerifier: CollaborationKernelOptions["signatureVerifier"]
       readonly createOperationId: () => Id128
@@ -386,9 +386,31 @@ export class MainProjectIndexRuntimeRegistry
     return (await this.open(projectId)).application.queryCurrentResources({ projectId })
   }
 
+  async queryCurrentResourcesExact(
+    input: Parameters<NonNullable<ProjectIndexCurrentBlobReferencePort["queryCurrentResourcesExact"]>>[0],
+  ) {
+    const projectId = parseProjectId(input.projectId)
+    const application = (await this.open(projectId)).application
+    if (!application.queryCurrentResourcesExact) {
+      throw new Error("ProjectIndex exact current-resource projection is unavailable")
+    }
+    return application.queryCurrentResourcesExact({ projectId, targets: input.targets })
+  }
+
   async queryCurrentResourceReferences(input: { readonly projectId: ProjectId }) {
     const projectId = parseProjectId(input.projectId)
     return (await this.open(projectId)).application.queryCurrentResourceReferences({ projectId })
+  }
+
+  async queryCurrentResourceReferencesExact(
+    input: Parameters<NonNullable<ProjectIndexCurrentResourceReferenceQueryPort["queryCurrentResourceReferencesExact"]>>[0],
+  ) {
+    const projectId = parseProjectId(input.projectId)
+    const application = (await this.open(projectId)).application
+    if (!application.queryCurrentResourceReferencesExact) {
+      throw new Error("ProjectIndex exact current-resource reference query is unavailable")
+    }
+    return application.queryCurrentResourceReferencesExact({ projectId, targets: input.targets })
   }
 
   async queryAvailableBlobs(input: Parameters<ProjectBlobAvailabilityQueryPort["queryAvailableBlobs"]>[0]) {
@@ -426,6 +448,20 @@ export class MainProjectIndexRuntimeRegistry
   ) {
     const projectId = parseProjectId(input.projectId)
     return (await this.open(projectId)).fileApplication.queryFileMaterializationPlan({ projectId })
+  }
+
+  async queryFileMaterializationEntries(
+    input: Parameters<NonNullable<ProjectIndexFileMaterializationProjectionPort["queryFileMaterializationEntries"]>>[0],
+  ) {
+    const projectId = parseProjectId(input.projectId)
+    const projection = (await this.open(projectId)).fileApplication
+    if (!projection.queryFileMaterializationEntries) {
+      throw new Error("ProjectIndex exact file materialization projection is unavailable")
+    }
+    return projection.queryFileMaterializationEntries({
+      projectId,
+      paths: input.paths,
+    })
   }
 
   async quiesceProject(projectIdInput: string): Promise<void> {
@@ -496,7 +532,7 @@ export class MainProjectIndexRuntimeRegistry
         scope: registeredScope,
         owner,
         actorId: project.localActorId,
-        localAuthority: this.options.localAuthority,
+        localAuthority: this.options.localAuthority(project),
         incomingAuthority: this.options.incomingAuthority,
         incomingFacts: descriptor.incomingFacts,
         createDocument: descriptor.createDocument,

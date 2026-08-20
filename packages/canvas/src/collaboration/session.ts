@@ -47,6 +47,7 @@ import type { CanvasOptimisticOverlaySnapshot } from "../optimistic-overlay"
 import { canvasOwnerCanonicalizerDescriptor, operationKey } from "./validation"
 import { CanvasOwnerStateCache } from "./owner-state-cache"
 import { validateCanvasYDoc } from "./ydoc"
+import { isSealedCanvasSnapshotMap } from "./persistent-append-map"
 
 interface CanvasOwnerResultValue {
   readonly ownerOpaqueResult: CanvasIntentApplyResult
@@ -206,14 +207,15 @@ function createCanvasProtocolDefinition(
         const baseSnapshot = canvasSnapshotFromValidatedOwnerState(_base)
         if (baseSnapshot === null) return "rejected"
         const fast = consumeCanvasDuplicateValidatedPost(candidate, baseSnapshot, value.ownerOpaqueResult)
+        if (fast.status === "stale-candidate") return "rejected"
         const before = stateCache.traversalCounts().fullValidation
-        const snapshot = fast?.snapshot ?? stateCache.validate(candidate)
+        const snapshot = fast.status === "accepted" ? fast.snapshot : stateCache.validate(candidate)
         if (stateCache.traversalCounts().fullValidation !== before)
           recordCanvasOwnerDiagnostic(diagnostics, "full-validation")
         stateCache.installValidatedSnapshot(
           candidate,
           snapshot,
-          fast
+          fast.status === "accepted"
             ? {
                 base: baseSnapshot,
                 changed: fast.changed,
@@ -323,11 +325,15 @@ export function canvasSnapshotFromValidatedOwnerState(
   if (
     typeof value !== "object" ||
     value === null ||
-    !(value as { nodes?: unknown }).nodes ||
-    !((value as { nodes: unknown }).nodes instanceof Map) ||
-    !((value as { edges?: unknown }).edges instanceof Map) ||
-    !((value as { semanticHistory?: unknown }).semanticHistory instanceof Map) ||
-    !((value as { operations?: unknown }).operations instanceof Map)
+    !isSealedCanvasSnapshotMap((value as { nodes?: unknown }).nodes) ||
+    !isSealedCanvasSnapshotMap((value as { edges?: unknown }).edges) ||
+    !isSealedCanvasSnapshotMap((value as { containments?: unknown }).containments) ||
+    !isSealedCanvasSnapshotMap((value as { generationBegins?: unknown }).generationBegins) ||
+    !isSealedCanvasSnapshotMap((value as { generationTerminals?: unknown }).generationTerminals) ||
+    !isSealedCanvasSnapshotMap((value as { generationDismissals?: unknown }).generationDismissals) ||
+    !isSealedCanvasSnapshotMap((value as { generationRecoveryFailures?: unknown }).generationRecoveryFailures) ||
+    !isSealedCanvasSnapshotMap((value as { semanticHistory?: unknown }).semanticHistory) ||
+    !isSealedCanvasSnapshotMap((value as { operations?: unknown }).operations)
   )
     return null
   return value as CanvasSnapshot

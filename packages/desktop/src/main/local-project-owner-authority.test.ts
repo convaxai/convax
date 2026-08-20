@@ -72,7 +72,10 @@ describe("durable local Project owner authority", () => {
 
   test("rotates a missing local key without changing the Project epoch or historical binding", async () => {
     const fixture = await createFixture()
-    const previous = await fixture.owner().ensureForDurableProject(fixture.input)
+    const authority = fixture.owner()
+    const changes: string[] = []
+    authority.subscribeCurrentChange((change) => changes.push(change.bindingDigest))
+    const previous = await authority.ensureForDurableProject(fixture.input)
     const message = Buffer.alloc(32, 19)
     const previousSignature = await previous.signer.sign(message)
     const [keyEntry] = await fs.readdir(fixture.keyRoot)
@@ -86,7 +89,7 @@ describe("durable local Project owner authority", () => {
     await fs.rm(path.join(fixture.userData, "owners", "rotation-claims"), { recursive: true })
     await fs.rm(path.join(fixture.userData, "owners", "rotation-bindings"), { recursive: true })
 
-    const rotated = await fixture.owner().resolveCurrent({
+    const rotated = await authority.resolveCurrent({
       projectId: previous.binding.projectId,
       projectEpoch: previous.binding.projectEpoch,
     })
@@ -103,6 +106,7 @@ describe("durable local Project owner authority", () => {
     expect(current.binding.replicaId).not.toBe(previous.binding.replicaId)
     expect(current.binding.actorId).not.toBe(previous.binding.actorId)
     expect(current.binding.bindingDigest).not.toBe(previous.binding.bindingDigest)
+    expect(changes).toEqual([current.binding.bindingDigest])
     await expect(
       fixture.owner().resolveBindingExact({
         projectId: previous.binding.projectId,

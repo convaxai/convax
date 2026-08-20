@@ -11,14 +11,40 @@ const CANONICAL_KEYS = Object.freeze([
 ] as const)
 type CanonicalKey = (typeof CANONICAL_KEYS)[number]
 type CollectionKey = Exclude<CanonicalKey, "format" | "identity" | "meta">
-interface CanonicalPair { readonly key: string; readonly value: unknown; readonly bytes: Uint8Array; readonly evidence: CanonicalJcsEvidence }
+interface CanonicalPair {
+  readonly key: string
+  readonly tuple: readonly [string, unknown]
+  readonly evidence: CanonicalJcsEvidence
+}
+interface CanonicalPairNode {
+  readonly key: string
+  readonly pair: CanonicalPair
+  readonly height: number
+  readonly left: CanonicalPairNode | null
+  readonly right: CanonicalPairNode | null
+}
+interface CanonicalPairCollection {
+  readonly anchor: readonly CanonicalPair[]
+  readonly delta: CanonicalPairNode | null
+  readonly deltaSize: number
+  readonly size: number
+}
 interface CanonicalFragments {
   readonly values: ReadonlyMap<CanonicalKey, Uint8Array>
-  readonly pairs: ReadonlyMap<CollectionKey, readonly CanonicalPair[]>
+  readonly pairs: ReadonlyMap<CollectionKey, CanonicalPairCollection>
+  readonly evidences: ReadonlyMap<CanonicalKey, CanonicalJcsEvidence>
   readonly evidence: CanonicalJcsEvidence
-  readonly bytes: Uint8Array
 }
 const fragmentsBySnapshot = new WeakMap<CanvasSnapshot, CanonicalFragments>()
+const bytesByPairCollection = new WeakMap<CanonicalPairCollection, Uint8Array>()
+const bytesByPair = new WeakMap<CanonicalPair, Uint8Array>()
+let canonicalAssemblies = 0
+let collectionByteAssemblies = 0
+let incrementalChangedCollectionByteAssemblies = 0
+let pairByteEncodes = 0
+let incrementalHistoricalPairCopies = 0
+let evidenceArrayEntries = 0
+let unchangedFragmentByteCopies = 0
 
 interface CacheEntry {
   root: unknown
@@ -58,10 +84,17 @@ export class CanvasOwnerStateCache {
       this.canonicalTraversals += 1
       const snapshot = this.validate(document)
       if (issuer) {
-        const fragments = createFragments(snapshot, issuer)
-        fragmentsBySnapshot.set(snapshot, fragments)
-        entry.canonicalBytes = fragments.bytes
-        entry.canonicalEvidence = fragments.evidence
+        try {
+          const fragments = fragmentsBySnapshot.get(snapshot) ?? createFragments(snapshot, issuer)
+          if (!fragmentsBySnapshot.has(snapshot)) fragmentsBySnapshot.set(snapshot, fragments)
+          entry.canonicalBytes = assemble(fragments)
+          entry.canonicalEvidence = fragments.evidence
+        } catch {
+          // Branded canonical evidence is acceleration-only. A legal validated
+          // owner state always retains the exact canonical encoder fallback.
+          entry.canonicalBytes = encodeValidatedCanvasCanonicalState(snapshot)
+          entry.canonicalEvidence = undefined
+        }
       } else {
         entry.canonicalBytes = encodeValidatedCanvasCanonicalState(snapshot)
       }
@@ -88,10 +121,18 @@ export class CanvasOwnerStateCache {
     entry.certifiedDurableHeadDigest = undefined
     const baseFragments = incremental ? fragmentsBySnapshot.get(incremental.base) : undefined
     if (incremental && baseFragments) {
-      const fragments = createFragments(snapshot, incremental.issuer, baseFragments, incremental.changed)
-      fragmentsBySnapshot.set(snapshot, fragments)
-      entry.canonicalBytes = fragments.bytes
-      entry.canonicalEvidence = fragments.evidence
+      try {
+        const fragments = createFragments(snapshot, incremental.issuer, baseFragments, incremental.changed)
+        fragmentsBySnapshot.set(snapshot, fragments)
+        // The kernel consumes the branded rope evidence once to calculate the
+        // canonical digest. Do not also assemble the complete byte array here.
+        entry.canonicalBytes = undefined
+        entry.canonicalEvidence = fragments.evidence
+      } catch {
+        // Evidence construction cannot deny an otherwise owner-validated post.
+        entry.canonicalBytes = undefined
+        entry.canonicalEvidence = undefined
+      }
     } else {
       entry.canonicalBytes = undefined
       entry.canonicalEvidence = undefined
@@ -106,10 +147,14 @@ export class CanvasOwnerStateCache {
     durableHeadDigest: Digest,
   ): void {
     const sourceEntry = this.entry(source)
-    if (sourceEntry.snapshot !== snapshot || sourceEntry.canonicalBytes === undefined) return
+    if (
+      sourceEntry.snapshot !== snapshot ||
+      (sourceEntry.canonicalBytes === undefined && sourceEntry.canonicalEvidence === undefined)
+    ) return
     const targetEntry = this.entry(target)
     targetEntry.snapshot = snapshot
     targetEntry.canonicalBytes = sourceEntry.canonicalBytes?.slice()
+    targetEntry.canonicalEvidence = sourceEntry.canonicalEvidence
     targetEntry.canonicalStateDigest = canonicalStateDigest
     targetEntry.certifiedDurableHeadDigest = durableHeadDigest
   }
@@ -123,7 +168,8 @@ export class CanvasOwnerStateCache {
     const entry = this.entry(document)
     const identity = entry.snapshot?.identity
     if (
-      entry.snapshot === undefined || entry.canonicalBytes === undefined || identity === undefined ||
+      entry.snapshot === undefined ||
+      (entry.canonicalBytes === undefined && entry.canonicalEvidence === undefined) || identity === undefined ||
       entry.certifiedDurableHeadDigest !== durableHeadDigest ||
       entry.canonicalStateDigest !== expectedCanonicalStateDigest ||
       scope.docKind !== "canvas" || scope.docId !== identity.canvasId ||
@@ -135,6 +181,27 @@ export class CanvasOwnerStateCache {
   /** Package-private benchmark evidence; never enters protocol or diagnostics. */
   traversalCounts(): Readonly<{ fullValidation: number; canonical: number }> {
     return Object.freeze({ fullValidation: this.fullValidationTraversals, canonical: this.canonicalTraversals })
+  }
+
+  /** Package-private canonical-work evidence. Serialization remains separately visible. */
+  canonicalWorkCounts(): Readonly<{
+    assemblies: number
+    collectionByteAssemblies: number
+    incrementalChangedCollectionByteAssemblies: number
+    pairByteEncodes: number
+    evidenceArrayEntries: number
+    incrementalHistoricalPairCopies: number
+    unchangedFragmentByteCopies: number
+  }> {
+    return Object.freeze({
+      assemblies: canonicalAssemblies,
+      collectionByteAssemblies,
+      incrementalChangedCollectionByteAssemblies,
+      pairByteEncodes,
+      evidenceArrayEntries,
+      incrementalHistoricalPairCopies,
+      unchangedFragmentByteCopies,
+    })
   }
 
   private entry(document: Y.Doc): CacheEntry {
@@ -178,13 +245,15 @@ function createFragments(
   changed?: ReadonlyMap<string, readonly string[]>,
 ): CanonicalFragments {
   const values = new Map<CanonicalKey, Uint8Array>()
-  const pairs = new Map<CollectionKey, readonly CanonicalPair[]>()
+  const pairs = new Map<CollectionKey, CanonicalPairCollection>()
   const evidences = new Map<CanonicalKey, CanonicalJcsEvidence>()
   for (const key of CANONICAL_KEYS) {
     const changedKeys = changed?.get(key)
     if (base && changed && changedKeys === undefined) {
-      values.set(key, base.values.get(key)!.slice())
-      evidences.set(key, fragmentEvidence(base, key, issuer, snapshot))
+      // Internal fragment bytes are immutable and never returned through the
+      // public canonical-state byte API, so sharing is safe.
+      if (!isCollection(key)) values.set(key, base.values.get(key)!)
+      evidences.set(key, base.evidences.get(key)!)
       if (isCollection(key)) pairs.set(key, base.pairs.get(key)!)
       continue
     }
@@ -193,8 +262,8 @@ function createFragments(
         ? insertPairs(base.pairs.get(key)!, snapshotCollection(snapshot, key), key, changedKeys, issuer)
         : allPairs(snapshotCollection(snapshot, key), key, issuer)
       pairs.set(key, nextPairs)
-      values.set(key, encodePairs(nextPairs))
-      evidences.set(key, issuer.composeArray(nextPairs.map((pair) => pair.evidence)))
+      evidenceArrayEntries += nextPairs.size
+      evidences.set(key, issuer.composeArray([...pairCollectionEntries(nextPairs)].map((item) => item.evidence)))
     } else {
       const value = key === "format" ? "convax.canvas-canonical-state" : snapshot[key]
       values.set(key, encodeRestrictedJcs(value))
@@ -202,12 +271,7 @@ function createFragments(
     }
   }
   const evidence = issuer.composeObject(CANONICAL_KEYS.map((key) => [key, evidences.get(key)!] as const))
-  return Object.freeze({ values, pairs, evidence, bytes: assemble(values) })
-}
-
-function fragmentEvidence(base: CanonicalFragments, key: CanonicalKey, issuer: CanonicalJcsEvidenceIssuer, snapshot: CanvasSnapshot): CanonicalJcsEvidence {
-  if (isCollection(key)) return issuer.composeArray(base.pairs.get(key)!.map((pair) => pair.evidence))
-  return issuer.encodeEvidence(key === "format" ? "convax.canvas-canonical-state" : snapshot[key])
+  return Object.freeze({ values, pairs, evidences, evidence })
 }
 
 function isCollection(key: CanonicalKey): key is CollectionKey {
@@ -228,35 +292,183 @@ function canonicalPairValue(key: CollectionKey, value: unknown): unknown {
 
 function pair(key: string, value: unknown, collection: CollectionKey, issuer: CanonicalJcsEvidenceIssuer): CanonicalPair {
   const canonicalValue = canonicalPairValue(collection, value)
-  const tuple = [key, canonicalValue] as const
-  return Object.freeze({ key, value: canonicalValue, bytes: encodeRestrictedJcs(tuple), evidence: issuer.encodeEvidence(tuple) })
+  const tuple = Object.freeze([key, canonicalValue] as const)
+  return Object.freeze({ key, tuple, evidence: issuer.encodeEvidence(tuple) })
 }
 
-function allPairs(collection: ReadonlyMap<string, unknown>, key: CollectionKey, issuer: CanonicalJcsEvidenceIssuer): readonly CanonicalPair[] {
-  return Object.freeze([...collection].sort(([a], [b]) => compareUtf8(a, b)).map(([name, value]) => pair(name, value, key, issuer)))
+function allPairs(
+  collection: ReadonlyMap<string, unknown>,
+  key: CollectionKey,
+  issuer: CanonicalJcsEvidenceIssuer,
+): CanonicalPairCollection {
+  const anchor = Object.freeze(
+    [...collection].sort(([a], [b]) => compareUtf8(a, b)).map(([name, value]) => pair(name, value, key, issuer)),
+  )
+  return Object.freeze({ anchor, delta: null, deltaSize: 0, size: anchor.length })
 }
 
-function insertPairs(base: readonly CanonicalPair[], collection: ReadonlyMap<string, unknown>, collectionKey: CollectionKey, keys: readonly string[], issuer: CanonicalJcsEvidenceIssuer): readonly CanonicalPair[] {
-  const result = [...base]
+function insertPairs(
+  base: CanonicalPairCollection,
+  collection: ReadonlyMap<string, unknown>,
+  collectionKey: CollectionKey,
+  keys: readonly string[],
+  issuer: CanonicalJcsEvidenceIssuer,
+): CanonicalPairCollection {
+  let delta = base.delta
+  let deltaSize = base.deltaSize
   for (const key of keys) {
     const value = collection.get(key)
     if (value === undefined) throw new TypeError(`Canvas canonical insertion is missing: ${key}`)
-    let low = 0; let high = result.length
-    while (low < high) { const middle = (low + high) >>> 1; if (compareUtf8(result[middle]!.key, key) < 0) low = middle + 1; else high = middle }
-    if (result[low]?.key === key) throw new TypeError(`Canvas canonical insertion overwrote: ${key}`)
-    result.splice(low, 0, pair(key, value, collectionKey, issuer))
+    if (anchorPair(base.anchor, key) !== undefined || findPairNode(delta, key) !== undefined)
+      throw new TypeError(`Canvas canonical insertion overwrote: ${key}`)
+    const addition = pair(key, value, collectionKey, issuer)
+    delta = insertPairNode(delta, addition)
+    deltaSize += 1
   }
-  return Object.freeze(result)
+  return Object.freeze({ anchor: base.anchor, delta, deltaSize, size: base.anchor.length + deltaSize })
 }
 
-function encodePairs(pairs: readonly CanonicalPair[]): Uint8Array {
-  return join([new TextEncoder().encode("["), ...pairs.flatMap((item, index) => index ? [new TextEncoder().encode(","), item.bytes] : [item.bytes]), new TextEncoder().encode("]")])
+function anchorPair(anchor: readonly CanonicalPair[], key: string): CanonicalPair | undefined {
+  let low = 0
+  let high = anchor.length
+  while (low < high) {
+    const middle = (low + high) >>> 1
+    const order = compareUtf8(anchor[middle]!.key, key)
+    if (order < 0) low = middle + 1
+    else high = middle
+  }
+  return anchor[low]?.key === key ? anchor[low] : undefined
 }
 
-function assemble(values: ReadonlyMap<CanonicalKey, Uint8Array>): Uint8Array {
+function pairNodeHeight(node: CanonicalPairNode | null): number {
+  return node?.height ?? 0
+}
+
+function pairNode(
+  pair: CanonicalPair,
+  left: CanonicalPairNode | null,
+  right: CanonicalPairNode | null,
+): CanonicalPairNode {
+  return Object.freeze({
+    key: pair.key,
+    pair,
+    left,
+    right,
+    height: 1 + Math.max(pairNodeHeight(left), pairNodeHeight(right)),
+  })
+}
+
+function findPairNode(root: CanonicalPairNode | null, key: string): CanonicalPair | undefined {
+  let current = root
+  while (current) {
+    const order = compareUtf8(key, current.key)
+    if (order === 0) return current.pair
+    current = order < 0 ? current.left : current.right
+  }
+  return undefined
+}
+
+function insertPairNode(root: CanonicalPairNode | null, pair: CanonicalPair): CanonicalPairNode {
+  if (!root) return pairNode(pair, null, null)
+  const order = compareUtf8(pair.key, root.key)
+  if (order === 0) throw new TypeError(`Canvas canonical insertion overwrote: ${pair.key}`)
+  const inserted = order < 0
+    ? pairNode(root.pair, insertPairNode(root.left, pair), root.right)
+    : pairNode(root.pair, root.left, insertPairNode(root.right, pair))
+  return balancePairNode(inserted)
+}
+
+function balancePairNode(root: CanonicalPairNode): CanonicalPairNode {
+  const skew = pairNodeHeight(root.left) - pairNodeHeight(root.right)
+  if (skew > 1) {
+    const left = root.left!
+    return pairNodeHeight(left.left) < pairNodeHeight(left.right)
+      ? rotatePairRight(pairNode(root.pair, rotatePairLeft(left), root.right))
+      : rotatePairRight(root)
+  }
+  if (skew < -1) {
+    const right = root.right!
+    return pairNodeHeight(right.right) < pairNodeHeight(right.left)
+      ? rotatePairLeft(pairNode(root.pair, root.left, rotatePairRight(right)))
+      : rotatePairLeft(root)
+  }
+  return root
+}
+
+function rotatePairLeft(root: CanonicalPairNode): CanonicalPairNode {
+  const pivot = root.right!
+  return pairNode(pivot.pair, pairNode(root.pair, root.left, pivot.left), pivot.right)
+}
+
+function rotatePairRight(root: CanonicalPairNode): CanonicalPairNode {
+  const pivot = root.left!
+  return pairNode(pivot.pair, pivot.left, pairNode(root.pair, pivot.right, root.right))
+}
+
+function* pairNodeEntries(root: CanonicalPairNode | null): Generator<CanonicalPair> {
+  if (!root) return
+  yield* pairNodeEntries(root.left)
+  yield root.pair
+  yield* pairNodeEntries(root.right)
+}
+
+function* pairCollectionEntries(collection: CanonicalPairCollection): Generator<CanonicalPair> {
+  const delta = pairNodeEntries(collection.delta)[Symbol.iterator]()
+  let deltaEntry = delta.next()
+  let anchorIndex = 0
+  while (anchorIndex < collection.anchor.length || !deltaEntry.done) {
+    const anchored = collection.anchor[anchorIndex]
+    if (anchored === undefined) {
+      yield deltaEntry.value
+      deltaEntry = delta.next()
+    } else if (deltaEntry.done || compareUtf8(anchored.key, deltaEntry.value.key) < 0) {
+      yield anchored
+      anchorIndex += 1
+    } else {
+      yield deltaEntry.value
+      deltaEntry = delta.next()
+    }
+  }
+}
+
+function encodePairs(pairs: CanonicalPairCollection): Uint8Array {
+  const cached = bytesByPairCollection.get(pairs)
+  if (cached) return cached
+  collectionByteAssemblies += 1
+  if (pairs.deltaSize > 0) incrementalChangedCollectionByteAssemblies += 1
+  const encoder = new TextEncoder()
+  const parts: Uint8Array[] = [encoder.encode("[")]
+  let index = 0
+  for (const item of pairCollectionEntries(pairs)) {
+    if (index !== 0) parts.push(encoder.encode(","))
+    parts.push(encodePair(item))
+    index += 1
+  }
+  parts.push(encoder.encode("]"))
+  const result = join(parts)
+  bytesByPairCollection.set(pairs, result)
+  return result
+}
+
+function encodePair(pair: CanonicalPair): Uint8Array {
+  const cached = bytesByPair.get(pair)
+  if (cached) return cached
+  pairByteEncodes += 1
+  const bytes = encodeRestrictedJcs(pair.tuple)
+  bytesByPair.set(pair, bytes)
+  return bytes
+}
+
+function assemble(fragments: CanonicalFragments): Uint8Array {
+  canonicalAssemblies += 1
   const encoder = new TextEncoder()
   const parts: Uint8Array[] = [encoder.encode("{")]
-  CANONICAL_KEYS.forEach((key, index) => parts.push(...(index ? [encoder.encode(",")] : []), encodeRestrictedJcs(key), encoder.encode(":"), values.get(key)!))
+  CANONICAL_KEYS.forEach((key, index) => parts.push(
+    ...(index ? [encoder.encode(",")] : []),
+    encodeRestrictedJcs(key),
+    encoder.encode(":"),
+    isCollection(key) ? encodePairs(fragments.pairs.get(key)!) : fragments.values.get(key)!,
+  ))
   parts.push(encoder.encode("}"))
   return join(parts)
 }

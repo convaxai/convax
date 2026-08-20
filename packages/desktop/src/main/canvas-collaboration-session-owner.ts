@@ -1,6 +1,7 @@
 import {
   canvasOperationReceipt,
   canvasSnapshotFromValidatedOwnerState,
+  assertEntityRef,
   constructCanvasAuthoritativeIntent,
   constructCanvasHistoryIntent,
   deriveCanvasCommandOperationId,
@@ -101,6 +102,19 @@ export interface CanvasCollaborationSessionOwner extends CanvasCollaborationAppl
   }): Promise<CanvasSessionProjectionDto>
   close(input: { readonly ref: CanvasDocumentRef; readonly sessionId: Id128 }): void
   queryRenderer(ref: CanvasDocumentRef, sessionId: Id128): Promise<CanvasSessionProjectionDto>
+  /**
+   * Main-only bounded resource view. It verifies the mounted lease and exact live
+   * node incarnations while cloning only the selected nodes from the accepted
+   * snapshot projection cache.
+   */
+  queryRendererResourceTargets(
+    ref: CanvasDocumentRef,
+    sessionId: Id128,
+    targets: readonly Readonly<{
+      readonly entity: CanvasEntityRef & { readonly kind: "node" }
+      readonly nodeId: string
+    }>[],
+  ): Promise<CanvasDocument>
   submitRenderer(input: {
     readonly ref: CanvasDocumentRef
     readonly sessionId: Id128
@@ -193,6 +207,8 @@ interface CachedCanvasProjection {
     readonly nodeId: string
     readonly entity: CanvasEntityRef & { readonly kind: "node" }
   }>[]
+  readonly nodesById: ReadonlyMap<string, CanvasDocument["nodes"][number]>
+  readonly nodeEntitiesById: ReadonlyMap<string, CanvasEntityRef & { readonly kind: "node" }>
 }
 
 // One accepted owner snapshot can feed both the application result and the
@@ -223,6 +239,44 @@ export function createCanvasCollaborationSessionOwner(
     async queryRenderer(ref, sessionId) {
       const lease = requireLease(ref, sessionId)
       return exclusiveLease(lease, () => projectLease(lease))
+    },
+    async queryRendererResourceTargets(ref, sessionId, targets) {
+      const lease = requireLease(ref, sessionId)
+      return exclusiveLease(lease, async () => {
+        if (!Array.isArray(targets) || targets.length < 1 || targets.length > 4_096) {
+          throw new Error("Canvas renderer resource targets are invalid")
+        }
+        for (let index = 0; index < targets.length; index += 1) {
+          if (!Object.hasOwn(targets, index)) throw new Error("Canvas renderer resource targets are invalid")
+        }
+        const snapshot = await lease.owner.document.query(requireCanvasSnapshot)
+        const projected = cachedCanvasProjection(snapshot)
+        const selected = new Set<string>()
+        const nodes = targets.map((target) => {
+          if (target) assertEntityRef(target.entity, "node")
+          if (
+            !target ||
+            target.entity.kind !== "node" ||
+            target.nodeId !== target.entity.id ||
+            selected.has(target.nodeId)
+          ) {
+            throw new Error("Canvas renderer resource target is invalid")
+          }
+          const currentEntity = projected.nodeEntitiesById.get(target.nodeId)
+          const node = projected.nodesById.get(target.nodeId)
+          if (
+            !currentEntity ||
+            !node ||
+            currentEntity.id !== target.entity.id ||
+            currentEntity.incarnation !== target.entity.incarnation
+          ) {
+            throw new Error("Canvas renderer resource target is stale")
+          }
+          selected.add(target.nodeId)
+          return node
+        })
+        return structuredClone({ ...projected.document, edges: [], nodes })
+      })
     },
     async submitRenderer(input) {
       const lease = requireLease(input.ref, input.sessionId)
@@ -385,6 +439,9 @@ export function createCanvasCollaborationSessionOwner(
         affectedNodeIds: result.affectedNodeIds,
         changed: true,
         createdNodeIds: result.createdNodeIds,
+        ...(result.createdResourceNodeIds === undefined
+          ? {}
+          : { createdResourceNodeIds: result.createdResourceNodeIds }),
         document: canvasDocumentFromSnapshot(result.snapshot),
         operationReceipt: result.operationReceipt,
         acceptedFrameDigest: result.acceptedFrameDigest,
@@ -482,6 +539,7 @@ export function createCanvasCollaborationSessionOwner(
       affectedNodeIds: string[]
       changed: true
       createdNodeIds: string[]
+      createdResourceNodeIds?: readonly string[]
       operationReceipt: BoundedOperationReceipt
       snapshot: CanvasSnapshot
       acceptedFrameDigest: Digest
@@ -489,7 +547,7 @@ export function createCanvasCollaborationSessionOwner(
     }>
   > {
     let beforeIds = new Set<string>()
-    let createdNodesAreReceiptNodes = false
+    let orderedCreatedNodeIds: readonly string[] | undefined
     let caller: CanvasIntentCaller | undefined
     const operationId = deriveCanvasCommandOperationId({
       ref: request,
@@ -516,12 +574,19 @@ export function createCanvasCollaborationSessionOwner(
           // resources-create has only expected-absent derived node/edge results;
           // its receipt therefore already is the exact created-entity set. Avoid
           // projecting the whole pre-commit Canvas solely to rediscover that set.
-          createdNodesAreReceiptNodes = adapted.command.kind === "resources-create"
-          if (!createdNodesAreReceiptNodes) {
+          const resourcesCreate = adapted.command.kind === "resources-create"
+          if (!resourcesCreate) {
             beforeIds = new Set(projectCanvas(snapshot).nodes.map((node) => node.ref.id))
           }
           caller = adapted.caller
-          return prepareCanvasCommand(current, snapshot, context, adapted.command, signal)
+          const prepared = await prepareCanvasCommand(current, snapshot, context, adapted.command, signal)
+          if (resourcesCreate) {
+            if (prepared.typedIntent.kind !== "canvas.resources.add") {
+              throw new Error("Canvas resource command did not construct its closed resource intent")
+            }
+            orderedCreatedNodeIds = Object.freeze(prepared.typedIntent.body.nodes.map((node) => node.nodeId))
+          }
+          return prepared
         },
       }),
     )
@@ -538,17 +603,32 @@ export function createCanvasCollaborationSessionOwner(
       result.operationReceipt,
       committed.frame.frameDigest,
     )
-    const createdNodeIds = createdNodesAreReceiptNodes
-      ? result.operationReceipt.resultEntities.filter((entity) => entity.kind === "node").map((entity) => entity.id)
+    const receiptNodeIds = result.operationReceipt.resultEntities
+      .filter((entity) => entity.kind === "node")
+      .map((entity) => entity.id)
+    const receiptNodeIdSet = new Set(receiptNodeIds)
+    const createdResourceNodeIds =
+      orderedCreatedNodeIds !== undefined &&
+      receiptNodeIds.length === receiptNodeIdSet.size &&
+      orderedCreatedNodeIds.length === receiptNodeIdSet.size &&
+      orderedCreatedNodeIds.every((nodeId) => receiptNodeIdSet.has(nodeId))
+        ? orderedCreatedNodeIds
+        : undefined
+    if (orderedCreatedNodeIds !== undefined && createdResourceNodeIds === undefined) {
+      console.error("Canvas resource receipt does not match the constructed resource ordinals")
+    }
+    const createdNodeIds = createdResourceNodeIds ?? (orderedCreatedNodeIds !== undefined
+      ? receiptNodeIds
       : canvasDocumentFromSnapshot(result.snapshot)
           .nodes.map((node) => node.id)
-          .filter((id) => !beforeIds.has(id))
+          .filter((id) => !beforeIds.has(id)))
     return Object.freeze({
       affectedNodeIds: result.operationReceipt.resultEntities
         .filter((entity) => entity.kind === "node")
         .map((entity) => entity.id),
       changed: true,
-      createdNodeIds,
+      createdNodeIds: [...createdNodeIds],
+      ...(createdResourceNodeIds === undefined ? {} : { createdResourceNodeIds }),
       operationReceipt: result.operationReceipt,
       snapshot: result.snapshot,
       acceptedFrameDigest: committed.frame.frameDigest,
@@ -865,6 +945,11 @@ function cachedCanvasProjection(snapshot: CanvasSnapshot): CachedCanvasProjectio
   const existing = cachedCanvasProjections.get(snapshot)
   if (existing !== undefined) return existing
   const projected = projectCanvasDocument(projectCanvas(snapshot))
+  const nodeEntities = Object.freeze(
+    [...projected.nodeEntities.entries()].map(([nodeId, entity]) =>
+      Object.freeze({ nodeId, entity: Object.freeze({ ...entity }) }),
+    ),
+  )
   const value = Object.freeze({
     document: projected.document,
     edgeEntities: Object.freeze(
@@ -872,11 +957,9 @@ function cachedCanvasProjection(snapshot: CanvasSnapshot): CachedCanvasProjectio
         Object.freeze({ edgeId, entity: Object.freeze({ ...entity }) }),
       ),
     ),
-    nodeEntities: Object.freeze(
-      [...projected.nodeEntities.entries()].map(([nodeId, entity]) =>
-        Object.freeze({ nodeId, entity: Object.freeze({ ...entity }) }),
-      ),
-    ),
+    nodeEntities,
+    nodesById: new Map(projected.document.nodes.map((node) => [node.id, node])),
+    nodeEntitiesById: new Map(nodeEntities.map(({ nodeId, entity }) => [nodeId, entity])),
   })
   cachedCanvasProjections.set(snapshot, value)
   return value

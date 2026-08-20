@@ -1,5 +1,12 @@
 import { getCanvasResourcePresentationSize } from "../media-sizing"
-import type { CanvasPendingResourceKind, CanvasPoint, CanvasSize, CanvasUploadItem } from "../types"
+import {
+  parseCanvasResourceRuntimeState,
+  type CanvasPendingResourceKind,
+  type CanvasPoint,
+  type CanvasResourceRuntimeState,
+  type CanvasSize,
+  type CanvasUploadItem,
+} from "../types"
 import {
   CanvasCommandValidationError,
   createAddCanvasResourcesCommand,
@@ -69,6 +76,17 @@ export interface CanvasResourcePreparationResult {
   items: readonly CanvasUploadItem[]
   retainedOnFailure?: readonly { label: string }[]
   warnings?: readonly string[]
+}
+
+/** Runtime-only presentation prepared for one exact Canvas-owned resource node. */
+export interface CanvasPreparedResourceRuntime {
+  nodeId: string
+  state: CanvasResourceRuntimeState
+}
+
+/** Dedicated add result; prepared runtime state must never enter Canvas persistence. */
+export interface CanvasAddResourcesResult extends CanvasApplicationCommandResult {
+  preparedResources: readonly CanvasPreparedResourceRuntime[]
 }
 
 export class CanvasResourcePartialFailureError extends Error {
@@ -257,14 +275,14 @@ export class CanvasResourceBusinessService {
     return result
   }
 
-  addResources(request: CanvasAddResourceSourcesRequest): Promise<CanvasApplicationCommandResult> {
+  addResources(request: CanvasAddResourceSourcesRequest): Promise<CanvasAddResourcesResult> {
     return this.addResourcesShared(request)
   }
 
   addPreparedResources(
     request: CanvasAddResourceSourcesRequest,
     prepared: CanvasResourcePreparationResult,
-  ): Promise<CanvasApplicationCommandResult> {
+  ): Promise<CanvasAddResourcesResult> {
     return this.addResourcesShared(request, prepared)
   }
 
@@ -301,7 +319,7 @@ export class CanvasResourceBusinessService {
   private addResourcesShared(
     request: CanvasAddResourceSourcesRequest,
     hostPrepared?: CanvasResourcePreparationResult,
-  ): Promise<CanvasApplicationCommandResult> {
+  ): Promise<CanvasAddResourcesResult> {
     const key = JSON.stringify([
       request.scopeId,
       request.canvasId,
@@ -323,7 +341,7 @@ export class CanvasResourceBusinessService {
       if (existing.fingerprint !== fingerprint) {
         return Promise.reject(new CanvasResourceRequestConflictError(request.commandId))
       }
-      return existing.result
+      return existing.result as Promise<CanvasAddResourcesResult>
     }
 
     const result = this.addResourcesOnce(request, hostPrepared)
@@ -477,7 +495,7 @@ export class CanvasResourceBusinessService {
   private async addResourcesOnce(
     request: CanvasAddResourceSourcesRequest,
     hostPrepared?: CanvasResourcePreparationResult,
-  ): Promise<CanvasApplicationCommandResult> {
+  ): Promise<CanvasAddResourcesResult> {
     const businessStartedAt = this.diagnostics ? performance.now() : undefined
     throwIfAborted(request.signal)
     validateCanvasResourceCommandIdentity(request)
@@ -547,7 +565,18 @@ export class CanvasResourceBusinessService {
         ...(request.beforeCommit ? { beforeCommit: request.beforeCommit } : {}),
         ...(request.signal ? { signal: request.signal } : {}),
       })
-      return { ...result, warnings: [...(prepared.warnings ?? []), ...result.warnings] }
+      const preparedResources =
+        result.createdResourceNodeIds?.length === prepared.items.length
+          ? result.createdResourceNodeIds.map((nodeId, index) => ({
+              nodeId,
+              state: requireParsedResourceRuntimeState(prepared.items[index]?.state),
+            }))
+          : []
+      return {
+        ...result,
+        preparedResources,
+        warnings: [...(prepared.warnings ?? []), ...result.warnings],
+      }
     } catch (error) {
       throwPartialFailureIfRetained(error, prepared.retainedOnFailure)
     }
@@ -816,23 +845,13 @@ function validateRetainedOnFailure(value: unknown): readonly { label: string }[]
 }
 
 function requireResourceRuntimeState(value: unknown) {
-  if (
-    !isRecord(value) ||
-    typeof value.status !== "string" ||
-    !["stale", "ready", "missing", "corrupt", "unsupported", "conflict"].includes(value.status)
-  ) {
-    throw new CanvasCommandValidationError("Prepared resource runtime state is invalid")
-  }
-  for (const key of ["contentRevision", "error", "posterUrl", "text", "url"]) {
-    if (value[key] !== undefined && typeof value[key] !== "string") {
-      throw new CanvasCommandValidationError(`Prepared resource runtime ${key} must be a string`)
-    }
-  }
-  for (const key of ["canSaveEditableCopy", "editableText"]) {
-    if (value[key] !== undefined && typeof value[key] !== "boolean") {
-      throw new CanvasCommandValidationError(`Prepared resource runtime ${key} must be a boolean`)
-    }
-  }
+  requireParsedResourceRuntimeState(value)
+}
+
+function requireParsedResourceRuntimeState(value: unknown): CanvasResourceRuntimeState {
+  const parsed = parseCanvasResourceRuntimeState(value)
+  if (!parsed) throw new CanvasCommandValidationError("Prepared resource runtime state is invalid")
+  return parsed
 }
 
 function requireNonEmptyString(value: unknown, label: string): asserts value is string {
