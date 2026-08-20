@@ -1409,9 +1409,8 @@
   background: color-mix(in oklab, var(--canvas-text) 5%, var(--canvas-node-background));
 }
 
-.convax-canvas .convax-media-empty--image {
-  padding: 12px;
-  background: color-mix(in oklab, var(--canvas-accent) 5%, var(--canvas-node-background));
+.convax-canvas .convax-media-empty--add {
+  background: transparent;
 }
 
 .convax-canvas .convax-media-empty__content {
@@ -1434,11 +1433,20 @@
   user-select: none;
 }
 
-.convax-canvas .convax-media-empty--image .convax-media-empty__content {
-  border: 1px dashed color-mix(in oklab, var(--canvas-accent) 38%, var(--canvas-node-border));
-  border-radius: 10px;
-  background: color-mix(in oklab, var(--canvas-surface) 72%, transparent);
+.convax-canvas .convax-media-empty__content--add {
+  gap: 10px;
   pointer-events: auto;
+}
+
+.convax-canvas .convax-media-empty__placeholder {
+  display: grid;
+  place-items: center;
+  color: color-mix(in oklab, var(--canvas-text-muted) 70%, transparent);
+}
+
+.convax-canvas .convax-media-empty__placeholder svg {
+  width: 48px;
+  height: 48px;
 }
 
 .convax-canvas .convax-media-empty__icon {
@@ -1471,18 +1479,8 @@
   line-height: 1.4;
 }
 
-.convax-canvas .convax-media-empty__actions {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  flex-wrap: wrap;
-  gap: 8px;
-  margin-top: 8px;
-}
-
-.convax-canvas .convax-media-empty__button {
-  min-width: 108px;
-  min-height: 40px;
+.convax-canvas .convax-media-empty__add {
+  min-width: 0;
 }
 
 .convax-canvas .convax-video__media {
@@ -1616,6 +1614,12 @@
 .convax-canvas .convax-node__connection.valid {
   opacity: 1;
   pointer-events: all;
+}
+
+.convax-canvas .convax-node[data-canvas-node-entry-phase="pending-focus"].is-selected > .convax-node__connection,
+.convax-canvas .convax-node[data-canvas-node-entry-phase="pending-focus"]:hover > .convax-node__connection {
+  opacity: 0;
+  pointer-events: none;
 }
 
 .convax-canvas .convax-node:hover .convax-node__connection-icon,
@@ -2677,10 +2681,9 @@
     color: CanvasText;
   }
 
-  .convax-canvas .convax-media-empty--image,
-  .convax-canvas .convax-media-empty--image .convax-media-empty__content,
   .convax-canvas .convax-media-empty__icon,
-  .convax-canvas .convax-media-empty__button {
+  .convax-canvas .convax-media-empty__placeholder,
+  .convax-canvas .convax-media-empty__add {
     border-color: CanvasText;
     background: Canvas;
     color: CanvasText;

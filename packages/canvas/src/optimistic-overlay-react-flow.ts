@@ -2,6 +2,13 @@ import { createMediaNode, createTextNode } from "./document"
 import type { CanvasGhostEdge, CanvasGhostNode, CanvasReplacePresentation } from "./optimistic-overlay"
 import type { CanvasEdge, CanvasNode } from "./types"
 
+export const canvasOptimisticGhostDataKey = "__convaxOptimisticGhost" as const
+
+/** Renderer-only marker. Canonical Canvas nodes never carry this field. */
+export function isCanvasOptimisticGhostNodeData(data: CanvasNode["data"]) {
+  return data[canvasOptimisticGhostDataKey] === true
+}
+
 /** Last-mile adapter only. Returned values are never Canvas command inputs. */
 export function projectCanvasGhostNodeForReactFlow(ghost: CanvasGhostNode): CanvasNode {
   if (ghost.snapshot) {
@@ -10,7 +17,11 @@ export function projectCanvasGhostNodeForReactFlow(ghost: CanvasGhostNode): Canv
       type: ghost.snapshot.nodeType,
       position: ghost.snapshot.position,
       ...(ghost.snapshot.parentPresentationKey ? { parentId: ghost.snapshot.parentPresentationKey } : {}),
-      data: { ...structuredClone(ghost.snapshot.data), status: "pending" },
+      data: {
+        ...structuredClone(ghost.snapshot.data),
+        [canvasOptimisticGhostDataKey]: true,
+        status: "pending",
+      } as unknown as CanvasNode["data"],
       style: { height: ghost.snapshot.size.height, width: ghost.snapshot.size.width, opacity: 0.64 },
       ...(ghost.snapshot.zIndex === undefined ? {} : { zIndex: ghost.snapshot.zIndex }),
       connectable: false,
@@ -21,26 +32,36 @@ export function projectCanvasGhostNodeForReactFlow(ghost: CanvasGhostNode): Canv
       selected: false,
     } as CanvasNode
   }
+  const emptyCard = ghost.presentation.emptyCard === true
   const base =
     ghost.presentation.nodeType === "text"
       ? createTextNode({
           id: ghost.presentationKey,
           metadata: {},
-          mimeType: ghost.presentation.mimeType,
-          name: ghost.presentation.title,
           position: ghost.position,
-          resourceState: { status: "ready", text: "" },
+          ...(emptyCard
+            ? { label: ghost.presentation.title, resourceState: { status: "ready", text: "" } }
+            : {
+                mimeType: ghost.presentation.mimeType,
+                name: ghost.presentation.title,
+                resourceState: { status: "ready", text: "" },
+              }),
         })
       : createMediaNode({
           id: ghost.presentationKey,
+          ...(emptyCard ? { label: ghost.presentation.title } : {}),
           position: ghost.position,
           resource: {
             id: ghost.presentationKey,
             kind: ghost.presentation.mediaKind ?? "file",
             metadata: {},
-            mimeType: ghost.presentation.mimeType,
-            name: ghost.presentation.title,
-            state: { status: "ready", url: "" },
+            ...(emptyCard
+              ? { state: { status: "ready" } }
+              : {
+                  mimeType: ghost.presentation.mimeType,
+                  name: ghost.presentation.title,
+                  state: { status: "ready", url: "" },
+                }),
           },
         })
   return {
@@ -52,8 +73,17 @@ export function projectCanvasGhostNodeForReactFlow(ghost: CanvasGhostNode): Canv
     ...(ghost.parentPresentationKey ? { parentId: ghost.parentPresentationKey } : {}),
     selectable: false,
     selected: false,
-    style: { ...base.style, height: ghost.size.height, width: ghost.size.width, opacity: 0.64 },
-    data: { ...base.data, status: "pending" },
+    style: {
+      ...base.style,
+      height: ghost.size.height,
+      width: ghost.size.width,
+      ...(emptyCard ? {} : { opacity: 0.64 }),
+    },
+    data: {
+      ...base.data,
+      [canvasOptimisticGhostDataKey]: true,
+      status: emptyCard ? "idle" : "pending",
+    },
   }
 }
 

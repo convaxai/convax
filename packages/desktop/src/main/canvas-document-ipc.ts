@@ -7,7 +7,7 @@ import {
 } from "@convax/canvas/application"
 import {
   getIncomingConnectedCanvasFileNodeIds,
-  isCanvasEmptyImageNodeData,
+  isCanvasEmptyMediaNodeData,
   type CanvasNode,
   type CanvasPoint,
 } from "@convax/canvas/core"
@@ -494,7 +494,7 @@ export function registerCanvasResourceIpc(
     return (async () => {
       const live =
         input.source.kind === "local-file"
-          ? await loadLiveRelinkNode(active, input.nodeId, options.application, { allowEmptyImage: true })
+          ? await loadLiveRelinkNode(active, input.nodeId, options.application, { allowEmptyMedia: true })
           : await loadLiveRelinkNode(active, input.nodeId, options.application)
       const request = canvasRelinkBusinessRequest(active, input)
       try {
@@ -870,20 +870,20 @@ async function loadLiveRelinkNode(
   active: ActiveCanvasScope,
   nodeId: string,
   application: Pick<CanvasApplicationService, "query">,
-  options: { allowEmptyImage: true },
+  options: { allowEmptyMedia: true },
 ): Promise<{ node: CanvasNode; reference: ProjectResourceReference | null }>
 async function loadLiveRelinkNode(
   active: ActiveCanvasScope,
   nodeId: string,
   application: Pick<CanvasApplicationService, "query">,
-  options?: { allowEmptyImage: true },
+  options?: { allowEmptyMedia: true },
 ) {
   const projection = (await application.query({ canvasId: active.canvasId, scopeId: active.projectId })).projection
   const matches = projection.nodes.filter((node) => node.id === nodeId)
   const node = matches.length === 1 ? matches[0] : undefined
   const reference = node ? getProjectResourceReference(node.data.metadata) : null
   if (!node) throw new Error(`Canvas node was not found: ${nodeId}`)
-  if (!reference && (!options?.allowEmptyImage || node.type !== "file" || !isCanvasEmptyImageNodeData(node.data))) {
+  if (!reference && (!options?.allowEmptyMedia || node.type !== "file" || !isCanvasEmptyMediaNodeData(node.data))) {
     throw new Error("Canvas resource reference is invalid")
   }
   return { node, reference }
@@ -902,7 +902,7 @@ async function recheckLiveRelinkScope(
   }
   const live =
     reference === null
-      ? await loadLiveRelinkNode(active, nodeId, options.application, { allowEmptyImage: true })
+      ? await loadLiveRelinkNode(active, nodeId, options.application, { allowEmptyMedia: true })
       : await loadLiveRelinkNode(active, nodeId, options.application)
   if (JSON.stringify(live.reference) !== JSON.stringify(reference)) {
     throw new Error("Canvas resource changed while it was being relinked")

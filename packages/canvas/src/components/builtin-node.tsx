@@ -73,7 +73,9 @@ import {
 } from "react"
 import { createPortal } from "react-dom"
 import { normalizeCanvasTextNodeTitle } from "../commands"
-import { isCanvasEmptyImageNodeData } from "../document"
+import { canvasMessage, resolveCanvasUiLocale, type CanvasUiLocale } from "../copy"
+import { isCanvasEmptyMediaNodeData } from "../document"
+import { isCanvasOptimisticGhostNodeData } from "../optimistic-overlay-react-flow"
 import { useCanvasOverlayPresence } from "./use-overlay-presence"
 import { scheduleCutoutTransitionAfterPaint } from "./cutout-transition"
 import {
@@ -140,7 +142,7 @@ import {
 } from "./text-editor-mention"
 import { isCanvasTextInlineEditingScopeActive } from "./text-editing-policy"
 
-export { isCanvasEmptyImageNodeData } from "../document"
+export { isCanvasEmptyImageNodeData, isCanvasEmptyMediaNodeData } from "../document"
 
 function ToolbarButton(props: {
   busy?: boolean
@@ -639,6 +641,13 @@ function createTextEditorExtensions(mentionExtension?: ReturnType<typeof createC
     ...(mentionExtension ? [mentionExtension] : []),
     Markdown.configure({ markedOptions: { breaks: true, gfm: true } }),
   ]
+}
+
+const canvasTextEditorProps = {
+  attributes: {
+    class: "convax-text-editor__prosemirror",
+    spellcheck: "true",
+  },
 }
 
 export function canOpenCanvasTextLineMenu(linePrefix: string) {
@@ -1574,6 +1583,10 @@ export function BuiltinTextFileNode(props: NodeProps<CanvasNode>) {
       },
     })
   }
+  const textEditorExtensionsRef = useRef<ReturnType<typeof createTextEditorExtensions> | null>(null)
+  if (!textEditorExtensionsRef.current) {
+    textEditorExtensionsRef.current = createTextEditorExtensions(mentionExtensionRef.current)
+  }
   dataRef.current = data
   canvasEditorRef.current = canvasEditor
   draftRef.current = draft
@@ -1599,13 +1612,8 @@ export function BuiltinTextFileNode(props: NodeProps<CanvasNode>) {
     content: initialSourceRef.current.content,
     contentType: initialSourceRef.current.contentType,
     editable: false,
-    editorProps: {
-      attributes: {
-        class: "convax-text-editor__prosemirror",
-        spellcheck: "true",
-      },
-    },
-    extensions: createTextEditorExtensions(mentionExtensionRef.current),
+    editorProps: canvasTextEditorProps,
+    extensions: textEditorExtensionsRef.current,
     shouldRerenderOnTransaction: true,
     onUpdate: ({ editor }) => {
       const next = updateCanvasTextDraft(draftRef.current, textEditorValue(dataRef.current, editor))
@@ -2157,67 +2165,60 @@ function mediaIcon(kind: CanvasMediaKind) {
   return <File />
 }
 
-function mediaLabel(kind: CanvasMediaKind) {
-  if (kind === "image") return "image"
-  if (kind === "video") return "video"
-  if (kind === "audio") return "audio"
-  return "file"
+function mediaKindMessageKey(kind: CanvasMediaKind) {
+  if (kind === "image") return "media.image" as const
+  if (kind === "video") return "media.video" as const
+  if (kind === "audio") return "media.audio" as const
+  return "media.file" as const
+}
+
+function mediaLabel(kind: CanvasMediaKind, locale: CanvasUiLocale = "en") {
+  return canvasMessage(locale, mediaKindMessageKey(kind))
+}
+
+function emptyMediaPlaceholder(kind: CanvasMediaKind) {
+  const glyph = kind === "video" ? <VideoIcon strokeWidth={1.35} /> : <ImageIcon strokeWidth={1.35} />
+  return (
+    <span aria-hidden className="convax-media-empty__placeholder" data-canvas-empty-placeholder={kind}>
+      {glyph}
+    </span>
+  )
 }
 
 function EmptyMedia(props: {
   actions?: {
-    generateDisabled: boolean
-    onGenerate: () => void
-    onUpload: () => void
-    uploadDisabled: boolean
+    disabled: boolean
+    onAdd: () => void
   }
   kind: CanvasMediaKind
   state: "blank" | "unavailable"
 }) {
-  const label = mediaLabel(props.kind)
+  const editor = useCanvasEditor()
+  const locale = resolveCanvasUiLocale(editor.locale)
+  const kindLabel = mediaLabel(props.kind, locale)
   if (props.actions) {
+    const addLabel = canvasMessage(locale, "mediaEmpty.add")
+    const addAriaLabel = canvasMessage(locale, props.kind === "video" ? "mediaEmpty.addVideo" : "mediaEmpty.addImage")
     return (
-      <div className="convax-media-empty convax-media-empty--image size-full" data-canvas-empty-image="true">
-        <div className="convax-media-empty__content">
-          <span className="convax-media-empty__icon">
-            <ImageIcon />
-          </span>
-          <span className="convax-media-empty__title">Add an image</span>
-          <span className="convax-media-empty__hint">Upload your own or create one with Generate.</span>
-          <div className="convax-media-empty__actions nodrag nowheel" data-canvas-shortcuts="ignore">
-            <Button
-              aria-label="Upload image"
-              className="convax-media-empty__button"
-              disabled={props.actions.uploadDisabled}
-              onClick={(event) => {
-                event.stopPropagation()
-                props.actions?.onUpload()
-              }}
-              onPointerDown={(event) => event.stopPropagation()}
-              size="sm"
-              type="button"
-              variant="outline"
-            >
-              <FileUp />
-              Upload
-            </Button>
-            <Button
-              aria-label="Generate image"
-              className="convax-media-empty__button"
-              disabled={props.actions.generateDisabled}
-              onClick={(event) => {
-                event.stopPropagation()
-                props.actions?.onGenerate()
-              }}
-              onPointerDown={(event) => event.stopPropagation()}
-              size="sm"
-              type="button"
-              variant="secondary"
-            >
-              <Sparkles />
-              Generate
-            </Button>
-          </div>
+      <div className="convax-media-empty convax-media-empty--add size-full" data-canvas-empty-media={props.kind}>
+        <div className="convax-media-empty__content convax-media-empty__content--add">
+          {emptyMediaPlaceholder(props.kind)}
+          <Button
+            aria-label={addAriaLabel}
+            className="convax-media-empty__add nodrag nowheel"
+            data-canvas-shortcuts="ignore"
+            disabled={props.actions.disabled}
+            onClick={(event) => {
+              event.stopPropagation()
+              props.actions?.onAdd()
+            }}
+            onPointerDown={(event) => event.stopPropagation()}
+            size="compact"
+            type="button"
+            variant="default"
+          >
+            {addLabel}
+          </Button>
         </div>
       </div>
     )
@@ -2227,11 +2228,13 @@ function EmptyMedia(props: {
     <div className="convax-media-empty size-full">
       <div className="convax-media-empty__content">
         <span className="convax-media-empty__icon">{mediaIcon(props.kind)}</span>
-        <span className="convax-media-empty__title">{blank ? `Empty ${label}` : `${label} unavailable`}</span>
-        <span className="convax-media-empty__hint">
+        <span className="convax-media-empty__title">
           {blank
-            ? "Describe what you want to generate below"
-            : "Relink a selected Project resource or choose a local file"}
+            ? canvasMessage(locale, "mediaEmpty.blank", { kind: kindLabel })
+            : canvasMessage(locale, "mediaEmpty.unavailable", { kind: kindLabel })}
+        </span>
+        <span className="convax-media-empty__hint">
+          {blank ? canvasMessage(locale, "mediaEmpty.blankHint") : canvasMessage(locale, "mediaEmpty.unavailableHint")}
         </span>
       </div>
     </div>
@@ -2537,11 +2540,9 @@ function MediaBody(props: {
   cutoutPresentation: "idle" | "scanning" | "result"
   cutoutSourceUrl?: string
   data: CanvasMediaNodeData
-  emptyImageActions?: {
-    generateDisabled: boolean
-    onGenerate: () => void
-    onUpload: () => void
-    uploadDisabled: boolean
+  emptyMediaActions?: {
+    disabled: boolean
+    onAdd: () => void
   }
   nodeId: string
   onMediaLoad?: (size: { height: number; width: number }) => void
@@ -2554,7 +2555,7 @@ function MediaBody(props: {
   if (!url.trim()) {
     return (
       <EmptyMedia
-        actions={props.emptyImageActions}
+        actions={props.emptyMediaActions}
         kind={props.data.kind}
         state={props.data.status === "idle" ? "blank" : "unavailable"}
       />
@@ -2619,7 +2620,7 @@ function connectedImageSourceUrl(
 
 export function BuiltinMediaFileNode(props: NodeProps<CanvasNode>) {
   const editor = useCanvasEditor()
-  const assistant = useCanvasService("assistant")
+  const locale = resolveCanvasUiLocale(editor.locale)
   const data = props.data as CanvasMediaNodeData
   const ownerNode = editor.document.nodes.find((node) => node.id === props.id)
   const generationRun = ownerNode ? getCanvasNodeGenerationRun(ownerNode) : undefined
@@ -2634,7 +2635,7 @@ export function BuiltinMediaFileNode(props: NodeProps<CanvasNode>) {
   useEffect(() => {
     if (!url) setViewerOpen(false)
   }, [url])
-  const emptyImage = isCanvasEmptyImageNodeData(data)
+  const emptyMedia = isCanvasEmptyMediaNodeData(data)
   const toolbar = (
     <div className="convax-node-toolbar__surface" data-canvas-shortcuts="ignore">
       {data.resourceState?.status === "missing" ? (
@@ -2652,14 +2653,14 @@ export function BuiltinMediaFileNode(props: NodeProps<CanvasNode>) {
         <ToolbarButton
           disabled={!url}
           icon={<Maximize2 />}
-          label={`View ${mediaLabel(data.kind)} full screen`}
+          label={`View ${mediaLabel(data.kind, locale)} full screen`}
           onClick={() => setViewerOpen(true)}
         />
       ) : null}
       <ToolbarButton
         disabled={!url}
         icon={<Download />}
-        label={`Download ${mediaLabel(data.kind)}`}
+        label={`Download ${mediaLabel(data.kind, locale)}`}
         onClick={() => downloadMedia(data)}
       />
       <ToolbarDivider />
@@ -2673,7 +2674,7 @@ export function BuiltinMediaFileNode(props: NodeProps<CanvasNode>) {
         className={cn(
           supportsViewer && "convax-node__surface--media",
           data.kind === "image" && url && "convax-node__surface--image",
-          data.kind === "video" && "convax-node__surface--video",
+          data.kind === "video" && url && "convax-node__surface--video",
         )}
         icon={mediaIcon(data.kind)}
         label={data.label}
@@ -2685,13 +2686,11 @@ export function BuiltinMediaFileNode(props: NodeProps<CanvasNode>) {
           cutoutPresentation={cutoutPresentation}
           cutoutSourceUrl={cutoutSourceUrl}
           data={data}
-          emptyImageActions={
-            emptyImage
+          emptyMediaActions={
+            emptyMedia
               ? {
-                  generateDisabled: editor.readOnly || editor.hydrating || !assistant,
-                  onGenerate: () => editor.selectNodes([props.id]),
-                  onUpload: () => editor.relinkResource(props.id),
-                  uploadDisabled: editor.readOnly || editor.hydrating || !editor.canRelinkResource,
+                  disabled: editor.readOnly || editor.hydrating || !editor.canRelinkResource,
+                  onAdd: () => editor.relinkResource(props.id),
                 }
               : undefined
           }
@@ -3278,6 +3277,7 @@ export function startCanvasSelectionDragFromNode(
 
 export function BuiltinCanvasNode(props: NodeProps<CanvasNode>) {
   const editor = useCanvasEditor()
+  if (isCanvasOptimisticGhostNodeData(props.data)) return <OptimisticCanvasGhostNode {...props} />
   // React Flow keeps aggregate membership; card renderers receive only the sole-card activation state.
   const activeSelected = isSingleNodeSelectionContext(editor.selectionContext, props.id)
   const activeProps = props.selected === activeSelected ? props : { ...props, selected: activeSelected }
@@ -3286,6 +3286,81 @@ export function BuiltinCanvasNode(props: NodeProps<CanvasNode>) {
   else if (activeProps.data.kind === "agent" || activeProps.type === "agent") content = <AgentNode {...activeProps} />
   else content = <RegisteredFileNode {...activeProps} />
   return <CanvasSelectionDragNodeSurface node={props}>{content}</CanvasSelectionDragNodeSurface>
+}
+
+function OptimisticCanvasGhostNode(props: NodeProps<CanvasNode>) {
+  const editor = useCanvasEditor()
+  const locale = resolveCanvasUiLocale(editor.locale)
+  const mediaKind =
+    props.data.kind === "image" || props.data.kind === "video" || props.data.kind === "audio"
+      ? props.data.kind
+      : undefined
+  const pending = props.data.status === "pending"
+  const emptyText = !pending && props.data.kind === "text"
+  const emptyVisualMedia = !pending && (mediaKind === "image" || mediaKind === "video") ? mediaKind : undefined
+  return (
+    <div
+      aria-busy={pending || undefined}
+      aria-label={pending ? `${props.data.label} saving` : props.data.label}
+      className="convax-node pointer-events-none relative size-full text-card-foreground"
+      data-canvas-empty-media={!pending ? mediaKind : undefined}
+      data-canvas-node-kind={props.data.kind}
+      data-canvas-node-status={props.data.status ?? "idle"}
+      data-canvas-optimistic-ghost={props.data.kind}
+    >
+      <div className="convax-node__title flex items-center gap-1.5">
+        <span className="flex size-4 items-center justify-center [&>svg]:size-3.5">
+          {props.data.kind === "text" ? <Type /> : mediaKind ? mediaIcon(mediaKind) : <File />}
+        </span>
+        <span className="truncate">{props.data.label}</span>
+      </div>
+      <div
+        className={cn(
+          "convax-node__surface size-full overflow-hidden border bg-card",
+          emptyVisualMedia && "convax-node__surface--media",
+        )}
+      >
+        {emptyText ? (
+          <div
+            aria-label="Start writing..."
+            className="convax-text-editor size-full overflow-auto"
+            data-canvas-optimistic-empty-card="text"
+          >
+            <div className="convax-text-editor__prosemirror">
+              <p className="is-editor-empty" data-placeholder="Start writing..." />
+            </div>
+          </div>
+        ) : emptyVisualMedia ? (
+          <div
+            className="convax-media-empty convax-media-empty--add size-full"
+            data-canvas-empty-media={emptyVisualMedia}
+            data-canvas-optimistic-empty-card={emptyVisualMedia}
+          >
+            <div className="convax-media-empty__content convax-media-empty__content--add">
+              {emptyMediaPlaceholder(emptyVisualMedia)}
+              <Button
+                aria-label={canvasMessage(
+                  locale,
+                  emptyVisualMedia === "video" ? "mediaEmpty.addVideo" : "mediaEmpty.addImage",
+                )}
+                className="convax-media-empty__add"
+                size="compact"
+                tabIndex={-1}
+                type="button"
+                variant="default"
+              >
+                {canvasMessage(locale, "mediaEmpty.add")}
+              </Button>
+            </div>
+          </div>
+        ) : (
+          <span aria-hidden className="grid size-full place-items-center" data-canvas-optimistic-placeholder="pending">
+            <span className="size-10 rounded-lg border border-border/60 bg-muted/35 opacity-70" />
+          </span>
+        )}
+      </div>
+    </div>
+  )
 }
 
 function RegisteredFileNode(props: NodeProps<CanvasNode>) {
@@ -3347,8 +3422,12 @@ function RegisteredFileNode(props: NodeProps<CanvasNode>) {
       <ContributedToolbar {...props} />
     </FileRendererBoundary>
   ) : null
-  const persistedResourceStatus =
-    !generationRun && (props.data.status === "pending" || props.data.status === "error") ? props.data.status : null
+  const persistedResourceActivity =
+    !generationRun &&
+    !isCanvasEmptyMediaNodeData(props.data) &&
+    (props.data.kind === "image" || props.data.kind === "video" || props.data.kind === "audio") &&
+    (props.data.status === "pending" || props.data.status === "error")
+  const persistedResourceStatus = persistedResourceActivity ? props.data.status : null
   return (
     <>
       <FileAssistantTriggerContext.Provider value={assistantTrigger}>
