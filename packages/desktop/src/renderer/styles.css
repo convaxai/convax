@@ -67,7 +67,7 @@
   box-sizing: border-box;
 }
 
-/* First-run Project onboarding. This surface is never used as a Project directory. */
+/* Empty-registry Project entry. This surface is never used as a Project directory. */
 .project-home {
   position: relative;
   isolation: isolate;
@@ -248,6 +248,44 @@
   text-wrap: balance;
 }
 
+.project-home__ready-summary {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  max-width: 27rem;
+  margin: 1.25rem auto 0;
+  overflow: hidden;
+  border: 1px solid var(--ui-border-subtle);
+  border-radius: var(--ui-radius-lg);
+  background: color-mix(in oklab, var(--ui-surface-raised) 86%, transparent);
+  box-shadow: var(--ui-shadow-low);
+  text-align: left;
+}
+
+.project-home__ready-summary > div {
+  min-width: 0;
+  padding: 0.75rem 0.9rem;
+}
+
+.project-home__ready-summary > div + div {
+  border-left: 1px solid var(--ui-border-subtle);
+}
+
+.project-home__ready-summary dt {
+  color: var(--ui-text-tertiary);
+  font-size: 0.68rem;
+  font-weight: 600;
+}
+
+.project-home__ready-summary dd {
+  margin-top: 0.2rem;
+  overflow: hidden;
+  color: var(--ui-text-primary);
+  font-size: 0.82rem;
+  font-weight: 600;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .project-home__actions {
   display: flex;
   justify-content: center;
@@ -284,6 +322,15 @@
 }
 
 @media (max-width: 32rem) {
+  .project-home__ready-summary {
+    grid-template-columns: 1fr;
+  }
+
+  .project-home__ready-summary > div + div {
+    border-top: 1px solid var(--ui-border-subtle);
+    border-left: 0;
+  }
+
   .project-home__actions {
     flex-direction: column;
   }
@@ -339,6 +386,455 @@
   .project-home__node {
     border-color: CanvasText;
     color: CanvasText;
+    background: Canvas;
+    box-shadow: none;
+  }
+}
+
+/* Account-first onboarding remains a Renderer preference and consumes only the
+ * bounded Service display projection. It never becomes Project or billing state. */
+.convax-onboarding {
+  position: relative;
+  isolation: isolate;
+  width: 100%;
+  height: 100%;
+  min-height: 32rem;
+  overflow: auto;
+  padding: clamp(1.25rem, 4vw, 3.5rem);
+  color: var(--ui-text-primary);
+  background: var(--ui-surface-canvas);
+}
+
+.convax-onboarding__surface {
+  width: min(100%, 58rem);
+  margin: 0 auto;
+  animation: convax-onboarding-reveal var(--ui-motion-slow) var(--ui-ease-reveal) both;
+}
+
+.convax-onboarding__header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 2rem;
+  margin-bottom: clamp(2.25rem, 7vh, 4.75rem);
+}
+
+.convax-onboarding__progress {
+  display: flex;
+  align-items: center;
+  gap: 0;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.convax-onboarding__progress li {
+  display: flex;
+  align-items: center;
+  color: var(--ui-text-disabled);
+  font-size: 0.7rem;
+  font-weight: 600;
+}
+
+.convax-onboarding__progress li + li::before {
+  width: clamp(1.25rem, 4vw, 3.5rem);
+  height: 1px;
+  margin: 0 0.5rem;
+  background: var(--ui-border-subtle);
+  content: "";
+}
+
+.convax-onboarding__progress li > span {
+  display: grid;
+  width: 1.45rem;
+  height: 1.45rem;
+  margin-right: 0.4rem;
+  place-items: center;
+  border: 1px solid var(--ui-border-subtle);
+  border-radius: var(--ui-radius-pill);
+  background: var(--ui-surface-raised);
+  font-size: 0.65rem;
+}
+
+.convax-onboarding__progress li > span svg {
+  width: 0.75rem;
+  height: 0.75rem;
+}
+
+.convax-onboarding__progress li[aria-current="step"] {
+  color: var(--ui-text-primary);
+}
+
+.convax-onboarding__progress li[aria-current="step"] > span {
+  border-color: color-mix(in oklab, var(--ui-brand) 55%, var(--ui-border-default));
+  color: var(--ui-on-brand);
+  background: var(--ui-brand);
+}
+
+.convax-onboarding__progress li[data-complete="true"] {
+  color: var(--ui-text-secondary);
+}
+
+.convax-onboarding__progress li[data-complete="true"] > span {
+  color: var(--ui-brand);
+  background: color-mix(in oklab, var(--ui-brand) 11%, var(--ui-surface-raised));
+}
+
+.convax-onboarding__account-layout {
+  display: grid;
+  grid-template-columns: minmax(0, 1.25fr) minmax(18rem, 0.75fr);
+  align-items: center;
+  gap: clamp(2rem, 7vw, 5rem);
+}
+
+.convax-onboarding__intro h1,
+.convax-onboarding__centered h1,
+.convax-onboarding__plan-heading h1 {
+  margin: 0;
+  font-size: clamp(1.9rem, 4vw, 3rem);
+  font-weight: 660;
+  line-height: 1.06;
+  letter-spacing: -0.045em;
+  text-wrap: balance;
+}
+
+.convax-onboarding__intro > p:not(.convax-onboarding__eyebrow),
+.convax-onboarding__centered > p:not(.convax-onboarding__eyebrow),
+.convax-onboarding__plan-heading > p:not(.convax-onboarding__eyebrow) {
+  max-width: 36rem;
+  margin: 1rem 0 0;
+  color: var(--ui-text-secondary);
+  font-size: 0.95rem;
+  line-height: 1.65;
+}
+
+.convax-onboarding__eyebrow {
+  margin: 0 0 0.75rem;
+  color: var(--ui-brand);
+  font-size: 0.7rem;
+  font-weight: 700;
+  letter-spacing: 0.11em;
+  text-transform: uppercase;
+}
+
+.convax-onboarding__concepts {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 0.6rem;
+  margin-top: 1.75rem;
+}
+
+.convax-onboarding__concepts > div {
+  display: flex;
+  min-width: 0;
+  align-items: flex-start;
+  gap: 0.65rem;
+  padding: 0.75rem;
+  border: 1px solid var(--ui-border-subtle);
+  border-radius: var(--ui-radius-lg);
+  background: color-mix(in oklab, var(--ui-surface-raised) 78%, transparent);
+}
+
+.convax-onboarding__concepts svg {
+  width: 1rem;
+  height: 1rem;
+  flex: 0 0 auto;
+  margin-top: 0.1rem;
+  color: var(--ui-brand);
+}
+
+.convax-onboarding__concepts span,
+.convax-onboarding__notice span {
+  display: grid;
+  min-width: 0;
+  gap: 0.15rem;
+}
+
+.convax-onboarding__concepts strong {
+  font-size: 0.75rem;
+}
+
+.convax-onboarding__concepts small,
+.convax-onboarding__notice small {
+  color: var(--ui-text-tertiary);
+  font-size: 0.68rem;
+  font-weight: 450;
+  line-height: 1.4;
+}
+
+.convax-onboarding__account-card,
+.convax-onboarding__plan-card {
+  border: 1px solid var(--ui-border-subtle);
+  border-radius: calc(var(--ui-radius-lg) + 0.2rem);
+  background: color-mix(in oklab, var(--ui-surface-raised) 93%, var(--ui-brand));
+  box-shadow: var(--ui-shadow-medium);
+}
+
+.convax-onboarding__account-card {
+  padding: 1.35rem;
+}
+
+.convax-onboarding__account-card h2 {
+  margin: 1rem 0 0;
+  font-size: 1.1rem;
+  font-weight: 650;
+  letter-spacing: -0.018em;
+}
+
+.convax-onboarding__account-card > p:not(.convax-onboarding__privacy) {
+  margin: 0.6rem 0 1.15rem;
+  color: var(--ui-text-secondary);
+  font-size: 0.78rem;
+  line-height: 1.55;
+}
+
+.convax-onboarding__hero-icon {
+  display: grid;
+  width: 2.35rem;
+  height: 2.35rem;
+  place-items: center;
+  border-radius: var(--ui-radius-lg);
+  color: var(--ui-brand);
+  background: color-mix(in oklab, var(--ui-brand) 11%, var(--ui-surface-inset));
+}
+
+.convax-onboarding__hero-icon svg {
+  width: 1.1rem;
+  height: 1.1rem;
+}
+
+.convax-onboarding__privacy {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.45rem;
+  margin: 0.8rem 0 0;
+  color: var(--ui-text-tertiary);
+  font-size: 0.65rem;
+  line-height: 1.45;
+}
+
+.convax-onboarding__privacy svg {
+  width: 0.75rem;
+  height: 0.75rem;
+  flex: 0 0 auto;
+  margin-top: 0.1rem;
+}
+
+.convax-onboarding__loading {
+  display: flex;
+  min-height: 2.35rem;
+  align-items: center;
+  justify-content: center;
+  gap: 0.55rem;
+  color: var(--ui-text-secondary);
+  font-size: 0.75rem;
+}
+
+.convax-onboarding__notice {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.55rem;
+  margin-top: 1rem;
+  padding: 0.75rem 0.85rem;
+  border: 1px solid var(--ui-border-subtle);
+  border-radius: var(--ui-radius-md);
+  color: var(--ui-text-secondary);
+  background: color-mix(in oklab, var(--ui-surface-inset) 58%, transparent);
+  font-size: 0.72rem;
+  line-height: 1.45;
+}
+
+.convax-onboarding__notice > svg {
+  width: 0.9rem;
+  height: 0.9rem;
+  flex: 0 0 auto;
+  margin-top: 0.05rem;
+}
+
+.convax-onboarding__notice[data-tone="danger"] {
+  border-color: color-mix(in oklab, var(--ui-status-danger) 30%, var(--ui-border-subtle));
+  color: var(--ui-status-danger);
+  background: var(--ui-status-danger-surface);
+}
+
+.convax-onboarding__centered {
+  display: grid;
+  width: min(100%, 34rem);
+  margin: clamp(3rem, 12vh, 7rem) auto 0;
+  justify-items: center;
+  text-align: center;
+}
+
+.convax-onboarding__centered .convax-onboarding__eyebrow {
+  margin-top: 1.25rem;
+}
+
+.convax-onboarding__centered > p:not(.convax-onboarding__eyebrow) {
+  margin-inline: auto;
+}
+
+.convax-onboarding__actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 0.6rem;
+  margin-top: 1.5rem;
+}
+
+.convax-onboarding__plan-heading {
+  max-width: 44rem;
+}
+
+.convax-onboarding__plan-heading h1 {
+  font-size: clamp(1.65rem, 3vw, 2.45rem);
+}
+
+.convax-onboarding__plans {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0.9rem;
+  margin-top: 1.75rem;
+}
+
+.convax-onboarding__plan-card {
+  display: flex;
+  min-height: 13rem;
+  flex-direction: column;
+  padding: 1.15rem;
+}
+
+.convax-onboarding__plan-card[data-recommended="true"] {
+  border-color: color-mix(in oklab, var(--ui-brand) 46%, var(--ui-border-default));
+  box-shadow:
+    var(--ui-shadow-medium),
+    0 0 0 0.2rem color-mix(in oklab, var(--ui-brand) 7%, transparent);
+}
+
+.convax-onboarding__plan-card header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 1rem;
+}
+
+.convax-onboarding__plan-card header > div {
+  display: grid;
+  gap: 0.3rem;
+}
+
+.convax-onboarding__plan-card header span {
+  color: var(--ui-text-tertiary);
+  font-size: 0.65rem;
+  font-weight: 600;
+}
+
+.convax-onboarding__plan-card header strong {
+  font-size: 1.15rem;
+  letter-spacing: -0.02em;
+}
+
+.convax-onboarding__plan-card header > svg {
+  width: 1rem;
+  height: 1rem;
+  color: var(--ui-status-success);
+}
+
+.convax-onboarding__plan-card header em {
+  border-radius: var(--ui-radius-pill);
+  padding: 0.2rem 0.45rem;
+  color: var(--ui-brand);
+  background: color-mix(in oklab, var(--ui-brand) 11%, transparent);
+  font-size: 0.62rem;
+  font-style: normal;
+  font-weight: 700;
+}
+
+.convax-onboarding__plan-card > p {
+  flex: 1;
+  margin: 1rem 0;
+  color: var(--ui-text-secondary);
+  font-size: 0.75rem;
+  line-height: 1.55;
+}
+
+.convax-onboarding__plan-card > small {
+  color: var(--ui-text-tertiary);
+  font-size: 0.7rem;
+}
+
+.convax-onboarding__plan-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.55rem;
+  margin-top: 1.25rem;
+}
+
+.convax-onboarding__plan-actions p {
+  width: 100%;
+  margin: 0.3rem 0 0;
+  color: var(--ui-text-tertiary);
+  font-size: 0.68rem;
+}
+
+@keyframes convax-onboarding-reveal {
+  from {
+    opacity: 0;
+    transform: translateY(0.55rem) scale(0.99);
+  }
+
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
+[data-convax-onboarding-motion="reduce"] .convax-onboarding__surface {
+  animation: none;
+}
+
+@media (max-width: 48rem) {
+  .convax-onboarding__account-layout {
+    grid-template-columns: 1fr;
+  }
+
+  .convax-onboarding__account-card {
+    width: min(100%, 32rem);
+  }
+}
+
+@media (max-width: 38rem) {
+  .convax-onboarding__header {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
+  .convax-onboarding__progress li strong {
+    display: none;
+  }
+
+  .convax-onboarding__progress li > span {
+    margin-right: 0;
+  }
+
+  .convax-onboarding__concepts,
+  .convax-onboarding__plans {
+    grid-template-columns: 1fr;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .convax-onboarding__surface {
+    animation: none;
+  }
+}
+
+@media (forced-colors: active) {
+  .convax-onboarding__account-card,
+  .convax-onboarding__concepts > div,
+  .convax-onboarding__plan-card,
+  .convax-onboarding__notice {
+    border-color: CanvasText;
     background: Canvas;
     box-shadow: none;
   }

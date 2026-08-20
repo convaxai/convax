@@ -1,26 +1,19 @@
 import type { ProjectController } from "@convax/project"
-import {
-  Button,
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogTitle,
-  Input,
-  LoadingSpinner,
-} from "@convax/ui"
+import { Button, Dialog, DialogContent, DialogDescription, DialogTitle, Input, LoadingSpinner } from "@convax/ui"
 import { FileText, FolderOpen, FolderPlus, Image, MessageSquare, X } from "lucide-react"
 import { useRef, useState } from "react"
 import { ConvaxBrand } from "./convax-brand"
-import {
-  enterSelectedProjectFromHome,
-  type ProjectHomeEntryResult,
-} from "./project-home-model"
+import { enterSelectedProjectFromHome, type ProjectHomeEntryResult } from "./project-home-model"
 
 export interface ProjectHomeProps {
   controller: ProjectController
   locale?: "en" | "zh-CN"
   onEnterProject: (projectId: string) => Promise<boolean | void>
   onSelectionStart?: () => void
+  readySummary?: {
+    account: string
+    plan: string
+  }
   reducedMotion?: boolean
 }
 
@@ -31,24 +24,32 @@ const copy = {
     cancel: "Cancel",
     close: "Close",
     create: "Create project",
+    createFirst: "Create first project",
     createHint: "It will be created in your Documents/Convax workspace.",
     createTitle: "New project",
     description: "Bring ideas, files, and AI together in one connected workspace.",
     name: "Project name",
     namePlaceholder: "My project",
     open: "Open project",
+    openExisting: "Open existing project",
+    readyDescription: "Your account and plan are ready. Start with a local Project or open one you already have.",
+    readyTitle: "You’re ready to create",
     title: "Start with a blank canvas",
   },
   "zh-CN": {
     cancel: "取消",
     close: "关闭",
     create: "创建项目",
+    createFirst: "创建第一个项目",
     createHint: "项目将创建在 Documents/Convax 工作区。",
     createTitle: "新建项目",
     description: "把想法、文件和 AI 放进同一个空间，自由连接，随时推进。",
     name: "项目名称",
     namePlaceholder: "我的项目",
     open: "打开项目",
+    openExisting: "打开已有项目",
+    readyDescription: "账号与套餐已经准备就绪。创建一个本地项目，或打开已有项目。",
+    readyTitle: "一切准备就绪",
     title: "从一张空白画布开始",
   },
 } as const
@@ -58,6 +59,7 @@ export function ProjectHome({
   locale = "en",
   onEnterProject,
   onSelectionStart,
+  readySummary,
   reducedMotion = false,
 }: ProjectHomeProps) {
   const labels = copy[locale]
@@ -154,16 +156,24 @@ export function ProjectHome({
           </span>
         </div>
 
-        <ConvaxBrand
-          className="project-home__wordmark"
-          label="Convax"
-          showWordmark
-          tone="monochrome"
-        />
+        <ConvaxBrand className="project-home__wordmark" label="Convax" showWordmark tone="monochrome" />
         <h1 className="project-home__title" id="project-home-title">
-          {labels.title}
+          {readySummary ? labels.readyTitle : labels.title}
         </h1>
-        <p className="project-home__description">{labels.description}</p>
+        <p className="project-home__description">{readySummary ? labels.readyDescription : labels.description}</p>
+
+        {readySummary ? (
+          <dl className="project-home__ready-summary" data-project-home-ready-summary="true">
+            <div>
+              <dt>{locale === "zh-CN" ? "账号" : "Account"}</dt>
+              <dd dir="auto">{readySummary.account}</dd>
+            </div>
+            <div>
+              <dt>{locale === "zh-CN" ? "套餐" : "Plan"}</dt>
+              <dd dir="auto">{readySummary.plan}</dd>
+            </div>
+          </dl>
+        ) : null}
 
         <div className="project-home__actions">
           <Button
@@ -177,7 +187,7 @@ export function ProjectHome({
             }}
           >
             <FolderPlus />
-            {labels.create}
+            {readySummary ? labels.createFirst : labels.create}
           </Button>
           <Button
             className="project-home__action"
@@ -187,7 +197,7 @@ export function ProjectHome({
             variant="outline"
           >
             {pending === "open" ? <LoadingSpinner reducedMotion={reducedMotion} size="sm" /> : <FolderOpen />}
-            {labels.open}
+            {readySummary ? labels.openExisting : labels.open}
           </Button>
         </div>
 

@@ -22,7 +22,7 @@ describe("Desktop Project startup wiring", () => {
     expect(indexSource).toContain('projectBootstrapView.kind === "recovery"')
     expect(indexSource).toContain("<ProjectRegistryLoadingState")
     expect(indexSource).toContain("<ProjectRecoveryState")
-    expect(indexSource).toContain("<ProjectHome")
+    expect(indexSource).toContain("<ConvaxOnboarding")
     expect(projectHomeSource).not.toContain("controller.initialize()")
   })
 

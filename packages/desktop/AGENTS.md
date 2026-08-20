@@ -90,6 +90,11 @@ contract and its routed references.
 - Plugin service usage history crosses Main/Preload only through the fixed optional
   `service.usage.list` projection. Keep it bounded and display-only; failure must
   not invalidate an otherwise valid service status or become billing authority.
+- First-run account onboarding is an empty-registry Renderer composition. Resolve
+  its account surface only from generic installed Service actions, reuse the
+  system-browser authorization and Checkout operations, and persist only bounded
+  presentation progress. Live Service status owns account, Plan, Credits and
+  entitlement display; an existing local Project always bypasses the flow.
 - Derive the active Canvas/file from Workbench Surface only. Project Canvas owns
   catalog CRUD; Desktop coordinators may own save guards, fallback, rollback, and
   preference flows, but not a second active selection.
@@ -235,9 +240,9 @@ contract and its routed references.
 - Preserve `contextIsolation`, disabled Node integration, sandboxing, trusted sender
   validation, bounded messages, stale-scope checks, and cancellation at every
   process crossing.
-- Browser storage is for renderer preferences, Workbench recovery choices, and
-  bounded versioned Marketplace, Plugin Service, and model catalog display caches
-  only. It is never
+- Browser storage is for renderer preferences, Workbench recovery choices, bounded
+  first-run onboarding presentation progress, and bounded versioned Marketplace,
+  Plugin Service, and model catalog display caches only. It is never
   canonical domain, installation, execution, billing, or authorization state.
 - Marketplace settings seed from the last complete safe Renderer projection across
   remounts and cold windows, then revalidate in the background at window startup.
