@@ -1,4 +1,8 @@
 import type { CanvasDocumentRef } from "@convax/canvas/application"
+import {
+  parseCanvasCertifiedProjectionIdentity,
+  parseCanvasRendererResourceHierarchySnapshot,
+} from "@convax/canvas/collaboration"
 import { parseCanvasDocument } from "@convax/canvas/core"
 
 import {
@@ -142,7 +146,18 @@ export function requireCanvasSessionProjection(
 ): CanvasSessionProjectionDto {
   const record = exactRecord(
     value,
-    ["canRedo", "canUndo", "document", "edgeEntities", "format", "nodeEntities", "ref", "sessionId"],
+    [
+      "canRedo",
+      "canUndo",
+      "document",
+      "edgeEntities",
+      "format",
+      "nodeEntities",
+      "projectionIdentity",
+      "ref",
+      "resourceHierarchy",
+      "sessionId",
+    ],
     "Canvas session projection",
   )
   if (record.format !== "convax.canvas-session-projection")
@@ -162,6 +177,18 @@ export function requireCanvasSessionProjection(
   if (!document) throw new Error("Canvas session document projection is invalid")
   if (typeof record.canUndo !== "boolean" || typeof record.canRedo !== "boolean") {
     throw new Error("Canvas session history projection is invalid")
+  }
+  const projectionIdentity = parseCanvasCertifiedProjectionIdentity(record.projectionIdentity)
+  if (projectionIdentity.canvasId !== ref.canvasId) {
+    throw new Error("Canvas session owner projection identity crossed document scope")
+  }
+  const resourceHierarchy = parseCanvasRendererResourceHierarchySnapshot(record.resourceHierarchy)
+  if (
+    resourceHierarchy.projectionIdentity.canvasId !== projectionIdentity.canvasId ||
+    resourceHierarchy.projectionIdentity.ownerSchemaDigest !== projectionIdentity.ownerSchemaDigest ||
+    resourceHierarchy.projectionIdentity.stateCommitmentDigest !== projectionIdentity.stateCommitmentDigest
+  ) {
+    throw new Error("Canvas session resource hierarchy crossed owner projection identity")
   }
   if (!Array.isArray(record.nodeEntities) || record.nodeEntities.length !== document.nodes.length) {
     throw new Error("Canvas session entity projection is incomplete")
@@ -219,6 +246,8 @@ export function requireCanvasSessionProjection(
     document,
     edgeEntities: Object.freeze(edgeEntities),
     nodeEntities: Object.freeze(nodeEntities),
+    projectionIdentity,
+    resourceHierarchy,
     canUndo: record.canUndo,
     canRedo: record.canRedo,
   })

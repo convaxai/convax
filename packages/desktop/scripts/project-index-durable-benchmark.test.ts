@@ -44,11 +44,10 @@ describe("ProjectIndex durable benchmark", () => {
         // only base validation and final frame decode.
         expect(one.stages.validate.callCount).toBe(2)
         expect(thirtyTwo.stages.validate.callCount).toBe(2)
-        // Queue-free warm consumes the exact-head standby and therefore does
-        // not copy the full base update. Cold reopen retains that fallback.
-        const expectedStateEncodeCalls = temperature === "warm" ? 4 : 5
-        expect(one.stages["state-encode"].callCount).toBe(expectedStateEncodeCalls)
-        expect(thirtyTwo.stages["state-encode"].callCount).toBe(expectedStateEncodeCalls)
+        // Both warm reuse and cold WAL reopen consume the exact accepted
+        // materialization, so neither path performs a fallback full-base copy.
+        expect(one.stages["state-encode"].callCount).toBe(4)
+        expect(thirtyTwo.stages["state-encode"].callCount).toBe(4)
         expect(one.stages["candidate-clone"].processedSetSizes).toEqual(
           expect.objectContaining({ resources: 1, retainedFrames: 1, canvasCount: 1 }),
         )
@@ -69,38 +68,17 @@ describe("ProjectIndex durable benchmark", () => {
           retainedFramesAfterTimedCommit: 2,
           canvasCount: 1,
         })
-        expect(one.kernelDurabilityStages.object.callCount).toBe(1)
-        expect(thirtyTwo.kernelDurabilityStages.head.callCount).toBe(1)
+        expect(one.kernelDurabilityStages["accepted-frame-wal"].callCount).toBe(1)
+        expect(thirtyTwo.kernelDurabilityStages["accepted-frame-wal"].callCount).toBe(1)
         if (mode === "no-op") {
           expect(one.durability.physicalSyncCount).toBe(0)
           expect(one.durability.barriers).toEqual([])
           expect(thirtyTwo.durability.barriers).toEqual([])
         } else {
-          expect(one.durability.physicalSyncCount).toBe(11)
-          const expected = [
-            ["object-frame", "file-sync"],
-            ["object-frame", "directory-sync"],
-            ["object-operation-sidecar", "file-sync"],
-            ["object-operation-sidecar", "directory-sync"],
-            ["outbox", "file-sync"],
-            ["outbox", "directory-sync"],
-            ["journal", "file-sync"],
-            ["journal", "directory-sync"],
-            ["journal", "directory-sync"],
-            ["head", "file-sync"],
-            ["head", "directory-sync"],
-          ]
+          expect(one.durability.physicalSyncCount).toBe(1)
+          const expected = [["accepted-frame-wal", "file-sync"]]
           expect(one.durability.barriers.map(({ stage, kind }) => [stage, kind])).toEqual(expected)
           expect(thirtyTwo.durability.barriers.map(({ stage, kind }) => [stage, kind])).toEqual(expected)
-          const groupCounts = (barriers: typeof one.durability.barriers) => ({
-            object: barriers.filter(({ stage }) => stage === "object-frame" || stage === "object-operation-sidecar")
-              .length,
-            outbox: barriers.filter(({ stage }) => stage === "outbox").length,
-            journal: barriers.filter(({ stage }) => stage === "journal").length,
-            head: barriers.filter(({ stage }) => stage === "head").length,
-          })
-          expect(groupCounts(one.durability.barriers)).toEqual({ object: 4, outbox: 2, journal: 3, head: 2 })
-          expect(groupCounts(thirtyTwo.durability.barriers)).toEqual({ object: 4, outbox: 2, journal: 3, head: 2 })
         }
       }
     }

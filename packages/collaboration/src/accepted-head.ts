@@ -1,6 +1,7 @@
 import { compareDecodedBase64url, parseDigest } from "./codecs"
 import type { Digest } from "./codecs"
-import { KERNEL_DIGEST_DOMAINS } from "./constants"
+import { sameBytes } from "./binary"
+import { CURRENT_PROTOCOL_IDENTITIES, KERNEL_DIGEST_DOMAINS } from "./constants"
 import type {
   CausalFrontier,
   CausalHeadRef,
@@ -9,12 +10,19 @@ import type {
   FrameObjectRef,
   ReplicaActorHeadSet,
 } from "./contracts"
-import { canonicalStateDigest, nativeOrdinarySha256, ordinarySha256, structuredDigest } from "./digest"
+import { ordinarySha256, structuredDigest } from "./digest"
 import { CollaborationKernelError } from "./errors"
 import { decodeCausalEditFrame } from "./frame"
-import { encodeRestrictedJcs } from "./jcs"
+import { assertExactKeys, encodeRestrictedJcs, isPlainDataObject } from "./jcs"
 import { assertSameScope, parseCausalFrontier, parseDocumentScope, parseReplicaActorHeadSet } from "./parse"
-import type { AcceptedHeadMaterializationEvidence, AcceptedHeadView } from "./ports"
+import type {
+  AcceptedHeadIdentityView,
+  AcceptedHeadDurableDeltaMetadata,
+  AcceptedHeadMaterializationEvidence,
+  AcceptedHeadTransitionView,
+  AcceptedHeadView,
+  ValidatedAcceptedHeadTransition,
+} from "./ports"
 import type { CurrentProtocolAuthority } from "./authority"
 import { causalFrontierDigest, maxCausalFrontier, type CausalClosurePort } from "./causal"
 import {
@@ -25,17 +33,17 @@ import {
   encodeStateVector,
   parseStateVector,
   stateVectorDigest,
+  yjsUpdateDigest,
   type YjsDocumentFactory,
 } from "./yjs-codec"
-import { sameBytes } from "./binary"
+import { consumeOwnerStateCommitmentDigest } from "./owner-runtime"
 
 const ACCEPTED_HEAD_MATERIALIZED_STATE_DOMAIN = "convax.accepted-head-materialized-state"
-const ACCEPTED_HEAD_MATERIALIZATION_EVIDENCE_DOMAIN = "convax.accepted-head-materialization-evidence"
 interface IssuedMaterializationRecord {
-  readonly previous: AcceptedHeadView
+  readonly previousIdentityDigest: Digest
   readonly ref: FrameObjectRef
-  readonly next: AcceptedHeadView
-  readonly evidenceDigest: Digest
+  readonly next: AcceptedHeadTransitionView
+  readonly durableDelta: AcceptedHeadDurableDeltaMetadata
 }
 
 const issuedAcceptedHeadMaterializationEvidence = new WeakMap<object, IssuedMaterializationRecord>()
@@ -46,6 +54,8 @@ export interface MaterializeAcceptedFrameInput extends YjsDocumentFactory {
   readonly previous: AcceptedHeadView
   readonly ref: FrameObjectRef
   readonly exactFrameBytes: Readonly<Uint8Array>
+  /** Untrusted persisted metadata; exact-frame replay must reproduce it. */
+  readonly durableDelta: unknown
   readonly causalClosure: CausalClosurePort
 }
 
@@ -69,6 +79,15 @@ export function inspectAcceptedFrameObject(
  */
 export function materializeAcceptedFrame(input: MaterializeAcceptedFrameInput): AcceptedHeadView {
   const previousScope = parseDocumentScope(input.previous.scope)
+  const durableDelta = parseAcceptedHeadDurableDeltaMetadata(input.durableDelta)
+  assertSameScope(durableDelta.scope, previousScope, "Accepted-frame durable delta scope")
+  if (
+    durableDelta.baseDurableHeadRecordDigest !== parseDigest(input.previous.headDigest) ||
+    durableDelta.baseMaterializationDigest !== parseDigest(input.previous.materializationDigest) ||
+    durableDelta.frameDigest !== parseDigest(input.ref.frameDigest)
+  ) {
+    invalid("Accepted-frame durable delta base binding mismatches")
+  }
   const frame = inspectAcceptedFrameObject(input.authority, input.ref, input.exactFrameBytes)
   assertSameScope(frame.header.core.scope, previousScope, "Accepted-frame materialization scope")
   if (
@@ -94,19 +113,44 @@ export function materializeAcceptedFrame(input: MaterializeAcceptedFrameInput): 
   )
   try {
     applyYjsUpdate(document, frame.sections.yjsUpdate, ACCEPTED_FRAME_ORIGIN)
-    if (input.owner.protocolPort.validateBase(document) === "rejected")
-      invalid("Materialized accepted head violates owner schema")
-    const canonicalBytes = input.owner.protocolPort.canonicalStateBytes(document)
-    if (canonicalBytes === "rejected") invalid("Materialized accepted head cannot be canonicalized")
-    return Object.freeze({
+    const state = input.owner.protocolPort.validateBase(document)
+    if (typeof state === "string") invalid("Materialized accepted head violates owner schema")
+    const stateVector = encodeStateVector(document)
+    const canonicalStateDigest = consumeOwnerStateCommitmentDigest(input.owner, document, state)
+    if (canonicalStateDigest === null) invalid("Materialized accepted head omitted its exact state commitment")
+    const materializationDigest = acceptedHeadDeltaCommitmentDigest({
+      format: "convax.accepted-head-durable-delta-metadata",
       scope: previousScope,
-      headDigest: parseDigest(input.previous.headDigest),
+      protocolDigest: frame.header.core.protocolDigest,
+      baseDurableHeadRecordDigest: input.previous.headDigest,
+      baseMaterializationDigest: input.previous.materializationDigest,
+      frameDigest: input.ref.frameDigest,
+      yjsUpdateDigest: yjsUpdateDigest(frame.sections.yjsUpdate),
+      resultingFrontierDigest: causalFrontierDigest(frontier),
+      resultingActorHeadsDigest: replicaActorHeadSetDigest(actorHeads),
+      stateVectorDigest: stateVectorDigest(stateVector),
+      canonicalStateDigest,
+    })
+    const transition = Object.freeze({
+      scope: previousScope,
       frontier,
       frontierDigest: causalFrontierDigest(frontier),
       actorHeads,
+      stateVector,
+      canonicalStateDigest,
+      materializationDigest,
+    }) satisfies AcceptedHeadTransitionView
+    assertDurableDeltaMatchesTransition(durableDelta, transition, frame.sections.yjsUpdate)
+    return Object.freeze({
+      scope: previousScope,
+      headDigest: parseDigest(input.previous.headDigest),
+      frontier: transition.frontier,
+      frontierDigest: transition.frontierDigest,
+      actorHeads: transition.actorHeads,
       fullUpdate: encodeFullUpdate(document),
-      stateVector: encodeStateVector(document),
-      canonicalStateDigest: canonicalStateDigest(input.owner.protocolPort.schemaDigest, new Uint8Array(canonicalBytes)),
+      stateVector: transition.stateVector,
+      canonicalStateDigest: transition.canonicalStateDigest,
+      materializationDigest: transition.materializationDigest,
     })
   } finally {
     document.destroy()
@@ -166,53 +210,43 @@ function acceptedHeadMaterializedStateDigestWithFullUpdateDigest(
 }
 
 export function createAcceptedHeadMaterializationEvidence(input: {
-  readonly previous: AcceptedHeadView
+  readonly previous: AcceptedHeadIdentityView
   readonly ref: FrameObjectRef
   readonly nextHead: CausalHeadRef
   readonly resultingFrontier: CausalFrontier
-  readonly postDocument: import("yjs").Doc
+  readonly postStateVector: import("./codecs").StateVector
+  readonly yjsUpdateDigest: Digest
   readonly canonicalStateDigest: Digest
+  readonly candidateFullClones?: 0 | 1
 }): AcceptedHeadMaterializationEvidence {
-  return issueAcceptedHeadMaterializationEvidence(input, ordinarySha256)
+  return issueAcceptedHeadMaterializationEvidence(input)
 }
 
-/** Internal local-commit acceleration; deliberately absent from the package root. */
-export async function createLocalAcceptedHeadMaterializationEvidence(input: {
-  readonly previous: AcceptedHeadView
+/** Internal local-commit issuer; no full document bytes are accepted or visited. */
+export function createLocalAcceptedHeadMaterializationEvidence(input: {
+  readonly previous: AcceptedHeadIdentityView
   readonly ref: FrameObjectRef
   readonly nextHead: CausalHeadRef
   readonly resultingFrontier: CausalFrontier
-  readonly postDocument: import("yjs").Doc
+  readonly postStateVector: import("./codecs").StateVector
+  readonly yjsUpdateDigest: Digest
   readonly canonicalStateDigest: Digest
-}): Promise<AcceptedHeadMaterializationEvidence> {
-  const fullUpdate = encodeFullUpdate(input.postDocument)
-  const previousFullUpdate = new Uint8Array(input.previous.fullUpdate)
-  const [fullUpdateDigest, previousFullUpdateDigest] = await Promise.all([
-    nativeOrdinarySha256(fullUpdate),
-    nativeOrdinarySha256(previousFullUpdate),
-  ])
-  return issueAcceptedHeadMaterializationEvidence(
-    input,
-    (bytes) => {
-      if (bytes === fullUpdate) return fullUpdateDigest
-      if (bytes === previousFullUpdate) return previousFullUpdateDigest
-      return ordinarySha256(bytes)
-    },
-    { fullUpdate, previousFullUpdate },
-  )
+  readonly candidateFullClones: 0 | 1
+}): AcceptedHeadMaterializationEvidence {
+  return issueAcceptedHeadMaterializationEvidence(input)
 }
 
 function issueAcceptedHeadMaterializationEvidence(
   input: {
-    readonly previous: AcceptedHeadView
+    readonly previous: AcceptedHeadIdentityView
     readonly ref: FrameObjectRef
     readonly nextHead: CausalHeadRef
     readonly resultingFrontier: CausalFrontier
-    readonly postDocument: import("yjs").Doc
+    readonly postStateVector: import("./codecs").StateVector
+    readonly yjsUpdateDigest: Digest
     readonly canonicalStateDigest: Digest
+    readonly candidateFullClones?: 0 | 1
   },
-  sha256: (bytes: Uint8Array<ArrayBufferLike>) => Digest,
-  prepared?: Readonly<{ fullUpdate: Uint8Array; previousFullUpdate: Uint8Array }>,
 ): AcceptedHeadMaterializationEvidence {
   const scope = parseDocumentScope(input.previous.scope)
   assertSameScope(input.ref.scope, scope, "Accepted-head materialization frame scope")
@@ -231,85 +265,214 @@ function issueAcceptedHeadMaterializationEvidence(
     parseReplicaActorHeadSet(input.previous.actorHeads),
     input.nextHead,
   )
-  const fullUpdate = prepared?.fullUpdate ?? encodeFullUpdate(input.postDocument)
-  const stateVector = encodeStateVector(input.postDocument)
-  const previousFullUpdate = prepared?.previousFullUpdate ?? new Uint8Array(input.previous.fullUpdate)
-  const previous = cloneAcceptedHead(input.previous, previousFullUpdate)
+  const stateVector = parseStateVector(input.postStateVector)
   const fields = Object.freeze({
-    format: "convax.accepted-head-materialization-evidence" as const,
+    format: "convax.accepted-head-durable-delta-metadata" as const,
     scope,
+    protocolDigest: parseDigest(CURRENT_PROTOCOL_IDENTITIES.protocolDigest),
     baseDurableHeadRecordDigest: parseDigest(input.previous.headDigest),
-    baseMaterializedStateDigest: acceptedHeadMaterializedStateDigestWithFullUpdateDigest(
-      previous,
-      sha256(previousFullUpdate),
-    ),
+    baseMaterializationDigest: parseDigest(input.previous.materializationDigest),
     frameDigest: parseDigest(input.ref.frameDigest),
+    yjsUpdateDigest: parseDigest(input.yjsUpdateDigest),
     resultingFrontier,
     resultingFrontierDigest: causalFrontierDigest(resultingFrontier),
     resultingActorHeads,
     resultingActorHeadsDigest: replicaActorHeadSetDigest(resultingActorHeads),
-    fullUpdate,
-    fullUpdateDigest: sha256(fullUpdate),
     stateVector,
     stateVectorDigest: stateVectorDigest(stateVector),
     canonicalStateDigest: parseDigest(input.canonicalStateDigest),
   })
-  const evidenceDigest = acceptedHeadMaterializationEvidenceDigest(fields)
-  const evidence = Object.freeze({
+  const resultingMaterializationDigest = acceptedHeadDeltaCommitmentDigest(fields)
+  const durableDelta = Object.freeze({
     ...fields,
-    fullUpdate: new Uint8Array(fullUpdate),
+    resultingFrontier,
+    resultingActorHeads,
     stateVector: parseStateVector(stateVector),
-    evidenceDigest,
-  })
+    resultingMaterializationDigest,
+  }) satisfies AcceptedHeadDurableDeltaMetadata
+  const evidence = Object.freeze({
+    format: fields.format,
+    scope,
+    protocolDigest: fields.protocolDigest,
+    baseDurableHeadRecordDigest: fields.baseDurableHeadRecordDigest,
+    baseMaterializationDigest: fields.baseMaterializationDigest,
+    frameDigest: fields.frameDigest,
+    yjsUpdateDigest: fields.yjsUpdateDigest,
+    resultingFrontierDigest: fields.resultingFrontierDigest,
+    resultingActorHeadsDigest: fields.resultingActorHeadsDigest,
+    stateVectorDigest: fields.stateVectorDigest,
+    canonicalStateDigest: fields.canonicalStateDigest,
+    resultingMaterializationDigest,
+    work: Object.freeze({
+      fullUpdateEncodes: 0 as const,
+      historicalBytesVisited: 0 as const,
+      candidateFullClones: input.candidateFullClones ?? 0,
+    }),
+  }) as AcceptedHeadMaterializationEvidence
   const next = Object.freeze({
     scope,
-    headDigest: previous.headDigest,
     frontier: resultingFrontier,
     frontierDigest: fields.resultingFrontierDigest,
     actorHeads: resultingActorHeads,
-    fullUpdate: new Uint8Array(fullUpdate),
     stateVector: parseStateVector(stateVector),
     canonicalStateDigest: fields.canonicalStateDigest,
-  })
+    materializationDigest: resultingMaterializationDigest,
+  }) satisfies AcceptedHeadTransitionView
   issuedAcceptedHeadMaterializationEvidence.set(
     evidence,
-    Object.freeze({ previous, ref: cloneFrameRef(input.ref), next, evidenceDigest }),
+    Object.freeze({
+      previousIdentityDigest: acceptedHeadMetadataIdentityDigest(input.previous),
+      ref: cloneFrameRef(input.ref),
+      next,
+      durableDelta,
+    }),
   )
   return evidence
 }
 
-/** Returns rejected so a native adapter can safely fall back to full materialization. */
+/** Returns metadata only; full-update materialization is a cold persistence concern. */
 export function validateAcceptedHeadMaterializationEvidence(input: {
-  readonly previous: AcceptedHeadView
+  readonly previous: AcceptedHeadIdentityView
   readonly ref: FrameObjectRef
   readonly evidence: AcceptedHeadMaterializationEvidence
-}): AcceptedHeadView | "rejected" {
+}): ValidatedAcceptedHeadTransition | "rejected" {
   try {
     const evidence = input.evidence
     const record = issuedAcceptedHeadMaterializationEvidence.get(evidence)
-    if (!record || !sameAcceptedHead(record.previous, input.previous) || !sameFrameRef(record.ref, input.ref)) {
+    if (
+      !record ||
+      record.previousIdentityDigest !== acceptedHeadMetadataIdentityDigest(input.previous) ||
+      !sameFrameRef(record.ref, input.ref) ||
+      !evidenceMirrorsDurableDelta(evidence, record.durableDelta) ||
+      evidence.resultingMaterializationDigest !== acceptedHeadDeltaCommitmentDigest(record.durableDelta)
+    ) {
       return "rejected"
     }
-    return cloneAcceptedHead(record.next)
+    return Object.freeze({
+      transition: cloneAcceptedHeadTransition(record.next),
+      durableDelta: cloneAcceptedHeadDurableDeltaMetadata(record.durableDelta),
+    })
   } catch {
     return "rejected"
   }
 }
 
-function cloneAcceptedHead(
-  head: AcceptedHeadView,
-  fullUpdate: Uint8Array<ArrayBufferLike> = new Uint8Array(head.fullUpdate),
-): AcceptedHeadView {
+/** Parses closed persisted metadata without granting it process-local authority. */
+export function parseAcceptedHeadDurableDeltaMetadata(value: unknown): AcceptedHeadDurableDeltaMetadata {
+  if (!isPlainDataObject(value)) invalid("Accepted-head durable delta metadata is invalid")
+  assertExactKeys(value, [
+    "format",
+    "scope",
+    "protocolDigest",
+    "baseDurableHeadRecordDigest",
+    "baseMaterializationDigest",
+    "frameDigest",
+    "yjsUpdateDigest",
+    "resultingFrontier",
+    "resultingFrontierDigest",
+    "resultingActorHeads",
+    "resultingActorHeadsDigest",
+    "stateVector",
+    "stateVectorDigest",
+    "canonicalStateDigest",
+    "resultingMaterializationDigest",
+  ], "AcceptedHeadDurableDeltaMetadata")
+  if (value.format !== "convax.accepted-head-durable-delta-metadata") {
+    invalid("Accepted-head durable delta metadata format is invalid")
+  }
+  const scope = parseDocumentScope(value.scope)
+  const resultingFrontier = parseCausalFrontier(value.resultingFrontier)
+  const resultingActorHeads = parseReplicaActorHeadSet(value.resultingActorHeads)
+  assertSameScope(resultingActorHeads.scope, scope, "Accepted-head durable delta actor-head scope")
+  if (!(value.stateVector instanceof Uint8Array)) invalid("Accepted-head durable delta state vector is invalid")
+  const stateVector = parseStateVector(value.stateVector)
+  const parsed = Object.freeze({
+    format: value.format,
+    scope,
+    protocolDigest: parseDigest(value.protocolDigest),
+    baseDurableHeadRecordDigest: parseDigest(value.baseDurableHeadRecordDigest),
+    baseMaterializationDigest: parseDigest(value.baseMaterializationDigest),
+    frameDigest: parseDigest(value.frameDigest),
+    yjsUpdateDigest: parseDigest(value.yjsUpdateDigest),
+    resultingFrontier,
+    resultingFrontierDigest: parseDigest(value.resultingFrontierDigest),
+    resultingActorHeads,
+    resultingActorHeadsDigest: parseDigest(value.resultingActorHeadsDigest),
+    stateVector,
+    stateVectorDigest: parseDigest(value.stateVectorDigest),
+    canonicalStateDigest: parseDigest(value.canonicalStateDigest),
+    resultingMaterializationDigest: parseDigest(value.resultingMaterializationDigest),
+  }) satisfies AcceptedHeadDurableDeltaMetadata
+  if (
+    parsed.protocolDigest !== CURRENT_PROTOCOL_IDENTITIES.protocolDigest ||
+    causalFrontierDigest(parsed.resultingFrontier) !== parsed.resultingFrontierDigest ||
+    replicaActorHeadSetDigest(parsed.resultingActorHeads) !== parsed.resultingActorHeadsDigest ||
+    stateVectorDigest(parsed.stateVector) !== parsed.stateVectorDigest ||
+    acceptedHeadDeltaCommitmentDigest(parsed) !== parsed.resultingMaterializationDigest
+  ) {
+    invalid("Accepted-head durable delta metadata commitment mismatches")
+  }
+  return parsed
+}
+
+function evidenceMirrorsDurableDelta(
+  evidence: AcceptedHeadMaterializationEvidence,
+  durableDelta: AcceptedHeadDurableDeltaMetadata,
+): boolean {
+  return (
+    evidence.format === durableDelta.format &&
+    encodeRestrictedJcsText(evidence.scope) === encodeRestrictedJcsText(durableDelta.scope) &&
+    evidence.protocolDigest === durableDelta.protocolDigest &&
+    evidence.baseDurableHeadRecordDigest === durableDelta.baseDurableHeadRecordDigest &&
+    evidence.baseMaterializationDigest === durableDelta.baseMaterializationDigest &&
+    evidence.frameDigest === durableDelta.frameDigest &&
+    evidence.yjsUpdateDigest === durableDelta.yjsUpdateDigest &&
+    evidence.resultingFrontierDigest === durableDelta.resultingFrontierDigest &&
+    evidence.resultingActorHeadsDigest === durableDelta.resultingActorHeadsDigest &&
+    evidence.stateVectorDigest === durableDelta.stateVectorDigest &&
+    evidence.canonicalStateDigest === durableDelta.canonicalStateDigest &&
+    evidence.resultingMaterializationDigest === durableDelta.resultingMaterializationDigest &&
+    evidence.work.fullUpdateEncodes === 0 &&
+    evidence.work.historicalBytesVisited === 0 &&
+    (evidence.work.candidateFullClones === 0 || evidence.work.candidateFullClones === 1)
+  )
+}
+
+function assertDurableDeltaMatchesTransition(
+  durableDelta: AcceptedHeadDurableDeltaMetadata,
+  transition: AcceptedHeadTransitionView,
+  exactYjsUpdate: Readonly<Uint8Array>,
+): void {
+  if (
+    durableDelta.yjsUpdateDigest !== yjsUpdateDigest(new Uint8Array(exactYjsUpdate)) ||
+    encodeRestrictedJcsText(durableDelta.scope) !== encodeRestrictedJcsText(transition.scope) ||
+    encodeRestrictedJcsText(durableDelta.resultingFrontier) !== encodeRestrictedJcsText(transition.frontier) ||
+    durableDelta.resultingFrontierDigest !== transition.frontierDigest ||
+    encodeRestrictedJcsText(durableDelta.resultingActorHeads) !== encodeRestrictedJcsText(transition.actorHeads) ||
+    !sameBytes(durableDelta.stateVector, transition.stateVector) ||
+    durableDelta.canonicalStateDigest !== transition.canonicalStateDigest ||
+    durableDelta.resultingMaterializationDigest !== transition.materializationDigest
+  ) {
+    invalid("Exact accepted-frame replay differs from its durable delta metadata")
+  }
+}
+
+function cloneAcceptedHeadTransition(head: AcceptedHeadTransitionView): AcceptedHeadTransitionView {
   return Object.freeze({
     scope: parseDocumentScope(head.scope),
-    headDigest: parseDigest(head.headDigest),
     frontier: parseCausalFrontier(head.frontier),
     frontierDigest: parseDigest(head.frontierDigest),
     actorHeads: parseReplicaActorHeadSet(head.actorHeads),
-    fullUpdate,
     stateVector: parseStateVector(head.stateVector),
     canonicalStateDigest: parseDigest(head.canonicalStateDigest),
+    materializationDigest: parseDigest(head.materializationDigest),
   })
+}
+
+function cloneAcceptedHeadDurableDeltaMetadata(
+  value: AcceptedHeadDurableDeltaMetadata,
+): AcceptedHeadDurableDeltaMetadata {
+  return parseAcceptedHeadDurableDeltaMetadata(value)
 }
 
 function cloneFrameRef(ref: FrameObjectRef): FrameObjectRef {
@@ -320,33 +483,50 @@ function sameFrameRef(left: FrameObjectRef, right: FrameObjectRef): boolean {
   return encodeRestrictedJcsText(left) === encodeRestrictedJcsText(right)
 }
 
-function sameAcceptedHead(expected: AcceptedHeadView, actual: AcceptedHeadView): boolean {
-  return (
-    encodeRestrictedJcsText(expected.scope) === encodeRestrictedJcsText(actual.scope) &&
-    expected.headDigest === actual.headDigest &&
-    expected.frontierDigest === actual.frontierDigest &&
-    encodeRestrictedJcsText(expected.frontier) === encodeRestrictedJcsText(actual.frontier) &&
-    encodeRestrictedJcsText(expected.actorHeads) === encodeRestrictedJcsText(actual.actorHeads) &&
-    expected.canonicalStateDigest === actual.canonicalStateDigest &&
-    sameBytes(expected.stateVector, actual.stateVector) &&
-    sameBytes(expected.fullUpdate, actual.fullUpdate)
-  )
+function acceptedHeadDeltaCommitmentDigest(
+  fields: Pick<
+    AcceptedHeadDurableDeltaMetadata,
+    | "format"
+    | "scope"
+    | "protocolDigest"
+    | "baseDurableHeadRecordDigest"
+    | "baseMaterializationDigest"
+    | "frameDigest"
+    | "yjsUpdateDigest"
+    | "resultingFrontierDigest"
+    | "resultingActorHeadsDigest"
+    | "stateVectorDigest"
+    | "canonicalStateDigest"
+  >,
+): Digest {
+  if (parseDigest(fields.protocolDigest) !== CURRENT_PROTOCOL_IDENTITIES.protocolDigest) {
+    invalid("Accepted-head delta commitment protocol is unsupported")
+  }
+  return structuredDigest(KERNEL_DIGEST_DOMAINS.acceptedHeadDurableDeltaMetadata, {
+    format: fields.format,
+    scope: parseDocumentScope(fields.scope),
+    protocolDigest: parseDigest(fields.protocolDigest),
+    baseDurableHeadRecordDigest: parseDigest(fields.baseDurableHeadRecordDigest),
+    baseMaterializationDigest: parseDigest(fields.baseMaterializationDigest),
+    frameDigest: parseDigest(fields.frameDigest),
+    yjsUpdateDigest: parseDigest(fields.yjsUpdateDigest),
+    resultingFrontierDigest: parseDigest(fields.resultingFrontierDigest),
+    resultingActorHeadsDigest: parseDigest(fields.resultingActorHeadsDigest),
+    stateVectorDigest: parseDigest(fields.stateVectorDigest),
+    canonicalStateDigest: parseDigest(fields.canonicalStateDigest),
+  })
 }
 
-function acceptedHeadMaterializationEvidenceDigest(
-  fields: Omit<AcceptedHeadMaterializationEvidence, "evidenceDigest">,
-): Digest {
-  return structuredDigest(ACCEPTED_HEAD_MATERIALIZATION_EVIDENCE_DOMAIN, {
-    format: fields.format,
-    scope: fields.scope,
-    baseDurableHeadRecordDigest: fields.baseDurableHeadRecordDigest,
-    baseMaterializedStateDigest: fields.baseMaterializedStateDigest,
-    frameDigest: fields.frameDigest,
-    resultingFrontierDigest: fields.resultingFrontierDigest,
-    resultingActorHeadsDigest: fields.resultingActorHeadsDigest,
-    fullUpdateDigest: fields.fullUpdateDigest,
-    stateVectorDigest: fields.stateVectorDigest,
-    canonicalStateDigest: fields.canonicalStateDigest,
+function acceptedHeadMetadataIdentityDigest(head: AcceptedHeadIdentityView): Digest {
+  return structuredDigest(KERNEL_DIGEST_DOMAINS.acceptedHeadMetadataIdentity, {
+    format: "convax.accepted-head-metadata-identity",
+    scope: parseDocumentScope(head.scope),
+    headDigest: parseDigest(head.headDigest),
+    frontierDigest: parseDigest(head.frontierDigest),
+    actorHeadsDigest: replicaActorHeadSetDigest(head.actorHeads),
+    stateVectorDigest: stateVectorDigest(head.stateVector),
+    canonicalStateDigest: parseDigest(head.canonicalStateDigest),
+    materializationDigest: parseDigest(head.materializationDigest),
   })
 }
 

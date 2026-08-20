@@ -5,12 +5,19 @@ import { getCanvasNodeGenerationRun } from "../generation-run"
 import { getCanvasResourcePresentationSize } from "../media-sizing"
 import { adaptCanvasApplicationCommand } from "./application-command-adapter"
 import { constructCanvasAuthoritativeIntent } from "./command-construction"
+import { createCanvasSnapshotMap } from "./persistent-append-map"
 import { applyOk, context, createAgent, createPendingFile, digest, newCanvas, VALID_FACTS } from "./test-fixtures.test"
-import { derivedNodeRef } from "./validation"
+import { canvasEntityKey, derivedNodeRef, makeStamp } from "./validation"
 import { validateCanvasYDoc } from "./ydoc"
-import { projectCanvas, projectCanvasDocument } from "./projection"
+import {
+  buildCanvasProjectionIndex,
+  canvasProjectionBuildCounts,
+  installCanvasResourceAppendProjectionIndex,
+  projectCanvas,
+  projectCanvasDocument,
+} from "./projection"
 import { materializeCanvasSemanticHistoryIntent } from "./reducer"
-import type { CanvasResourceProofRef, CanvasSnapshot } from "./types"
+import type { CanvasNodeSnapshot, CanvasResourceProofRef, CanvasSnapshot, NodeDataEnvelope } from "./types"
 import { parseUint32, parseUint64 } from "@convax/collaboration"
 
 describe("Canvas v2 application command adapter", () => {
@@ -394,6 +401,38 @@ describe("Canvas v2 application command adapter", () => {
     })
   })
 
+  test("resolves a quick-connect Add Text anchor with zero historical projection visits at 1/1k/10k", () => {
+    for (const entryCount of [1, 1_000, 10_000]) {
+      const { anchor, snapshot } = quickConnectSnapshot(entryCount)
+      const proof = currentResourceProof("text", 93)
+      const operationContext = context(94, 95, 2)
+      const before = canvasProjectionBuildCounts()
+      const adaptation = adaptCanvasApplicationCommand({
+        request: request({
+          type: "resources.add",
+          items: [{ item: resourceItem("text", proof, "Notes/Connected.md"), nodeId: "ignored" }],
+          placement: { anchor: { x: 400, y: 120 } },
+          relation: { anchorNodeIds: [anchor.id], direction: "from-anchor", mode: "connect" },
+        }),
+        snapshot,
+        context: operationContext,
+      })
+      expect(adaptation).not.toBe("rejected")
+      if (adaptation === "rejected") throw new Error("Quick-connect Add Text adaptation rejected")
+      expect(adaptation.command).toMatchObject({
+        kind: "resources-create",
+        relation: { anchors: [anchor], direction: "from-anchor" },
+      })
+      expect(constructCanvasAuthoritativeIntent({ snapshot, context: operationContext, command: adaptation.command }))
+        .not.toBe("rejected")
+      const after = canvasProjectionBuildCounts()
+      expect(after.fullBuilds - before.fullBuilds).toBe(0)
+      expect(after.fullNodeTraversals - before.fullNodeTraversals).toBe(0)
+      expect(after.projectionArrayEntryVisits - before.projectionArrayEntryVisits).toBe(0)
+      expect(after.historicalGenerationVisits - before.historicalGenerationVisits).toBe(0)
+    }
+  })
+
   test("commits the Canvas-owned intrinsic media size in the first resource intent", () => {
     const document = newCanvas()
     const proof = currentResourceProof("image", 92)
@@ -754,6 +793,70 @@ describe("Canvas v2 application command adapter", () => {
     ).toBe("rejected")
   })
 })
+
+function quickConnectSnapshot(entryCount: number): {
+  readonly anchor: CanvasNodeSnapshot["identity"]["ref"]
+  readonly snapshot: CanvasSnapshot
+} {
+  const genesis = validateCanvasYDoc(newCanvas())
+  const operationContext = context(92, 93, 1)
+  const nodes = Array.from({ length: entryCount }, (_, index) => {
+    const ordinal = parseUint32(String(index))
+    const ref = derivedNodeRef(operationContext, ordinal)
+    const claim = <T>(value: T) => Object.freeze({
+      format: "convax.canvas-stamped-claim" as const,
+      stamp: makeStamp(operationContext, ordinal),
+      value,
+    })
+    const data: NodeDataEnvelope = Object.freeze({
+      format: "convax.canvas-node-data",
+      kind: "agent",
+      title: `quick-connect-${index}`,
+      instructions: null,
+    })
+    const node: CanvasNodeSnapshot = Object.freeze({
+      key: canvasEntityKey(ref),
+      identity: Object.freeze({
+        format: "convax.canvas-node-identity",
+        ref,
+        role: "agent",
+        createdBy: operationContext.operationId,
+      }),
+      position: Object.freeze([
+        [operationContext.actorId, claim(Object.freeze({ x: index * 400, y: 1_000 }))] as const,
+      ]),
+      size: Object.freeze([
+        [operationContext.actorId, claim(Object.freeze({ width: 240, height: 120 }))] as const,
+      ]),
+      data: Object.freeze([[operationContext.actorId, claim(data)] as const]),
+      plugin: Object.freeze([[operationContext.actorId, claim(null)] as const]),
+      tombstones: Object.freeze([]),
+      creationGroup: null,
+    })
+    return [node.key, node] as const
+  }).sort((left, right) => left[0] < right[0] ? -1 : left[0] > right[0] ? 1 : 0)
+  const empty = <T>() => createCanvasSnapshotMap<T>([])
+  const base: CanvasSnapshot = Object.freeze({
+    identity: genesis.identity,
+    meta: genesis.meta,
+    nodes: createCanvasSnapshotMap(nodes),
+    edges: empty(),
+    containments: empty(),
+    generationBegins: empty(),
+    generationTerminals: empty(),
+    generationDismissals: empty(),
+    generationRecoveryFailures: empty(),
+    semanticHistory: empty(),
+    operations: empty(),
+  })
+  buildCanvasProjectionIndex(base)
+  // Accepted resource appends install a lazy, persistent successor projection.
+  // Keeping this fixture lazy makes any accidental `.projection.nodes` read
+  // observable as N historical array-entry visits.
+  const snapshot = Object.freeze({ ...base }) as CanvasSnapshot
+  installCanvasResourceAppendProjectionIndex(base, snapshot, [], [])
+  return { anchor: nodes[0]![1].identity.ref, snapshot }
+}
 
 function request(command: CanvasApplicationCommand, actorKind = "ui"): CanvasApplicationCommandRequest {
   return {

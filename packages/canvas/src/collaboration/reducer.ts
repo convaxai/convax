@@ -9,6 +9,7 @@ import {
   type OwnerIntentValidationContext,
 } from "@convax/collaboration"
 import * as Y from "yjs"
+import { resolveIndexedCanvasResourcePlacements } from "../resource-placement"
 import type {
   BoundedOperationReceipt,
   CanvasActualWriteEvidence,
@@ -52,9 +53,11 @@ import {
   generationLifecycleDigest,
   geometryDigest,
   nodeIdentityDigest,
-  obstacleProjectionDigest,
+  installCanvasResourceAppendProjectionIndex,
+  canvasTopLevelPlacementIndex,
   projectedGenerationDigestV2,
 } from "./projection"
+import { installCanvasGenerationProjectionIndex } from "./generation-projection-index"
 import {
   actualWriteValueDigest,
   canvasDigest,
@@ -82,8 +85,12 @@ import {
   readCanvasOperationRecordForOwner,
   validateCanvasYDoc,
 } from "./ydoc"
-import { planCanvasHistoryDerivedOrdinals, scheduleCanvasHistoryTemplates } from "./history-schedule"
-import { resolveCanvasResourcePlacements } from "../resource-placement"
+import {
+  assertCanvasHistoryTemplateSchedule,
+  planCanvasHistoryDerivedOrdinals,
+  scheduleCanvasHistoryTemplates,
+} from "./history-schedule"
+import { appendCanvasSnapshotEntries } from "./persistent-append-map"
 
 export type CanvasReducerOutcome = CanvasIntentApplyResult | "pending" | "rejected"
 
@@ -102,6 +109,7 @@ interface CanvasDuplicateFastPost {
   readonly expectedTopLevelChanges: ReadonlyMap<string, readonly string[]>
   readonly createdNodeKeys: readonly string[]
   readonly createdEdgeKeys: readonly string[]
+  readonly provisionalReceiptReplaced: boolean
 }
 
 interface CanvasDuplicateCapture {
@@ -110,12 +118,49 @@ interface CanvasDuplicateCapture {
   readonly root: Y.Map<unknown>
   readonly childMaps: ReadonlyMap<string, Y.Map<unknown>>
   transaction: Y.Transaction | null
-  seal: Readonly<{ transaction: Y.Transaction; changed: ReadonlyMap<Y.AbstractType<any>, ReadonlySet<string | null>>; deletedStructCount: number }> | null
+  seal: Readonly<{
+    transaction: Y.Transaction
+    changed: ReadonlyMap<Y.AbstractType<any>, ReadonlySet<string | null>>
+    deletedStructCount: number
+    completedGeneration: number
+  }> | null
   invalid: boolean
 }
 
 const canvasDuplicateFastPosts = new WeakMap<Y.Doc, CanvasDuplicateFastPost>()
 const canvasDuplicateCaptures = new WeakMap<Y.Doc, CanvasDuplicateCapture>()
+interface CanvasCandidateTransactionTracker {
+  completedGeneration: number
+  depth: number
+  readonly destroy: () => void
+}
+const canvasCandidateTransactionTrackers = new WeakMap<Y.Doc, CanvasCandidateTransactionTracker>()
+
+function canvasCandidateTransactionTracker(candidate: Y.Doc): CanvasCandidateTransactionTracker {
+  const existing = canvasCandidateTransactionTrackers.get(candidate)
+  if (existing) return existing
+  const tracker = {} as CanvasCandidateTransactionTracker
+  const before = () => { tracker.depth += 1 }
+  const after = () => {
+    tracker.depth -= 1
+    if (tracker.depth < 0) throw new TypeError("Canvas transaction tracker underflow")
+    if (tracker.depth === 0) tracker.completedGeneration += 1
+  }
+  Object.assign(tracker, {
+    completedGeneration: 0,
+    depth: 0,
+    destroy: () => {
+      candidate.off("beforeTransaction", before)
+      candidate.off("afterTransaction", after)
+      canvasCandidateTransactionTrackers.delete(candidate)
+    },
+  } satisfies CanvasCandidateTransactionTracker)
+  candidate.on("beforeTransaction", before)
+  candidate.on("afterTransaction", after)
+  candidate.on("destroy", tracker.destroy)
+  canvasCandidateTransactionTrackers.set(candidate, tracker)
+  return tracker
+}
 
 export function armCanvasDuplicateCandidateCapture(
   candidate: Y.Doc,
@@ -124,6 +169,8 @@ export function armCanvasDuplicateCandidateCapture(
 ): void {
   if (candidate._transaction !== null) throw new TypeError("Canvas candidate capture must arm before a transaction")
   const names = [...candidate.share.keys()]
+  const tracker = canvasCandidateTransactionTracker(candidate)
+  if (tracker.depth !== 0) throw new TypeError("Canvas candidate capture requires a transaction boundary")
   const root = candidate.share.get(CANVAS_ROOT_NAME)
   if (names.length !== 1 || names[0] !== CANVAS_ROOT_NAME || !(root instanceof Y.Map))
     throw new TypeError("Canvas candidate capture requires the exact Canvas root")
@@ -141,6 +188,7 @@ export function armCanvasDuplicateCandidateCapture(
       transaction,
       changed: new Map([...transaction.changed].map(([type, keys]) => [type, new Set(keys)] as const)),
       deletedStructCount: [...transaction.deleteSet.clients.values()].flat().reduce((total, range) => total + range.len, 0),
+      completedGeneration: tracker.completedGeneration,
     })
     candidate.off("beforeTransaction", before)
     candidate.off("afterTransaction", after)
@@ -318,6 +366,10 @@ function reduceCanvasIntentInternal(
     const invalidatedEntities: CanvasEntityRef[] = []
     const invalidatedMetaFields: ("title" | "description" | "tags")[] = []
     const baseIndex = buildCanvasProjectionIndex(base)
+    const appendOnlyFastPath =
+      intent.kind === "canvas.nodes.duplicate" ||
+      intent.kind === "canvas.resources.add" ||
+      intent.kind === "canvas.resources.pending.create"
 
     const fact = planIntent(
       intent,
@@ -357,11 +409,30 @@ function reduceCanvasIntentInternal(
       const operations = getCanvasChildMap(candidate, "operations")
       // Duplicate's incremental history snapshot does not require a temporary
       // receipt. Avoiding an in-transaction overwrite keeps its exact append-only
-      // transaction seal free of a Yjs delete set.
+    // transaction seal free of a Yjs delete set.
       if (intent.kind !== "canvas.nodes.duplicate") writeJson(operations, receiptKey, provisionalReceipt)
-      const postDomain = intent.kind === "canvas.nodes.duplicate"
+      const postDomain = appendOnlyFastPath
         ? buildCanvasDuplicateIncrementalSnapshot(candidate, base, writes)
         : validateCanvasYDoc(candidate)
+      installCanvasGenerationProjectionIndex(
+        base,
+        postDomain,
+        writes
+          .filter((write) => write.entityKind === "generation")
+          .map((write) => write.entityId),
+      )
+      if (
+        postDomain !== base &&
+        (intent.kind === "canvas.resources.add" || intent.kind === "canvas.resources.pending.create")
+      ) {
+        const changed = duplicateExpectedTopLevelChanges(writes)
+        installCanvasResourceAppendProjectionIndex(
+          base,
+          postDomain,
+          changed.get("nodes") ?? [],
+          changed.get("edges") ?? [],
+        )
+      }
       if (UNDOABLE.has(intent.kind))
         historyRoot = captureHistoryRoot(base, postDomain, intent, context, resultEntities)
       const receipt: BoundedOperationReceipt = {
@@ -415,13 +486,26 @@ function reduceCanvasIntentInternal(
     }
     if (encodeRestrictedJcs(evidence).byteLength > 256 * 1024)
       throw new CanvasSchemaError("evidence-too-large", "Canvas write evidence exceeds 256 KiB")
-    const fastPost = intent.kind === "canvas.nodes.duplicate"
+    const fastPost = appendOnlyFastPath
       ? buildCanvasDuplicateIncrementalSnapshot(candidate, base, writes)
       : null
     if (fastPost === null) validateCanvasYDoc(candidate)
     const receipt = getCanvasChildMap(candidate, "operations").get(
       operationKey(context.actorId, context.operationId),
     ) as BoundedOperationReceipt
+    if (fastPost !== null && intent.kind !== "canvas.nodes.duplicate") {
+      if (intent.kind !== "canvas.resources.add" && intent.kind !== "canvas.resources.pending.create") {
+        throw new CanvasSchemaError("fast-path-intent", "Unsupported Canvas append fast path")
+      }
+      validateCanvasResourceAppendPost(base, fastPost, intent.kind, context, receipt, resultEntities, writes)
+      const changed = duplicateExpectedTopLevelChanges(writes)
+      installCanvasResourceAppendProjectionIndex(
+        base,
+        fastPost,
+        changed.get("nodes") ?? [],
+        changed.get("edges") ?? [],
+      )
+    }
     const outcome = Object.freeze({
       format: "convax.canvas-intent-result",
       receipt,
@@ -437,6 +521,7 @@ function reduceCanvasIntentInternal(
         expectedTopLevelChanges: duplicateExpectedTopLevelChanges(writes),
         createdNodeKeys: Object.freeze(resultEntities.filter((ref) => ref.kind === "node").map(canvasEntityKey).sort(compareUtf8)),
         createdEdgeKeys: Object.freeze(resultEntities.filter((ref) => ref.kind === "edge").map(canvasEntityKey).sort(compareUtf8)),
+        provisionalReceiptReplaced: intent.kind !== "canvas.nodes.duplicate",
       }))
     }
     return outcome
@@ -475,74 +560,173 @@ function buildCanvasDuplicateIncrementalSnapshot(
   writes: readonly PlannedWrite[],
 ): CanvasSnapshot {
   const changed = duplicateExpectedTopLevelChanges(writes)
-  const nodes = new Map(base.nodes)
-  const edges = new Map(base.edges)
-  const containments = new Map(base.containments)
-  const semanticHistory = new Map(base.semanticHistory)
-  const operations = new Map(base.operations)
+  const nodes: [string, CanvasNodeSnapshot][] = []
+  const edges: [string, CanvasEdgeSnapshot][] = []
+  const containments: [string, ReturnType<typeof readCanvasContainmentRecordForOwner>][] = []
+  const semanticHistory: [string, ReturnType<typeof readCanvasHistoryRecordForOwner>][] = []
+  const operations: [string, ReturnType<typeof readCanvasOperationRecordForOwner>][] = []
   for (const key of changed.get("nodes") ?? []) {
     if (base.nodes.has(key)) throw new CanvasSchemaError("fast-path-overwrite", `Duplicate overwrote node ${key}`)
-    nodes.set(key, readCanvasNodeRecordForOwner(candidate, key))
+    nodes.push([key, readCanvasNodeRecordForOwner(candidate, key)])
   }
   for (const key of changed.get("edges") ?? []) {
     if (base.edges.has(key)) throw new CanvasSchemaError("fast-path-overwrite", `Duplicate overwrote edge ${key}`)
-    edges.set(key, readCanvasEdgeRecordForOwner(candidate, key))
+    edges.push([key, readCanvasEdgeRecordForOwner(candidate, key)])
   }
   for (const key of changed.get("containments") ?? []) {
     if (base.containments.has(key)) throw new CanvasSchemaError("fast-path-overwrite", `Duplicate overwrote containment ${key}`)
     const choice = readCanvasContainmentRecordForOwner(candidate, key)
     if (key !== `${canvasEntityKey(choice.child)}/actor/${choice.stamp.actorId}`)
       throw new CanvasSchemaError("containment-key-mismatch", `${key} does not match containment value`)
-    containments.set(key, choice)
+    containments.push([key, choice])
   }
   for (const key of changed.get("semanticHistory") ?? []) {
     if (base.semanticHistory.has(key)) throw new CanvasSchemaError("fast-path-overwrite", `Duplicate overwrote history ${key}`)
-    semanticHistory.set(key, readCanvasHistoryRecordForOwner(candidate, key))
+    semanticHistory.push([key, readCanvasHistoryRecordForOwner(candidate, key)])
   }
   for (const key of changed.get("operations") ?? []) {
     if (base.operations.has(key)) throw new CanvasSchemaError("fast-path-overwrite", `Duplicate overwrote operation ${key}`)
-    operations.set(key, readCanvasOperationRecordForOwner(candidate, key))
+    operations.push([key, readCanvasOperationRecordForOwner(candidate, key)])
   }
   return Object.freeze({
     ...base,
-    nodes,
-    edges,
-    containments,
-    semanticHistory,
-    operations,
+    nodes: appendCanvasSnapshotEntries(base.nodes, nodes),
+    edges: appendCanvasSnapshotEntries(base.edges, edges),
+    containments: appendCanvasSnapshotEntries(base.containments, containments),
+    semanticHistory: appendCanvasSnapshotEntries(base.semanticHistory, semanticHistory),
+    operations: appendCanvasSnapshotEntries(base.operations, operations),
   })
 }
+
+function validateCanvasResourceAppendPost(
+  base: CanvasSnapshot,
+  snapshot: CanvasSnapshot,
+  intentKind: "canvas.resources.add" | "canvas.resources.pending.create",
+  context: OwnerIntentValidationContext,
+  receipt: BoundedOperationReceipt,
+  resultEntities: readonly CanvasEntityRef[],
+  writes: readonly PlannedWrite[],
+): void {
+  const changed = duplicateExpectedTopLevelChanges(writes)
+  for (const key of changed.keys()) {
+    if (key !== "nodes" && key !== "edges" && key !== "semanticHistory" && key !== "operations") {
+      throw new CanvasSchemaError("fast-path-root", `Resource append changed unsupported root ${key}`)
+    }
+  }
+  const nodeKeys = changed.get("nodes") ?? []
+  const edgeKeys = changed.get("edges") ?? []
+  const appendedNodeKeys = new Set(nodeKeys)
+  const baseIndex = buildCanvasProjectionIndex(base)
+  for (const key of nodeKeys) {
+    const node = snapshot.nodes.get(key)
+    if (
+      !node || node.identity.createdBy !== context.operationId || node.creationGroup !== null ||
+      node.tombstones.length !== 0
+    ) {
+      throw new CanvasSchemaError("fast-path-node", `Resource append node ${key} is not an independent creation`)
+    }
+  }
+  for (const key of edgeKeys) {
+    const edge = snapshot.edges.get(key)
+    if (
+      !edge || edge.identity.createdBy !== context.operationId || edge.creationGroup !== null ||
+      edge.tombstones.length !== 0
+    ) {
+      throw new CanvasSchemaError("fast-path-edge", `Resource append edge ${key} is not an independent creation`)
+    }
+    const endpointIsLive = (ref: CanvasEntityRef & { readonly kind: "node" }) =>
+      appendedNodeKeys.has(canvasEntityKey(ref)) || baseIndex.isNodeLive(ref)
+    if (!endpointIsLive(edge.identity.source) || !endpointIsLive(edge.identity.target)) {
+      throw new CanvasSchemaError("fast-path-edge-endpoint", `Resource append edge ${key} has an unknown endpoint`)
+    }
+  }
+
+  const receiptKey = operationKey(context.actorId, context.operationId)
+  if (
+    changed.get("operations")?.length !== 1 || changed.get("operations")?.[0] !== receiptKey ||
+    snapshot.operations.get(receiptKey) !== receipt || receipt.intentKind !== intentKind ||
+    receipt.operationId !== context.operationId || receipt.actorId !== context.actorId ||
+    !sameCanonicalValue(receipt.resultEntities, sortedRefs(resultEntities)) || !receipt.semanticRoot
+  ) {
+    throw new CanvasSchemaError("fast-path-receipt", "Resource append receipt does not bind the exact operation")
+  }
+
+  const rootKey = historyRootKey(context.operationId)
+  const root = snapshot.semanticHistory.get(rootKey)
+  if (
+    changed.get("semanticHistory")?.length !== 1 || changed.get("semanticHistory")?.[0] !== rootKey ||
+    !root || root.format !== "convax.canvas-semantic-history-root" ||
+    root.rootOperationId !== context.operationId || root.sourceIntentKind !== intentKind ||
+    root.sourceIntentDigest !== context.intentDigest || root.materialDigest !== receipt.historyMaterialDigest
+  ) {
+    throw new CanvasSchemaError("fast-path-history", "Resource append history does not bind the exact receipt")
+  }
+  assertCanvasHistoryTemplateSchedule(root.inverseTemplate, root.initialBindings)
+  assertCanvasHistoryTemplateSchedule(root.forwardTemplate, root.initialBindings)
+
+  if (
+    snapshot.nodes.size !== base.nodes.size + nodeKeys.length ||
+    snapshot.edges.size !== base.edges.size + edgeKeys.length ||
+    snapshot.semanticHistory.size !== base.semanticHistory.size + 1 ||
+    snapshot.operations.size !== base.operations.size + 1
+  ) {
+    throw new CanvasSchemaError("fast-path-size", "Resource append snapshot size is inconsistent")
+  }
+}
+
+export type CanvasIncrementalPostConsumption =
+  | Readonly<{
+      status: "accepted"
+      snapshot: CanvasSnapshot
+      changed: ReadonlyMap<string, readonly string[]>
+    }>
+  | Readonly<{ status: "stale-candidate" }>
+  | Readonly<{ status: "unavailable" }>
 
 export function consumeCanvasDuplicateValidatedPost(
   candidate: Y.Doc,
   base: CanvasSnapshot,
   result: CanvasIntentApplyResult,
-): Readonly<{ snapshot: CanvasSnapshot; changed: ReadonlyMap<string, readonly string[]> }> | null {
+): CanvasIncrementalPostConsumption {
+  let capturedCandidate = false
   try {
     const post = canvasDuplicateFastPosts.get(candidate)
     canvasDuplicateFastPosts.delete(candidate)
     const capture = canvasDuplicateCaptures.get(candidate)
     canvasDuplicateCaptures.delete(candidate)
-    if (!post || !capture || post.base !== base || capture.base !== base || capture.invalid || !capture.transaction || !capture.seal) {
-      return null
+    if (!post || !capture) return Object.freeze({ status: "unavailable" })
+    capturedCandidate = true
+    if (post.base !== base || capture.base !== base || capture.invalid || !capture.transaction || !capture.seal) {
+      return Object.freeze({ status: "stale-candidate" })
     }
-    if (capture.transaction !== capture.seal.transaction) return null
+    if (capture.transaction !== capture.seal.transaction) return Object.freeze({ status: "stale-candidate" })
+    const tracker = canvasCandidateTransactionTrackers.get(candidate)
+    if (
+      !tracker || tracker.depth !== 0 ||
+      tracker.completedGeneration !== capture.seal.completedGeneration
+    ) return Object.freeze({ status: "stale-candidate" })
     // Node/edge record construction replaces exactly two integrated placeholders
     // (identity and creationGroup) per created entity. Any additional deletion is
-    // an unplanned delete/reinsert and forces the full validator.
-    if (capture.seal.deletedStructCount !== 2 * (post.createdNodeKeys.length + post.createdEdgeKeys.length)) {
-      return null
+    // an unplanned delete/reinsert and invalidates the sealed candidate.
+    const expectedDeletedStructs =
+      2 * (post.createdNodeKeys.length + post.createdEdgeKeys.length) + (post.provisionalReceiptReplaced ? 1 : 0)
+    if (capture.seal.deletedStructCount !== expectedDeletedStructs) {
+      return Object.freeze({ status: "stale-candidate" })
     }
-    if ((candidate.share.get(CANVAS_ROOT_NAME) as object | undefined) !== (capture.root as object)) return null
-    for (const key of CANVAS_ROOT_KEYS) if (getCanvasChildMap(candidate, key) !== capture.childMaps.get(key)) return null
+    if ((candidate.share.get(CANVAS_ROOT_NAME) as object | undefined) !== (capture.root as object))
+      return Object.freeze({ status: "stale-candidate" })
+    for (const key of CANVAS_ROOT_KEYS) {
+      if (getCanvasChildMap(candidate, key) !== capture.childMaps.get(key))
+        return Object.freeze({ status: "stale-candidate" })
+    }
 
     const allowedNested = new Set<Y.AbstractType<any>>()
     for (const [rootName, keys] of post.expectedTopLevelChanges) {
       const rootMap = capture.childMaps.get(rootName)
-      if (!rootMap) return null
+      if (!rootMap) return Object.freeze({ status: "stale-candidate" })
       const actual = capture.seal.changed.get(rootMap)
       if (!actual || actual.has(null) || actual.size !== keys.length || keys.some((key) => !actual.has(key))) {
-        return null
+        return Object.freeze({ status: "stale-candidate" })
       }
     }
     for (const key of post.createdNodeKeys) collectCanvasNestedTypes(getCanvasChildMap(candidate, "nodes").get(key), allowedNested)
@@ -550,12 +734,27 @@ export function consumeCanvasDuplicateValidatedPost(
     for (const [type] of capture.seal.changed) {
       const isExpectedRoot = [...post.expectedTopLevelChanges.keys()].some((name) => capture.childMaps.get(name) === type)
       if (!isExpectedRoot && !allowedNested.has(type)) {
-        return null
+        return Object.freeze({ status: "stale-candidate" })
       }
     }
-    return Object.freeze({ snapshot: post.snapshot, changed: post.expectedTopLevelChanges })
+    // The reducer validates each new record before returning, but an observer may
+    // still widen the same kernel-owned outer transaction after applyIntent. Bind
+    // the seal to the exact immutable records, not merely to their nested Y types.
+    for (const key of post.createdNodeKeys) {
+      if (!sameCanonicalValue(readCanvasNodeRecordForOwner(candidate, key), post.snapshot.nodes.get(key)))
+        return Object.freeze({ status: "stale-candidate" })
+    }
+    for (const key of post.createdEdgeKeys) {
+      if (!sameCanonicalValue(readCanvasEdgeRecordForOwner(candidate, key), post.snapshot.edges.get(key)))
+        return Object.freeze({ status: "stale-candidate" })
+    }
+    return Object.freeze({
+      status: "accepted",
+      snapshot: post.snapshot,
+      changed: post.expectedTopLevelChanges,
+    })
   } catch {
-    return null
+    return Object.freeze({ status: capturedCandidate ? "stale-candidate" : "unavailable" })
   }
 }
 
@@ -602,7 +801,7 @@ function planIntent(
       )
         return "invalid"
       if (!hasContiguousCreationOrdinals([...intent.body.nodes, ...intent.body.edges])) return "invalid"
-      requirePlacement(base, intent.body.placement)
+      requirePlacement(intent.body.placement)
       for (const guard of intent.guard.existingEndpoints) requireConnectable(base, index, guard)
       const nodeRefs = new Map<string, CanvasEntityRef & { kind: "node" }>()
       const positions = placeCreatedNodes(
@@ -693,7 +892,7 @@ function planIntent(
     case "canvas.resources.pending-generation.create": {
       if (intent.body.edges.length > 167 || 3 * intent.body.edges.length + 9 > 512) return "invalid"
       if (!hasContiguousCreationOrdinals([intent.body.node, ...intent.body.edges])) return "invalid"
-      requirePlacement(base, intent.body.placement)
+      requirePlacement(intent.body.placement)
       for (const guard of intent.guard.existingEndpoints) requireConnectable(base, index, guard)
       const node = intent.body.node
       const ref = requireDerivedNode(base, context, intent.guard.derivedNode, node)
@@ -1368,7 +1567,7 @@ function planIntent(
     case "canvas.plugin.surface.create": {
       const node = intent.body.node
       if (node.ordinal !== "0") return "invalid"
-      requirePlacement(base, intent.body.placement)
+      requirePlacement(intent.body.placement)
       const ref = requireDerivedNode(base, context, intent.guard.derivedNode, node)
       const position = placeCreatedNodes(base, intent.body.placement.anchor, [
         { ordinal: node.ordinal, size: node.size },
@@ -3350,12 +3549,9 @@ function requireDerivedEdge(
   return derived
 }
 
-function requirePlacement(
-  base: CanvasSnapshot,
-  placement: { obstacleProjectionDigest: Digest; gap: number },
-): void {
-  if (placement.gap !== 24 || obstacleProjectionDigest(base) !== placement.obstacleProjectionDigest)
-    throw new CanvasSchemaError("stale-placement", "Causal placement obstacle projection is stale")
+function requirePlacement(placement: { gap: number }): void {
+  if (placement.gap !== 24)
+    throw new CanvasSchemaError("invalid-placement", "Causal placement gap must be 24")
 }
 
 function placeCreatedNodes(
@@ -3363,20 +3559,16 @@ function placeCreatedNodes(
   anchor: { x: number; y: number },
   specs: readonly { ordinal: Uint32; size: { width: number; height: number } }[],
 ): { x: number; y: number }[] {
-  const projection = buildCanvasProjectionIndex(base).projection
   const ordered = [...specs].sort((a, b) => uint32ToNumber(a.ordinal) - uint32ToNumber(b.ordinal))
-  const orderedPositions = resolveCanvasResourcePlacements({
+  const positions = resolveIndexedCanvasResourcePlacements({
     anchor,
-    obstacles: projection.nodes
-      .filter((node) => node.parent === null)
-      .map((node) => ({ ...node.position, ...node.size })),
+    gap: 24,
+    index: canvasTopLevelPlacementIndex(base),
     sizes: ordered.map((spec) => spec.size),
   })
-  if (!orderedPositions) {
-    throw new CanvasSchemaError("placement-unavailable", "Causal placement cannot find a bounded position")
-  }
-  const result = new Map(ordered.map((spec, index) => [spec.ordinal, orderedPositions[index]!]))
-  return specs.map((spec) => result.get(spec.ordinal)!)
+  if (!positions) throw new CanvasSchemaError("placement-unavailable", "Causal placement cannot find a bounded position")
+  const byOrdinal = new Map(ordered.map((spec, index) => [spec.ordinal, positions[index]!] as const))
+  return specs.map((spec) => byOrdinal.get(spec.ordinal)!)
 }
 
 function resolveEndpoint(

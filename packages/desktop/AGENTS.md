@@ -132,13 +132,18 @@ contract and its routed references.
   ambiguous and never preserves Canvas scope. Native copy/paste stays on browser
   clipboard events.
 - Main's Canvas application service is authoritative. Mounted UI submits closed
-  commands through its originating session lease, installs the returned projection
-  and accepted frame marker, and queries only for unknown/remote invalidation; it never saves a complete snapshot,
-  sends raw Yjs updates, arbitrates Main mutations, or turns projection failure into
-  domain failure.
+  commands through its originating session lease. Generic mutations install the
+  returned full projection; resource appends instead apply Canvas's exact
+  base-bound certified patch to the disposable indexed view and cover its accepted
+  frame marker. A missing, stale, or rejected patch triggers one full query, while a
+  matching local invalidation triggers none. Renderer never saves a complete
+  snapshot, sends raw Yjs updates, arbitrates Main mutations, or turns projection
+  failure into domain failure.
 - Each Main mutation uses an isolated candidate Y.Doc against the latest replica
-  state and crosses the collaboration object's outbox/journal/head durability
-  barrier exactly once before publication. Each offline/local commit is the final long-lived-replica-signed causal frame.
+  state and crosses the collaboration owner's atomic accepted-frame persistence
+  port exactly once before publication. The current Project/node adapter commits
+  the exact signed frame plus logical outbox/journal/head transition as one
+  checksummed WAL record with one file sync. Each offline/local commit is the final long-lived-replica-signed causal frame.
   Reconnect transmits the same bytes and never replays, renumbers, or re-signs the
   business intent.
 - Checkpoint pruning requires both content certification and exact all-active-editor causal-floor
@@ -159,6 +164,24 @@ contract and its routed references.
   Main derives the renderer actor from the trusted sender and validates the exact
   `ref` and session id locally around asynchronous hydration; it never performs a
   nested request back into that same Renderer to rediscover Workbench scope.
+- Prepared resource runtime may cross only as a sibling sidecar to the unchanged
+  Canvas-certified append patch, bound to that patch's exact created-node ids.
+  Renderer first applies the owner patch to its exact current cursor, then installs
+  matching runtime as Canvas-owned transient presentation; a sidecar mismatch drops
+  only the sidecar. Stale hydration carries bounded exact node incarnations and
+  returns target-only runtime patches. Main validates the originating session and
+  live targets before and after hydration; Preload strictly validates each closed
+  DTO. The normal append path never queries or transports a whole Canvas, clears or
+  refills the indexed view, or persists runtime state.
+- ProjectIndex alone resolves a canonical Canvas resource proof to its current
+  materialized Project path. Full/reset projections carry a complete transient
+  classification for every canonical resource node; certified appends carry the
+  exact changed-resource delta. Canvas owns the disposable hierarchy index and a
+  missing, duplicate, stale, or malformed classification makes only that index
+  unavailable until a complete reset. Path-bearing filesystem events query this
+  index in bounded time and never read or hydrate the whole Canvas. A truly
+  pathless bulk event or unavailable/corrupt disposable index uses the conservative
+  all-resource recovery path so an external change is never silently lost.
 - The strict session projection carries exact node and edge incarnation tables for
   guarded presentation only. Provisional visual roots and renderer-decoded image
   hints remain Canvas-owned transient state; Main binds history to durable roots and
@@ -171,10 +194,13 @@ contract and its routed references.
   releases, drafts, receipts, code, or portable JSON bytes are evidence only and never
   runtime fallback. Desktop build and packaging never stage or read
   `docs/superpowers/specs/authorities/**`.
-- Unsupported collaboration bytes return one `unsupported-project-data` result. Never
-  infer a protocol from a directory, filename, or durable record shape, and never
-  reset, re-sign, or reinterpret those bytes without the explicit user-confirmed reset
-  that retains a recoverable backup.
+- Desktop injects the Project-owned idempotent pre-open gate into discovery, explicit
+  open/touch, and direct ProjectIndex registration. That gate may migrate only the
+  exact code-pinned immediate predecessor and returns only after the fully current
+  staged store has reopened and the transient rollback has been removed. Desktop
+  never decodes predecessor frames, constructs imported owner state, or infers a
+  protocol from a directory, filename, or durable record shape. Unknown, damaged, or
+  unauthorized bytes remain unchanged as `unsupported-project-data`/recovery.
 - Plugin surface creation crosses processes as one narrow trusted method carrying only
   Project, Canvas, and Plugin ids. Main resolves one exact current ActiveSet lease,
   derives renderer/size/schema/validation-artifact/snapshot and initial state from that

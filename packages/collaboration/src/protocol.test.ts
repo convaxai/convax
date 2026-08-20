@@ -80,6 +80,15 @@ const CANONICALIZER_DESCRIPTOR = Object.freeze({
   canonicalStateCodec: "restricted-jcs-utf8" as const,
   exactBytePolicy: "parse-reencode-byte-equal" as const,
   unknownStatePolicy: "reject" as const,
+  stateCommitment: Object.freeze({
+    format: "convax.owner-state-commitment-descriptor" as const,
+    commitmentCodec: "sha256-merkle-patricia-v1" as const,
+    canonicalKeyPathPolicy: "nfc-utf8-no-nul-bounded-v1" as const,
+    maxCanonicalNameUtf8Bytes: "128" as const,
+    maxCanonicalKeyUtf8Bytes: "1024" as const,
+    scalarNames: Object.freeze(["format"]),
+    collectionNames: Object.freeze(["root"]),
+  }),
 })
 const CANONICALIZER = ownerCanonicalizerDescriptorDigest(CANONICALIZER_DESCRIPTOR)
 const SCOPE = Object.freeze({ projectId: parseProjectId("project"), projectEpoch: ZERO_16, docKind: "canvas" as const, docId: parseCanvasId(`cv_${"1".repeat(64)}`), shardEpoch: ZERO_16 })
@@ -174,8 +183,8 @@ describe("current protocol authority and codecs", () => {
 
   test("closes the one owner canonicalizer descriptor and its exact digest", () => {
     const emptySchemaDescriptor = { ...CANONICALIZER_DESCRIPTOR, ownerSchemaDigest: parseDigest("e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855") }
-    expect(new TextDecoder().decode(encodeRestrictedJcs(emptySchemaDescriptor))).toBe('{"canonicalStateCodec":"restricted-jcs-utf8","canonicalStateFormat":"convax.canvas-canonical-state","exactBytePolicy":"parse-reencode-byte-equal","format":"convax.owner-canonicalizer-descriptor","owner":"canvas","ownerSchemaDigest":"e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855","unknownStatePolicy":"reject"}')
-    expect(ownerCanonicalizerDescriptorDigest(emptySchemaDescriptor)).toBe(parseDigest("5779d138e8cb93127fee8fbf7c0d7007486a5f3df36585451762a9c8696ebfaa"))
+    expect(new TextDecoder().decode(encodeRestrictedJcs(emptySchemaDescriptor))).toBe('{"canonicalStateCodec":"restricted-jcs-utf8","canonicalStateFormat":"convax.canvas-canonical-state","exactBytePolicy":"parse-reencode-byte-equal","format":"convax.owner-canonicalizer-descriptor","owner":"canvas","ownerSchemaDigest":"e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855","stateCommitment":{"canonicalKeyPathPolicy":"nfc-utf8-no-nul-bounded-v1","collectionNames":["root"],"commitmentCodec":"sha256-merkle-patricia-v1","format":"convax.owner-state-commitment-descriptor","maxCanonicalKeyUtf8Bytes":"1024","maxCanonicalNameUtf8Bytes":"128","scalarNames":["format"]},"unknownStatePolicy":"reject"}')
+    expect(ownerCanonicalizerDescriptorDigest(emptySchemaDescriptor)).toBe(parseDigest("dc6a2b3b75ae303076b00dc1ff3653347049c4ae32ba866725fb5c87ba16c933"))
     expect(ownerCanonicalizerDescriptorDigest({ ...emptySchemaDescriptor })).toBe(ownerCanonicalizerDescriptorDigest(emptySchemaDescriptor))
     for (const changed of [
       { ...emptySchemaDescriptor, owner: "project-index" },
@@ -224,7 +233,7 @@ describe("CVXCOLL binary closure", () => {
     const magic = frame.bytes.subarray(0, 8)
     expect(new TextDecoder().decode(magic.subarray(0, 7))).toBe("CVXCOLL")
     expect(magic[7]).toBe(0)
-    expect(ordinarySha256(frame.bytes)).toBe(parseDigest("991756b7c9d7b19e8958c1c4a83152df24e0881324f964bb0af32e4b894ebe85"))
+    expect(ordinarySha256(frame.bytes)).toBe(parseDigest("a141c4c73d4d86f2a7ce8c4d0e1b15c7df508c137db4bf2f79ecbac77aba1dea"))
     for (const offset of [30, frame.bytes.length - 1]) {
       const tampered = Uint8Array.from(frame.bytes)
       tampered[offset] ^= 1

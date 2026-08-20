@@ -60,6 +60,7 @@ import type {
   OwnerCanonicalizerDescriptor,
   OwnerIntentConstructionContext,
 } from "@convax/collaboration"
+import { CANVAS_STATE_COMMITMENT_DESCRIPTOR } from "./state-commitment"
 
 export const CANVAS_DIGEST_DOMAINS = Object.freeze([
   "convax.canvas-actual-write-value",
@@ -85,7 +86,6 @@ export const CANVAS_DIGEST_DOMAINS = Object.freeze([
   "convax.canvas-metadata-effective",
   "convax.canvas-metadata-slot",
   "convax.canvas-node-identity",
-  "convax.canvas-obstacle-projection",
   "convax.canvas-operation-receipt",
   "convax.canvas-projected-generation/2",
   "convax.canvas-semantic-guard",
@@ -118,6 +118,7 @@ export function canvasOwnerCanonicalizerDescriptor(ownerSchemaDigest: Digest): O
     canonicalStateCodec: "restricted-jcs-utf8",
     exactBytePolicy: "parse-reencode-byte-equal",
     unknownStatePolicy: "reject",
+    stateCommitment: CANVAS_STATE_COMMITMENT_DESCRIPTOR,
   })
 }
 
@@ -133,7 +134,7 @@ export function canvasGenesisCore(identity: Omit<CanvasIdentity, "genesisDigest"
     ownerSchemaDigest: identity.ownerSchemaDigest,
     protocolDigest: identity.protocolDigest,
     canonicalizerDigest: identity.canonicalizerDigest,
-    projectIndexRouteDependencyFrameDigest: identity.projectIndexRouteDependencyFrameDigest,
+    projectIndexRouteDependency: identity.projectIndexRouteDependency,
   }
 }
 
@@ -150,7 +151,7 @@ export function assertCanvasIdentity(
       "ownerSchemaDigest",
       "protocolDigest",
       "canonicalizerDigest",
-      "projectIndexRouteDependencyFrameDigest",
+      "projectIndexRouteDependency",
       "genesisDigest",
     ],
     "CanvasIdentity",
@@ -162,7 +163,12 @@ export function assertCanvasIdentity(
   parseDigest(identity.ownerSchemaDigest)
   parseDigest(identity.protocolDigest)
   parseDigest(identity.canonicalizerDigest)
-  parseDigest(identity.projectIndexRouteDependencyFrameDigest)
+  assertExactKeys(identity.projectIndexRouteDependency, ["kind", "digest"], "Canvas route dependency")
+  if (
+    identity.projectIndexRouteDependency.kind !== "frame" &&
+    identity.projectIndexRouteDependency.kind !== "migration-import-base"
+  ) fail("invalid-format", "Canvas route dependency kind is invalid")
+  parseDigest(identity.projectIndexRouteDependency.digest)
   parseDigest(identity.genesisDigest)
   if (identity.canonicalizerDigest !== canvasOwnerCanonicalizerDigest(identity.ownerSchemaDigest)) {
     fail("canonicalizer-mismatch", "Canvas identity canonicalizer digest is not the selected owner descriptor")
@@ -1107,8 +1113,8 @@ function fail(code: string, message: string): never {
 }
 
 if (
-  CANVAS_DIGEST_DOMAINS.length !== 29 ||
+  CANVAS_DIGEST_DOMAINS.length !== 28 ||
   [...CANVAS_DIGEST_DOMAINS].sort(compareUtf8).some((domain, index) => domain !== CANVAS_DIGEST_DOMAINS[index])
 ) {
-  throw new Error("Canvas current digest ledger is not the exact sorted 29-domain set")
+  throw new Error("Canvas current digest ledger is not the exact sorted 28-domain set")
 }

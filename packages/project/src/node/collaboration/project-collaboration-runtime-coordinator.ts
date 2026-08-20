@@ -31,7 +31,15 @@ export interface ProjectCollaborationRuntimeIdentityPort {
   resolveLocalActorId(input: {
     readonly projectId: string
     readonly projectRoot: string
+    /** Opaque process-local identity of this one open runtime incarnation. */
+    readonly runtimeIdentity: object
   }): Promise<ActorId>
+  /** Releases adapter-owned identity material when the runtime incarnation closes. */
+  releaseRuntimeIdentity?(input: {
+    readonly projectId: string
+    readonly projectRoot: string
+    readonly runtimeIdentity: object
+  }): void
 }
 
 export interface ProjectCollaborationWriterFactory {
@@ -49,6 +57,10 @@ export interface ProjectCollaborationRuntimeLease {
   readonly collaborationDirectory: string
   readonly persistence: NodeCollaborationPersistence
   readonly localActorId: ActorId
+  /** Opaque Main-only identity shared only by leases of this runtime incarnation. */
+  readonly runtimeIdentity: object
+  /** Rejects use after this exact lease has been released. */
+  assertLive(): void
   release(): void
 }
 
@@ -81,6 +93,7 @@ interface OpenProjectRuntime {
   readonly persistence: NodeCollaborationPersistence
   readonly projectRoot: string
   readonly localActorId: ActorId
+  readonly runtimeIdentity: object
   leaseCount: number
 }
 
@@ -124,25 +137,34 @@ export class NodeProjectCollaborationRuntimeCoordinator
     this.requireLive()
     return this.serialize(projectId, async () => {
       this.requireLive()
+      const open = this.openProjects.get(projectId)
+      if (open) return this.leaseRuntime(projectId, open)
+
       const projectRoot = await this.resolveCanonicalProjectRoot(projectId)
-      const localActorId = parseActorId(await this.options.identity.resolveLocalActorId({ projectId, projectRoot }))
+      const runtimeIdentity = Object.freeze({})
+      let localActorId: ActorId
+      try {
+        localActorId = parseActorId(await this.options.identity.resolveLocalActorId({
+          projectId,
+          projectRoot,
+          runtimeIdentity,
+        }))
+      } catch (error) {
+        this.releaseRuntimeIdentity(projectId, projectRoot, runtimeIdentity)
+        throw error
+      }
       const collaborationDirectory = path.join(projectRoot, ".convax", "collaboration")
       const binding = this.bindings.get(projectId)
       if (binding && (binding.projectRoot !== projectRoot || binding.localActorId !== localActorId)) {
+        this.releaseRuntimeIdentity(projectId, projectRoot, runtimeIdentity)
         throw new ProjectCollaborationRuntimeCoordinatorError(
           "project-binding-changed",
           "Project root or local actor binding changed without a successful close/reset barrier",
         )
       }
-      let runtime = this.openProjects.get(projectId)
-      if (runtime && (runtime.projectRoot !== projectRoot || runtime.localActorId !== localActorId)) {
-        throw new ProjectCollaborationRuntimeCoordinatorError(
-          "project-binding-changed",
-          "Project root or local actor binding changed while its collaboration runtime exists",
-        )
-      }
-      if (!runtime) {
-        const persistence = await this.writerFactory.open({
+      let persistence: NodeCollaborationPersistence
+      try {
+        persistence = await this.writerFactory.open({
           collaborationDirectory,
           ...(this.options.durabilityDiagnostics === undefined
             ? {}
@@ -150,37 +172,51 @@ export class NodeProjectCollaborationRuntimeCoordinator
           localActorId,
           materializer: this.options.materializer,
         })
-        runtime = {
-          collaborationDirectory,
-          leaseCount: 0,
-          persistence,
-          projectRoot,
-          localActorId,
-        }
-        this.openProjects.set(projectId, runtime)
-        this.bindings.set(projectId, Object.freeze({ projectRoot, localActorId }))
+      } catch (error) {
+        this.releaseRuntimeIdentity(projectId, projectRoot, runtimeIdentity)
+        throw error
       }
-      runtime.leaseCount += 1
-      let released = false
-      const leasedRuntime = runtime
-      return Object.freeze({
-        collaborationDirectory: leasedRuntime.collaborationDirectory,
-        persistence: leasedRuntime.persistence,
-        localActorId: leasedRuntime.localActorId,
-        projectId,
-        projectRoot: leasedRuntime.projectRoot,
-        release: () => {
-          if (released) return
-          released = true
-          leasedRuntime.leaseCount -= 1
-          if (leasedRuntime.leaseCount === 0) {
-            leasedRuntime.persistence.dispose()
-            if (this.openProjects.get(projectId) === leasedRuntime) {
-              this.openProjects.delete(projectId)
-            }
-          }
-        },
-      })
+      const runtime: OpenProjectRuntime = {
+        collaborationDirectory,
+        leaseCount: 0,
+        persistence,
+        projectRoot,
+        localActorId,
+        runtimeIdentity,
+      }
+      this.openProjects.set(projectId, runtime)
+      this.bindings.set(projectId, Object.freeze({ projectRoot, localActorId }))
+      return this.leaseRuntime(projectId, runtime)
+    })
+  }
+
+  private leaseRuntime(projectId: string, runtime: OpenProjectRuntime): ProjectCollaborationRuntimeLease {
+    runtime.leaseCount += 1
+    let released = false
+    const leasedRuntime = runtime
+    return Object.freeze({
+      collaborationDirectory: leasedRuntime.collaborationDirectory,
+      persistence: leasedRuntime.persistence,
+      localActorId: leasedRuntime.localActorId,
+      projectId,
+      projectRoot: leasedRuntime.projectRoot,
+      runtimeIdentity: leasedRuntime.runtimeIdentity,
+      assertLive: () => {
+        if (released || this.disposed || this.openProjects.get(projectId) !== leasedRuntime) {
+          throw new ProjectCollaborationRuntimeCoordinatorError(
+            "runtime-disposed",
+            "Project collaboration runtime lease is no longer live",
+          )
+        }
+      },
+      release: () => {
+        if (released) return
+        released = true
+        leasedRuntime.leaseCount -= 1
+        if (leasedRuntime.leaseCount === 0) {
+          this.closeRuntime(projectId, leasedRuntime)
+        }
+      },
     })
   }
 
@@ -215,8 +251,7 @@ export class NodeProjectCollaborationRuntimeCoordinator
         )
       }
       if (runtime) {
-        runtime.persistence.dispose()
-        this.openProjects.delete(input.projectId)
+        this.closeRuntime(input.projectId, runtime)
       }
       const result = await input.operation()
       this.bindings.delete(input.projectId)
@@ -238,8 +273,7 @@ export class NodeProjectCollaborationRuntimeCoordinator
         )
         continue
       }
-      runtime.persistence.dispose()
-      this.openProjects.delete(projectId)
+      this.closeRuntime(projectId, runtime)
     }
     if (failures.length > 0) {
       throw new AggregateError(failures, "Project collaboration runtime could not close cleanly")
@@ -255,6 +289,19 @@ export class NodeProjectCollaborationRuntimeCoordinator
       )
     }
     return resolved
+  }
+
+  private closeRuntime(projectId: string, runtime: OpenProjectRuntime): void {
+    try {
+      runtime.persistence.dispose()
+    } finally {
+      if (this.openProjects.get(projectId) === runtime) this.openProjects.delete(projectId)
+      this.releaseRuntimeIdentity(projectId, runtime.projectRoot, runtime.runtimeIdentity)
+    }
+  }
+
+  private releaseRuntimeIdentity(projectId: string, projectRoot: string, runtimeIdentity: object): void {
+    this.options.identity.releaseRuntimeIdentity?.({ projectId, projectRoot, runtimeIdentity })
   }
 
   private requireLive(): void {

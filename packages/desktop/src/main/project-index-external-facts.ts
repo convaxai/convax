@@ -201,13 +201,14 @@ export function createProjectIndexCanvasGenesisFactPorts(input: {
         ? Object.freeze({
             checkpointObjectDigest: verified.identity.checkpointObjectDigest,
             scope: verified.identity.scope,
-            routeDependencyFrameDigest: verified.identity.identity.projectIndexRouteDependencyFrameDigest,
+            routeDependency: verified.identity.identity.projectIndexRouteDependency,
           })
         : undefined
       if (!identity ||
         identity.checkpointObjectDigest !== request.genesisCheckpointObjectDigest ||
         !sameScope(identity.scope, request.canvasScope) ||
-        identity.routeDependencyFrameDigest !== request.routeDependencyFrameDigest
+        identity.routeDependency.kind !== request.routeDependency.kind ||
+        identity.routeDependency.digest !== request.routeDependency.digest
       ) {
         return Object.freeze({ status: "rejected" as const })
       }

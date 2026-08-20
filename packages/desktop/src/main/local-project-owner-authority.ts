@@ -4,6 +4,7 @@ import fs from "node:fs/promises"
 import path from "node:path"
 import {
   decodeRestrictedJcs,
+  encodeBase64url,
   encodeRestrictedJcs,
   ordinarySha256,
   parseActorId,
@@ -13,6 +14,7 @@ import {
   parseProjectId,
   parsePublicKey,
   parseReplicaId,
+  parseSignature,
   parseValidationArtifactSet,
   structuredDigest,
   type ActorId,
@@ -27,6 +29,12 @@ import {
   type ValidationArtifactSet,
   type CurrentProtocolAuthority,
 } from "@convax/collaboration"
+import {
+  IMMEDIATE_PREDECESSOR_PROTOCOL,
+  immediatePredecessorLocalOwnerEditAuthorizationCoreDigest,
+  type ImmediatePredecessorCheckpointSignatureVerifier,
+  type ImmediatePredecessorSignatureVerifier,
+} from "@convax/collaboration/migration"
 
 import type { ElectronReplicaSigningVault } from "./electron-replica-signing-vault"
 import { syncDirectoryEntry, syncFileBytes } from "./filesystem-durability"
@@ -77,6 +85,19 @@ export interface PreparedLocalProjectOwnerReset {
   readonly resetSelector: Digest
 }
 
+export interface PreparedImmediatePredecessorLocalOwnerMigrationAuthority {
+  readonly predecessor: ResolvedLocalProjectOwnerBinding
+  readonly predecessorSignatures:
+    ImmediatePredecessorSignatureVerifier & ImmediatePredecessorCheckpointSignatureVerifier
+  /** Existing current owner, if one was already durably activated by an earlier retry. */
+  readonly currentOwner: ResolvedLocalProjectOwnerAuthority | null
+}
+
+export interface ActivatedImmediatePredecessorLocalOwnerMigrationAuthority {
+  readonly currentOwner: ResolvedLocalProjectOwnerAuthority
+  readonly migrationOperationId: Id128
+}
+
 export interface DurableLocalProjectOwnerAuthorityResolver {
   ensureForDurableProject(input: {
     readonly projectId: ProjectId
@@ -101,6 +122,11 @@ export interface LocalProjectOwnerAuthorityFaults {
   afterCurrentBindingFsync?(): Promise<void>
 }
 
+export interface LocalProjectOwnerAuthorityChange {
+  readonly projectId: ProjectId
+  readonly bindingDigest: Digest
+}
+
 /**
  * Main-private local owner authority. A claim makes random epoch/replica choices
  * retry-stable; the immutable binding is published before any Project bytes use
@@ -109,6 +135,8 @@ export interface LocalProjectOwnerAuthorityFaults {
 export class NodeDurableLocalProjectOwnerAuthority implements DurableLocalProjectOwnerAuthorityResolver {
   private readonly validationArtifacts: ValidationArtifactSet
   private readonly validationArtifactSetDigest: Digest
+  private readonly currentChangeListeners = new Set<(change: LocalProjectOwnerAuthorityChange) => void>()
+  private readonly predecessorMigrationPreparations = new WeakSet<object>()
 
   constructor(
     private readonly options: {
@@ -126,6 +154,13 @@ export class NodeDurableLocalProjectOwnerAuthority implements DurableLocalProjec
     if (!path.isAbsolute(options.rootDirectory)) throw new TypeError("Local Project owner root must be absolute")
     this.validationArtifacts = protocolValidationArtifacts(options.authority)
     this.validationArtifactSetDigest = structuredDigest("convax.validation-artifact-set", this.validationArtifacts)
+  }
+
+  /** Main runtime caches subscribe only to explicit durable current-binding publication. */
+  subscribeCurrentChange(listener: (change: LocalProjectOwnerAuthorityChange) => void): () => void {
+    if (typeof listener !== "function") throw new TypeError("Local Project owner change listener is required")
+    this.currentChangeListeners.add(listener)
+    return () => this.currentChangeListeners.delete(listener)
   }
 
   async ensureForDurableProject(input: {
@@ -187,6 +222,218 @@ export class NodeDurableLocalProjectOwnerAuthority implements DurableLocalProjec
     )
   }
 
+  /**
+   * One-shot exact predecessor authority bridge. It preserves Project/shard
+   * identity and rebinds the existing durable owner key to the current protocol;
+   * it never allocates a replacement Project epoch or falls back from Team.
+   * The caller must classify Team authority before invoking this method.
+   */
+  async inspectImmediatePredecessorMigrationAuthority(input: {
+    readonly projectId: ProjectId
+    readonly projectRoot: string
+    readonly projectEpoch: Id128
+    readonly projectIndexShardEpoch: Id128
+    readonly initializationAuthorityDigest: Digest
+  }): Promise<PreparedImmediatePredecessorLocalOwnerMigrationAuthority | "missing" | "rejected"> {
+    let projectId: ProjectId
+    let projectEpoch: Id128
+    let projectIndexShardEpoch: Id128
+    let initializationAuthorityDigest: Digest
+    try {
+      projectId = parseProjectId(input.projectId)
+      projectEpoch = parseId128(input.projectEpoch)
+      projectIndexShardEpoch = parseId128(input.projectIndexShardEpoch)
+      initializationAuthorityDigest = parseDigest(input.initializationAuthorityDigest)
+      await this.assertDurableProjectRoot(projectId, input.projectRoot)
+    } catch {
+      return "rejected"
+    }
+    const predecessorTarget = path.join(
+      this.options.rootDirectory,
+      "bindings",
+      `${selectorDigest(projectId, IMMEDIATE_PREDECESSOR_PROTOCOL.protocolDigest)}.jcs`,
+    )
+    const predecessorBytes = await readOptionalPlainFile(predecessorTarget)
+    if (!predecessorBytes) return "missing"
+    let predecessorBinding: DurableLocalProjectOwnerBinding
+    try {
+      predecessorBinding = parseDurableLocalProjectOwnerBindingExact(predecessorBytes, {
+        projectId,
+        projectEpoch,
+        protocolDigest: IMMEDIATE_PREDECESSOR_PROTOCOL.protocolDigest,
+        schemaDigest: IMMEDIATE_PREDECESSOR_PROTOCOL.projectPersistenceSchemaDigest,
+        uriProtocolDigest: IMMEDIATE_PREDECESSOR_PROTOCOL.uriProtocolDigest,
+        validationArtifactSetDigest: immediatePredecessorValidationArtifactSetDigest(),
+      })
+      if (
+        predecessorBinding.projectIndexShardEpoch !== projectIndexShardEpoch ||
+        predecessorBinding.bindingDigest !== initializationAuthorityDigest
+      ) return "rejected"
+    } catch {
+      return "rejected"
+    }
+    const currentTarget = path.join(
+      this.options.rootDirectory,
+      "bindings",
+      `${selectorDigest(projectId, this.options.authority.protocolDigest)}.jcs`,
+    )
+    const existingCurrent = await readOptionalPlainFile(currentTarget)
+    let currentOwner: ResolvedLocalProjectOwnerAuthority | null = null
+    try {
+      if (existingCurrent) {
+        currentOwner = await this.openBinding(existingCurrent, projectId, currentTarget)
+      }
+      if (
+        currentOwner &&
+        (currentOwner.binding.projectEpoch !== projectEpoch ||
+          currentOwner.binding.projectIndexShardEpoch !== projectIndexShardEpoch ||
+          currentOwner.binding.memberId !== predecessorBinding.memberId)
+      ) return "rejected"
+    } catch {
+      return "rejected"
+    }
+
+    const predecessor = Object.freeze({
+      binding: predecessorBinding,
+      bindingExactBytes: new Uint8Array(predecessorBytes),
+      validationArtifacts: immediatePredecessorValidationArtifacts(),
+    })
+    const predecessorSignatures = this.immediatePredecessorSignatureVerifier(predecessorBinding)
+    const prepared = Object.freeze({
+      predecessor,
+      predecessorSignatures,
+      currentOwner,
+    })
+    this.predecessorMigrationPreparations.add(prepared)
+    return prepared
+  }
+
+  /** Issues and publishes a retry-stable fresh current binding only after closure A. */
+  async activateImmediatePredecessorMigrationAuthority(
+    prepared: PreparedImmediatePredecessorLocalOwnerMigrationAuthority,
+    sourceClosureDigestInput: Digest,
+  ): Promise<ActivatedImmediatePredecessorLocalOwnerMigrationAuthority> {
+    if (!this.predecessorMigrationPreparations.has(prepared as object)) {
+      throw new TypeError("Immediate-predecessor authority preparation is not owned by this resolver")
+    }
+    const sourceClosureDigest = parseDigest(sourceClosureDigestInput)
+    await ensureLayout(this.options.rootDirectory)
+    const predecessorBinding = prepared.predecessor.binding
+    const currentTarget = path.join(
+      this.options.rootDirectory,
+      "bindings",
+      `${selectorDigest(predecessorBinding.projectId, this.options.authority.protocolDigest)}.jcs`,
+    )
+    let currentOwner = prepared.currentOwner
+    if (currentOwner === null) {
+      const existing = await readOptionalPlainFile(currentTarget)
+      currentOwner = existing
+        ? await this.openBinding(existing, predecessorBinding.projectId, currentTarget)
+        : await this.prepareImmediatePredecessorCurrentOwner(prepared.predecessor)
+    }
+    if (
+      currentOwner.binding.projectEpoch !== predecessorBinding.projectEpoch ||
+      currentOwner.binding.projectIndexShardEpoch !== predecessorBinding.projectIndexShardEpoch ||
+      currentOwner.binding.memberId !== predecessorBinding.memberId
+    ) {
+      throw new Error("Current local Project owner crossed its predecessor identity")
+    }
+    const retiredTarget = path.join(
+      this.options.rootDirectory,
+      "retired-bindings",
+      `${predecessorBinding.bindingDigest}.jcs`,
+    )
+    await writeCreateOrExact(retiredTarget, prepared.predecessor.bindingExactBytes)
+    await this.options.faults?.afterRetiredBindingFsync?.()
+    const activatedOwner = currentOwner
+    const existing = await readOptionalPlainFile(currentTarget)
+    if (existing) {
+      if (!sameBytes(existing, activatedOwner.bindingExactBytes)) {
+        throw new Error("Current local Project owner changed after predecessor inspection")
+      }
+    } else {
+      await writeImmutable(currentTarget, activatedOwner.bindingExactBytes).catch(async (error) => {
+        if (!isAlreadyExists(error)) throw error
+        const raced = requireBytes(
+          await readOptionalPlainFile(currentTarget),
+          "Migrated local Project owner binding disappeared",
+        )
+        if (!sameBytes(raced, activatedOwner.bindingExactBytes)) {
+          throw new Error("Current local Project owner changed during predecessor activation")
+        }
+      })
+    }
+    currentOwner = await this.openBinding(
+      requireBytes(await readOptionalPlainFile(currentTarget), "Migrated local Project owner binding disappeared"),
+      predecessorBinding.projectId,
+      currentTarget,
+    )
+    this.notifyCurrentChange(currentOwner.binding)
+    return Object.freeze({
+      currentOwner,
+      migrationOperationId: migrationOperationId(
+        prepared.predecessor.binding.bindingDigest,
+        currentOwner.binding.bindingDigest,
+        sourceClosureDigest,
+      ),
+    })
+  }
+
+  private async prepareImmediatePredecessorCurrentOwner(
+    predecessor: ResolvedLocalProjectOwnerBinding,
+  ): Promise<ResolvedLocalProjectOwnerAuthority> {
+    const selector = predecessor.binding.bindingDigest
+    const claimTarget = path.join(this.options.rootDirectory, "rotation-claims", `${selector}.jcs`)
+    const bindingTarget = path.join(this.options.rootDirectory, "rotation-bindings", `${selector}.jcs`)
+    const existingBinding = await readOptionalPlainFile(bindingTarget)
+    if (existingBinding) return this.openBinding(existingBinding, predecessor.binding.projectId, bindingTarget)
+
+    let claimBytes = await readOptionalPlainFile(claimTarget)
+    if (!claimBytes) {
+      claimBytes = encodeRestrictedJcs(this.newImmediatePredecessorMigrationClaim(predecessor.binding))
+      try {
+        await writeImmutable(claimTarget, claimBytes)
+      } catch (error) {
+        if (!isAlreadyExists(error)) throw error
+        claimBytes = requireBytes(
+          await readOptionalPlainFile(claimTarget),
+          "Local Project owner migration claim disappeared",
+        )
+      }
+      await this.options.faults?.afterClaimFsync?.()
+    }
+    const claim = parseClaimExact(claimBytes, this.expectedAuthority(predecessor.binding.projectId))
+    if (
+      claim.projectEpoch !== predecessor.binding.projectEpoch ||
+      claim.projectIndexShardEpoch !== predecessor.binding.projectIndexShardEpoch ||
+      claim.memberId !== predecessor.binding.memberId ||
+      claim.replicaId === predecessor.binding.replicaId
+    ) throw new Error("Local Project owner migration claim crossed its predecessor binding")
+    const key = await this.options.vault.createReplicaKey({
+      projectId: claim.projectId,
+      projectEpoch: claim.projectEpoch,
+      replicaId: claim.replicaId,
+    })
+    await this.options.faults?.afterVaultKey?.()
+    const bindingWithoutDigest = Object.freeze({
+      ...claim,
+      format: BINDING_FORMAT,
+      actorId: parseActorId(key.publicKey),
+      publicKey: parsePublicKey(key.publicKey),
+    })
+    const binding = Object.freeze({
+      ...bindingWithoutDigest,
+      bindingDigest: bindingDigest(bindingWithoutDigest),
+    })
+    await writeCreateOrExact(bindingTarget, encodeRestrictedJcs(binding))
+    await this.options.faults?.afterBindingFsync?.()
+    return this.openBinding(
+      requireBytes(await readOptionalPlainFile(bindingTarget), "Local Project owner migration binding disappeared"),
+      binding.projectId,
+      bindingTarget,
+    )
+  }
+
   /** Prepare a retry-stable fresh binding without making it current. */
   async prepareResetForDurableProject(input: {
     readonly projectId: ProjectId
@@ -235,6 +482,7 @@ export class NodeDurableLocalProjectOwnerAuthority implements DurableLocalProjec
       throw new Error("Local Project owner disappeared after reset preparation")
     }
     await replaceDurably(currentTarget, encodeRestrictedJcs(opened.owner.binding))
+    this.notifyCurrentChange(opened.owner.binding)
   }
 
   async verifyPreparedCheckpointSignature(
@@ -350,6 +598,56 @@ export class NodeDurableLocalProjectOwnerAuthority implements DurableLocalProjec
     )
   }
 
+  private immediatePredecessorSignatureVerifier(
+    binding: DurableLocalProjectOwnerBinding,
+  ): ImmediatePredecessorSignatureVerifier & ImmediatePredecessorCheckpointSignatureVerifier {
+    const verifyPurpose = (signature: string, purposeDigest: Uint8Array) => this.options.verifier.verify(
+      Buffer.from(binding.publicKey, "base64url"),
+      Buffer.from(parseSignature(signature), "base64url"),
+      purposeDigest,
+    )
+    return Object.freeze({
+      verify: async (input: Parameters<ImmediatePredecessorSignatureVerifier["verify"]>[0]) => {
+        const signer = input.signerAuthority
+        if (
+          input.scope.projectId !== binding.projectId ||
+          input.scope.projectEpoch !== binding.projectEpoch ||
+          signer.kind !== "local-project-owner" ||
+          signer.replicaId !== binding.replicaId ||
+          signer.actorId !== binding.actorId ||
+          signer.ownerBindingDigest !== binding.bindingDigest
+        ) return false
+        const ownerSchemaDigest = input.scope.docKind === "canvas"
+          ? IMMEDIATE_PREDECESSOR_PROTOCOL.canvasSchemaDigest
+          : IMMEDIATE_PREDECESSOR_PROTOCOL.projectPersistenceSchemaDigest
+        const authorizationDigest = immediatePredecessorLocalOwnerEditAuthorizationCoreDigest(Object.freeze({
+          format: "convax.local-owner-edit-authorization-core",
+          scope: input.scope,
+          replicaId: binding.replicaId,
+          actorId: binding.actorId,
+          ownerBindingDigest: binding.bindingDigest,
+          protocolDigest: IMMEDIATE_PREDECESSOR_PROTOCOL.protocolDigest,
+          ownerSchemaDigest,
+          expiryPolicy: "none",
+        }))
+        return authorizationDigest === signer.ownerEditAuthorizationCoreDigest &&
+          verifyPurpose(input.signature, input.purposeDigest)
+      },
+      verifyCheckpoint: (
+        input: Parameters<ImmediatePredecessorCheckpointSignatureVerifier["verifyCheckpoint"]>[0],
+      ) => {
+        if (
+          input.scope.projectId !== binding.projectId ||
+          input.scope.projectEpoch !== binding.projectEpoch ||
+          input.authorReplicaId !== binding.replicaId ||
+          input.authorActorId !== binding.actorId ||
+          input.authorAuthorizationDigest !== binding.bindingDigest
+        ) return Promise.resolve(false)
+        return verifyPurpose(input.signature, input.purposeDigest)
+      },
+    })
+  }
+
   private async openBinding(
     bytes: Uint8Array,
     projectId: ProjectId,
@@ -460,9 +758,12 @@ export class NodeDurableLocalProjectOwnerAuthority implements DurableLocalProjec
       "Local Project owner disappeared during rotation",
     )
     const current = parseBindingExact(currentBytes, this.expectedAuthority(previous.projectId))
-    if (current.bindingDigest === binding.bindingDigest)
+    if (current.bindingDigest === binding.bindingDigest) {
+      this.notifyCurrentChange(current)
       return this.openBinding(currentBytes, previous.projectId, currentTarget)
+    }
     if (current.bindingDigest !== previous.bindingDigest || !sameBytes(currentBytes, previousBytes)) {
+      this.notifyCurrentChange(current)
       return this.openOrRotateCurrentBinding(currentBytes, previous.projectId, currentTarget)
     }
     await writeCreateOrExact(
@@ -471,8 +772,20 @@ export class NodeDurableLocalProjectOwnerAuthority implements DurableLocalProjec
     )
     await this.options.faults?.afterRetiredBindingFsync?.()
     await replaceDurably(currentTarget, bindingBytes)
+    this.notifyCurrentChange(binding)
     await this.options.faults?.afterCurrentBindingFsync?.()
     return this.openBinding(bindingBytes, previous.projectId, currentTarget)
+  }
+
+  private notifyCurrentChange(binding: DurableLocalProjectOwnerBinding): void {
+    const change = Object.freeze({ projectId: binding.projectId, bindingDigest: binding.bindingDigest })
+    for (const listener of this.currentChangeListeners) {
+      try {
+        listener(change)
+      } catch {
+        // Authority publication is already durable; observers may only revoke caches.
+      }
+    }
   }
 
   private async assertDurableProjectRoot(projectId: ProjectId, projectRoot: string): Promise<void> {
@@ -591,6 +904,28 @@ export class NodeDurableLocalProjectOwnerAuthority implements DurableLocalProjec
       schemaDigest: previous.schemaDigest,
       uriProtocolDigest: previous.uriProtocolDigest,
       validationArtifactSetDigest: previous.validationArtifactSetDigest,
+    })
+  }
+
+  private newImmediatePredecessorMigrationClaim(
+    predecessor: DurableLocalProjectOwnerBinding,
+  ): LocalProjectOwnerClaim {
+    const createReplicaId =
+      this.options.createReplicaId ?? (() => parseReplicaId(`replica_${randomBytes(4).toString("hex")}`))
+    return Object.freeze({
+      format: CLAIM_FORMAT,
+      projectId: predecessor.projectId,
+      projectEpoch: predecessor.projectEpoch,
+      projectIndexShardEpoch: predecessor.projectIndexShardEpoch,
+      memberId: predecessor.memberId,
+      replicaId: createReplicaId(),
+      localConfirmationKeyId: predecessor.localConfirmationKeyId,
+      genesisOperationId: predecessor.genesisOperationId,
+      genesisCheckpointId: predecessor.genesisCheckpointId,
+      protocolDigest: this.options.authority.protocolDigest,
+      schemaDigest: parseDigest(this.options.schemaDigest),
+      uriProtocolDigest: this.options.authority.protocolSchemaBundle.core.uriProtocolDigest,
+      validationArtifactSetDigest: this.validationArtifactSetDigest,
     })
   }
 
@@ -713,6 +1048,52 @@ function protocolValidationArtifacts(authority: CurrentProtocolAuthority): Valid
     format: "convax.validation-artifact-set",
     artifacts,
   })
+}
+
+function immediatePredecessorValidationArtifacts(): ValidationArtifactSet {
+  return parseValidationArtifactSet({
+    format: "convax.validation-artifact-set",
+    artifacts: [
+      {
+        owner: "canvas",
+        format: "convax.canvas-protocol-schema",
+        artifactDigest: IMMEDIATE_PREDECESSOR_PROTOCOL.canvasSchemaDigest,
+      },
+      {
+        owner: "control-plane",
+        format: "convax.control-plane-protocol-schema",
+        artifactDigest: IMMEDIATE_PREDECESSOR_PROTOCOL.controlPlaneSchemaDigest,
+      },
+      {
+        owner: "kernel",
+        format: "convax.collaboration-kernel-protocol-schema",
+        artifactDigest: IMMEDIATE_PREDECESSOR_PROTOCOL.collaborationKernelSchemaDigest,
+      },
+      {
+        owner: "project-index",
+        format: "convax.project-persistence-protocol-schema",
+        artifactDigest: IMMEDIATE_PREDECESSOR_PROTOCOL.projectPersistenceSchemaDigest,
+      },
+    ],
+  })
+}
+
+function immediatePredecessorValidationArtifactSetDigest(): Digest {
+  return structuredDigest("convax.validation-artifact-set", immediatePredecessorValidationArtifacts())
+}
+
+function migrationOperationId(
+  predecessorBindingDigest: Digest,
+  currentBindingDigest: Digest,
+  sourceClosureDigest: Digest,
+): Id128 {
+  const digest = structuredDigest("convax.immediate-predecessor-owner-migration-operation/1", {
+    format: "convax.immediate-predecessor-owner-migration-operation/1",
+    predecessorBindingDigest,
+    currentBindingDigest,
+    sourceClosureDigest,
+  })
+  return parseId128(encodeBase64url(new Uint8Array(Buffer.from(digest, "hex").subarray(0, 16))))
 }
 
 function bindingDigest(binding: Omit<DurableLocalProjectOwnerBinding, "bindingDigest">): Digest {

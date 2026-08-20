@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, test } from "bun:test"
+import { createHash } from "node:crypto"
 import fs from "node:fs/promises"
 import os from "node:os"
 import path from "node:path"
@@ -13,10 +14,17 @@ import {
   UnsupportedProjectDataError,
   type PortableProjectResetVerifier,
 } from "./portable-cutover"
+import { encodeProjectNativeStoreManifest } from "./project-index-genesis-store"
+import { PROJECT_INDEX_PROTOCOL_SCHEMA_ARTIFACT_DIGEST } from "../../collaboration/project-index"
+import { CURRENT_PROTOCOL_IDENTITIES, parseDigest, parseId128 } from "@convax/collaboration"
 
 const roots: string[] = []
 const epoch = "AQEBAQEBAQEBAQEBAQEBAQ"
 const durabilityTest = test.skipIf(process.platform === "win32")
+
+function digest(label: string) {
+  return parseDigest(createHash("sha256").update(label).digest("hex"))
+}
 
 afterEach(async () => {
   await Promise.all(roots.splice(0).map((root) => fs.rm(root, { force: true, recursive: true })))
@@ -35,6 +43,41 @@ describe("portable collaboration cutover", () => {
       ".convax/canvases/catalog.json",
     ])
     expect(await fs.readFile(path.join(projectRoot, ".convax", "canvases", "catalog.json"))).toEqual(before)
+  })
+
+  test("treats retained legacy Canvas JSON as inert only after a proof-bound predecessor import", async () => {
+    const projectRoot = await createLegacyProject()
+    const collaboration = path.join(projectRoot, ".convax", "collaboration")
+    await fs.mkdir(collaboration)
+    await fs.writeFile(
+      path.join(collaboration, "manifest-v2.bin"),
+      encodeProjectNativeStoreManifest({
+        format: "convax.project-native-store-manifest",
+        storeIdentity: "convax.project-collaboration-native-store",
+        projectIndexScope: {
+          projectId: "project_test" as never,
+          projectEpoch: parseId128(epoch),
+          docKind: "project-index",
+          docId: "project-index",
+          shardEpoch: parseId128("AgICAgICAgICAgICAgICAg"),
+        },
+        protocolDigest: parseDigest(CURRENT_PROTOCOL_IDENTITIES.protocolDigest),
+        schemaDigest: PROJECT_INDEX_PROTOCOL_SCHEMA_ARTIFACT_DIGEST,
+        uriProtocolDigest: parseDigest(CURRENT_PROTOCOL_IDENTITIES.uriProtocolDigest),
+        initializationAuthorityDigest: digest("authority"),
+        projectIndexGenesisKind: "immediate-predecessor-import",
+        migrationImportBaseProofDigest: digest("import-proof"),
+        projectIndexGenesisCheckpointObjectDigest: digest("checkpoint"),
+        projectIndexGenesisFullUpdateDigest: digest("full-update"),
+        projectIndexGenesisStateVectorDigest: digest("state-vector"),
+        projectIndexGenesisCanonicalStateDigest: digest("canonical-state"),
+      }),
+    )
+
+    expect(await resolvePortableProjectData(projectRoot)).toEqual({ status: "current" })
+    expect(await fs.readFile(path.join(projectRoot, ".convax", "canvases", "catalog.json"), "utf8")).toBe(
+      "catalog",
+    )
   })
 
   test("detects unsupported collaboration bytes even without a legacy Canvas JSON catalog", async () => {

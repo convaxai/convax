@@ -235,6 +235,7 @@ function base(scope: DocumentScope) {
     fullUpdate: bytes.encode("full-update"),
     stateVector: bytes.encode("state-vector") as StateVector,
     canonicalStateDigest: digest("canonical"),
+    materializationDigest: digest("materialization"),
   })
 }
 

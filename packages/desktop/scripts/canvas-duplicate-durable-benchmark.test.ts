@@ -75,7 +75,7 @@ describe("ordinary Canvas duplicate durable benchmark", () => {
           expect(result.actual.nodesAfter).toBe(nodeCount + 1)
           expect(result.actual.retainedFrames).toBe(1)
           expect(result.actual.materializerDelta).toBe(0)
-          expect(result.actual.physicalSyncCount).toBe(mode === "real" ? 11 : 0)
+          expect(result.actual.physicalSyncCount).toBe(mode === "real" ? 1 : 0)
           expect(Object.keys(result.stages)).toEqual([...durableBusinessStages])
         }, 30_000)
       }

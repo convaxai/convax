@@ -1,14 +1,25 @@
 import type {
   BoundedOperationReceipt,
-  CanvasEntityRef,
+  CanvasCertifiedRendererProjectionStore,
   CanvasRendererCollaborationClient,
   CanvasRendererCommand,
+  CanvasRendererProjectionChange,
+  CanvasRendererProjectionPatchChange,
+  CanvasRendererResourceHierarchyKey,
+  CanvasRendererResourceHierarchyQueryResult,
+  CanvasRendererViewportProjection,
+  CanvasRendererViewportQuery,
 } from "@convax/canvas/collaboration"
+import { createCanvasCertifiedRendererProjectionStore } from "@convax/canvas/collaboration"
 import type { CanvasApplicationCommand, CanvasApplicationCommandResult } from "@convax/canvas/application"
-import type { CanvasDocument } from "@convax/canvas/core"
+import {
+  canvasCanonicalResourceIdentity,
+  type CanvasAcceptedPreparedResourceRuntime,
+  type CanvasDocument,
+} from "@convax/canvas"
 import { CanvasVisualHistoryCoordinator, type CanvasVisualHistoryAuthority } from "@convax/canvas/view"
 import type { CanvasDocumentRef } from "@convax/canvas/application"
-import type { Digest } from "@convax/collaboration"
+import { encodeRestrictedJcs, type Digest } from "@convax/collaboration"
 import type { CanvasResourceAddResult, CanvasResourceRelinkResult } from "../desktop-protocol"
 import type {
   CanvasRendererSessionTransport,
@@ -20,6 +31,9 @@ import type {
 export interface DesktopCanvasRendererSession extends CanvasRendererCollaborationClient {
   readonly ref: CanvasDocumentRef
   readonly sessionId: CanvasSessionProjectionDto["sessionId"]
+  ownsProjectionChange(change: CanvasRendererProjectionPatchChange): boolean
+  queryResourceHierarchy(input: CanvasRendererResourceHierarchyKey): CanvasRendererResourceHierarchyQueryResult
+  queryViewport(input: CanvasRendererViewportQuery): CanvasRendererViewportProjection
   acceptApplicationMutation(
     result: CanvasRendererApplicationMutationResult,
     signal?: AbortSignal,
@@ -27,7 +41,11 @@ export interface DesktopCanvasRendererSession extends CanvasRendererCollaboratio
   runResourceMutation<T extends CanvasResourceAddResult | CanvasResourceRelinkResult>(
     operation: () => Promise<T>,
     signal?: AbortSignal,
-  ): Promise<Readonly<{ result: T; projectionDelivered: boolean }>>
+  ): Promise<Readonly<{
+    result: T
+    projectionDelivered: boolean
+    preparedResources: readonly CanvasAcceptedPreparedResourceRuntime[]
+  }>>
   dispose(): void
 }
 
@@ -66,8 +84,6 @@ class MountedDesktopCanvasRendererSession implements DesktopCanvasRendererSessio
   readonly #transport: CanvasRendererSessionTransport
   readonly #createCommandId: () => string
   readonly #listeners = new Set<() => void>()
-  readonly #entities = new Map<string, CanvasEntityRef & { readonly kind: "node" }>()
-  readonly #edgeEntities = new Map<string, CanvasEntityRef & { readonly kind: "edge" }>()
   readonly #unsubscribe: () => void
   #snapshot: CanvasSessionProjectionDto
   #lane: Promise<void> = Promise.resolve()
@@ -77,6 +93,7 @@ class MountedDesktopCanvasRendererSession implements DesktopCanvasRendererSessio
   readonly #coveredFrameDigests = new Set<Digest>()
   readonly #visualHistory = new CanvasVisualHistoryCoordinator()
   readonly visualOverlay = this.#visualHistory.overlay
+  readonly #projectionStore: CanvasCertifiedRendererProjectionStore
 
   constructor(
     ref: CanvasDocumentRef,
@@ -88,21 +105,44 @@ class MountedDesktopCanvasRendererSession implements DesktopCanvasRendererSessio
     this.#transport = transport
     this.#createCommandId = createCommandId
     this.#snapshot = requireProjection(this.ref, initial)
-    this.#replaceEntities(initial)
+    this.#projectionStore = requireProjectionStore(this.#snapshot)
     this.#unsubscribe = transport.subscribe((event) => this.#onInvalidation(event))
   }
 
   getProjection(): CanvasDocument {
-    return this.#snapshot.document
+    return this.#projectionStore.getProjection()
   }
 
   resolveNodeEntity(nodeId: string) {
-    return this.#entities.get(nodeId)
+    return this.#projectionStore.resolveNodeEntity(nodeId)
   }
 
   resolveEdgeEntity(edgeId: string) {
-    return this.#edgeEntities.get(edgeId)
+    return this.#projectionStore.resolveEdgeEntity(edgeId)
   }
+
+  resolveNode(nodeId: string) {
+    return this.#projectionStore.resolveNode(nodeId)
+  }
+
+  resolveEdge(edgeId: string) {
+    return this.#projectionStore.resolveEdge(edgeId)
+  }
+
+  queryViewport(input: CanvasRendererViewportQuery): CanvasRendererViewportProjection {
+    return this.#projectionStore.queryViewport(input)
+  }
+
+  queryResourceHierarchy(input: CanvasRendererResourceHierarchyKey): CanvasRendererResourceHierarchyQueryResult {
+    return this.#projectionStore.queryResourceHierarchy(input)
+  }
+
+  ownsProjectionChange(change: CanvasRendererProjectionPatchChange): boolean {
+    return this.#projectionStore.ownsProjectionChange(change)
+  }
+
+  readonly subscribeProjectionChanges = (listener: (change: CanvasRendererProjectionChange) => void) =>
+    this.#projectionStore.subscribeProjectionChanges(listener)
 
   subscribe(listener: () => void): () => void {
     this.#assertLive()
@@ -214,33 +254,36 @@ class MountedDesktopCanvasRendererSession implements DesktopCanvasRendererSessio
   runResourceMutation<T extends CanvasResourceAddResult | CanvasResourceRelinkResult>(
     operation: () => Promise<T>,
     signal?: AbortSignal,
-  ): Promise<Readonly<{ result: T; projectionDelivered: boolean }>> {
-    const stagedRoot = this.#visualHistory.stagePendingRoot(this.#createCommandId(), this.#visualAuthority())
-    if (stagedRoot) this.#publish()
+  ): Promise<Readonly<{
+    result: T
+    projectionDelivered: boolean
+    preparedResources: readonly CanvasAcceptedPreparedResourceRuntime[]
+  }>> {
+    const stagedRoot = this.#visualHistory.stageCertifiedResourceAppendRoot(this.#createCommandId())
     return this.#enqueue(async () => {
-      const before = this.#visualAuthority()
       try {
         throwIfAborted(signal)
         const result = await operation()
-        if (result.delivery.status === "accepted") {
-          this.#acceptMutation(result.delivery.projection, result.delivery.acceptedFrameDigest)
-          this.#reconcileMutationRoot(stagedRoot, result.operationReceipt, before, this.#visualAuthority())
-          this.#publish()
-          return Object.freeze({ result, projectionDelivered: true })
+        if (result.delivery.status === "certified") {
+          const accepted = this.#acceptCertifiedResourceMutation(result)
+          if (!accepted) return this.#recoverResourceMutation(result, stagedRoot)
+          if (
+            stagedRoot &&
+            !this.#visualHistory.bindStagedCertifiedResourceAppend(
+              stagedRoot,
+              accepted.change,
+              this.#projectionStore,
+            )
+          ) {
+            this.#visualHistory.rejectStagedRoot(stagedRoot)
+          }
+          return Object.freeze({
+            result,
+            projectionDelivered: true,
+            preparedResources: accepted.preparedResources,
+          })
         }
-        try {
-          const pending = [...this.#pendingInvalidationDigests]
-          this.#pendingInvalidationDigests.clear()
-          this.#accept(await this.#transport.query(this.#scope()))
-          for (const digest of pending) rememberBounded(this.#coveredFrameDigests, digest)
-          this.#reconcileMutationRoot(stagedRoot, result.operationReceipt, before, this.#visualAuthority())
-          this.#publish()
-          return Object.freeze({ result, projectionDelivered: true })
-        } catch {
-          this.#reconcileMutationRoot(stagedRoot, result.operationReceipt, before)
-          this.#publish()
-          return Object.freeze({ result, projectionDelivered: false })
-        }
+        return this.#recoverResourceMutation(result, stagedRoot)
       } catch (error) {
         this.#visualHistory.rejectStagedRoot(stagedRoot)
         if (stagedRoot) this.#publish()
@@ -249,11 +292,36 @@ class MountedDesktopCanvasRendererSession implements DesktopCanvasRendererSessio
     })
   }
 
+  async #recoverResourceMutation<T extends CanvasResourceAddResult | CanvasResourceRelinkResult>(
+    result: T,
+    stagedRoot: string | null,
+  ): Promise<Readonly<{
+    result: T
+    projectionDelivered: boolean
+    preparedResources: readonly CanvasAcceptedPreparedResourceRuntime[]
+  }>> {
+    const before = this.#visualAuthority()
+    try {
+      const pending = [...this.#pendingInvalidationDigests]
+      this.#pendingInvalidationDigests.clear()
+      this.#accept(await this.#transport.query(this.#scope()))
+      for (const digest of pending) rememberBounded(this.#coveredFrameDigests, digest)
+      this.#reconcileMutationRoot(stagedRoot, result.operationReceipt, before, this.#visualAuthority())
+      this.#publish()
+      return Object.freeze({ result, projectionDelivered: true, preparedResources: Object.freeze([]) })
+    } catch {
+      this.#reconcileMutationRoot(stagedRoot, result.operationReceipt, before)
+      this.#publish()
+      return Object.freeze({ result, projectionDelivered: false, preparedResources: Object.freeze([]) })
+    }
+  }
+
   dispose(): void {
     if (this.#disposed) return
     this.#disposed = true
     this.#unsubscribe()
     this.#listeners.clear()
+    this.#projectionStore.dispose()
     this.#visualHistory.reset()
     void this.#lane.finally(() => this.#transport.close(this.#scope())).catch(() => undefined)
   }
@@ -332,9 +400,93 @@ class MountedDesktopCanvasRendererSession implements DesktopCanvasRendererSessio
 
   #accept(next: CanvasSessionProjectionDto): void {
     if (this.#disposed) return
-    this.#snapshot = requireProjection(this.ref, next, this.#snapshot.sessionId)
-    this.#replaceEntities(next)
+    const projection = requireProjection(this.ref, next, this.#snapshot.sessionId)
+    if (!this.#projectionStore.resetProjection(projectionStoreInput(projection))) {
+      throw new Error("Canvas renderer session projection reset is invalid")
+    }
+    this.#snapshot = projection
     this.#publish()
+  }
+
+  #acceptCertifiedResourceMutation(
+    result: CanvasResourceAddResult | CanvasResourceRelinkResult,
+  ): Readonly<{
+    change: CanvasRendererProjectionPatchChange
+    preparedResources: readonly CanvasAcceptedPreparedResourceRuntime[]
+  }> | null {
+    const delivery = result.delivery
+    if (
+      delivery.status !== "certified" ||
+      delivery.sessionId !== this.#snapshot.sessionId ||
+      !sameRef(delivery.ref, this.ref) ||
+      !sameCanonicalValue(delivery.patch.receipt, result.operationReceipt) ||
+      !("createdNodeIds" in result)
+    ) return null
+    const createdNodeIds = new Set(result.createdNodeIds)
+    if (
+      createdNodeIds.size !== result.createdNodeIds.length ||
+      delivery.patch.nodes.length !== createdNodeIds.size ||
+      delivery.patch.nodes.some((node) => !createdNodeIds.has(node.ref.id))
+    ) return null
+
+    const installed = this.#projectionStore.applyCertifiedProjectionPatch(delivery.patch, (change) => {
+      const changedNodes = new Map(change.changes.nodes.map((node) => [node.id, node]))
+      const changedEntities = new Map(
+        change.changes.nodeEntities.map((entry) => [entry.nodeId, entry.entity]),
+      )
+      const runtimeNodeIds = new Set<string>()
+      const preparedResources: CanvasAcceptedPreparedResourceRuntime[] = []
+      let runtimePatchesValid = true
+      for (const runtime of delivery.runtimePatches) {
+        const node = changedNodes.get(runtime.nodeId)
+        const entity = changedEntities.get(runtime.nodeId)
+        const resourceIdentity = node ? canvasCanonicalResourceIdentity(node) : undefined
+        if (
+          runtimeNodeIds.has(runtime.nodeId) ||
+          !createdNodeIds.has(runtime.nodeId) ||
+          !node ||
+          !entity ||
+          resourceIdentity === undefined
+        ) {
+          runtimePatchesValid = false
+          break
+        }
+        runtimeNodeIds.add(runtime.nodeId)
+        preparedResources.push(Object.freeze({
+          entity: Object.freeze({ ...entity }),
+          nodeId: runtime.nodeId,
+          resourceIdentity,
+          state: runtime.state,
+        }))
+      }
+      runtimePatchesValid &&= runtimeNodeIds.size === createdNodeIds.size
+      return Object.freeze({
+        preparedResources: runtimePatchesValid
+          ? Object.freeze(preparedResources)
+          : Object.freeze([]),
+        resourceHierarchy: delivery.resourceHierarchy,
+      })
+    })
+    if (installed.status !== "applied") return null
+    this.#snapshot = Object.freeze({
+      ...this.#snapshot,
+      canRedo: delivery.canRedo,
+      canUndo: delivery.canUndo,
+      projectionIdentity: installed.change.identity,
+      resourceHierarchy: Object.freeze({
+        format: "convax.canvas-resource-hierarchy-snapshot",
+        projectionIdentity: installed.change.identity,
+        completeness: "unavailable",
+        entries: Object.freeze([]),
+      }),
+    })
+    rememberBounded(this.#coveredFrameDigests, delivery.acceptedFrameDigest)
+    this.#pendingInvalidationDigests.delete(delivery.acceptedFrameDigest)
+
+    return Object.freeze({
+      change: installed.change,
+      preparedResources: installed.change.preparedResources,
+    })
   }
 
   #acceptMutation(next: CanvasSessionProjectionDto, frameDigest: Digest): void {
@@ -356,13 +508,6 @@ class MountedDesktopCanvasRendererSession implements DesktopCanvasRendererSessio
     })
   }
 
-  #replaceEntities(next: CanvasSessionProjectionDto): void {
-    this.#entities.clear()
-    for (const entry of next.nodeEntities) this.#entities.set(entry.nodeId, entry.entity)
-    this.#edgeEntities.clear()
-    for (const entry of next.edgeEntities) this.#edgeEntities.set(entry.edgeId, entry.entity)
-  }
-
   #reconcileMutationRoot(
     stagedRoot: string | null,
     receipt: BoundedOperationReceipt,
@@ -379,10 +524,21 @@ class MountedDesktopCanvasRendererSession implements DesktopCanvasRendererSessio
   }
 
   #visualAuthority(): CanvasVisualHistoryAuthority {
+    const document = this.#projectionStore.getProjection()
+    const nodeEntities = document.nodes.map((node) => {
+      const entity = this.#projectionStore.resolveNodeEntity(node.id)
+      if (!entity) throw new Error("Canvas renderer node entity projection is incomplete")
+      return Object.freeze({ nodeId: node.id, entity })
+    })
+    const edgeEntities = document.edges.map((edge) => {
+      const entity = this.#projectionStore.resolveEdgeEntity(edge.id)
+      if (!entity) throw new Error("Canvas renderer edge entity projection is incomplete")
+      return Object.freeze({ edgeId: edge.id, entity })
+    })
     return Object.freeze({
-      document: this.#snapshot.document,
-      edgeEntities: this.#snapshot.edgeEntities,
-      nodeEntities: this.#snapshot.nodeEntities,
+      document,
+      edgeEntities: Object.freeze(edgeEntities),
+      nodeEntities: Object.freeze(nodeEntities),
     })
   }
 
@@ -437,6 +593,30 @@ function requireProjection(
     throw new Error("Canvas renderer session edge entity projection is incomplete")
   }
   return value
+}
+
+function projectionStoreInput(projection: CanvasSessionProjectionDto) {
+  return {
+    identity: projection.projectionIdentity,
+    projection: {
+      document: projection.document,
+      edgeEntities: new Map(projection.edgeEntities.map((entry) => [entry.edgeId, entry.entity])),
+      nodeEntities: new Map(projection.nodeEntities.map((entry) => [entry.nodeId, entry.entity])),
+    },
+    resourceHierarchy: projection.resourceHierarchy,
+  } as const
+}
+
+function requireProjectionStore(projection: CanvasSessionProjectionDto): CanvasCertifiedRendererProjectionStore {
+  const store = createCanvasCertifiedRendererProjectionStore(projectionStoreInput(projection))
+  if (!store) throw new Error("Canvas renderer session projection store is invalid")
+  return store
+}
+
+function sameCanonicalValue(left: unknown, right: unknown): boolean {
+  const leftBytes = encodeRestrictedJcs(left)
+  const rightBytes = encodeRestrictedJcs(right)
+  return leftBytes.byteLength === rightBytes.byteLength && leftBytes.every((byte, index) => byte === rightBytes[index])
 }
 
 function sameRef(left: CanvasDocumentRef, right: CanvasDocumentRef): boolean {

@@ -8,6 +8,7 @@ const entrypoints = [
   "src/application/index.ts",
   "src/application/errors.ts",
   "src/collaboration/index.ts",
+  "src/collaboration-migration.ts",
   "src/core.ts",
   "src/view.ts",
 ]

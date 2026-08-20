@@ -253,7 +253,10 @@ export interface CanvasIdentity {
   readonly ownerSchemaDigest: Digest
   readonly protocolDigest: Digest
   readonly canonicalizerDigest: Digest
-  readonly projectIndexRouteDependencyFrameDigest: Digest
+  readonly projectIndexRouteDependency: Readonly<{
+    readonly kind: "frame" | "migration-import-base"
+    readonly digest: Digest
+  }>
   readonly genesisDigest: Digest
 }
 
@@ -264,7 +267,10 @@ export interface CanvasGenesisCore {
   readonly ownerSchemaDigest: Digest
   readonly protocolDigest: Digest
   readonly canonicalizerDigest: Digest
-  readonly projectIndexRouteDependencyFrameDigest: Digest
+  readonly projectIndexRouteDependency: Readonly<{
+    readonly kind: "frame" | "migration-import-base"
+    readonly digest: Digest
+  }>
 }
 
 export type CanvasExternalFactKind =
@@ -403,7 +409,6 @@ export interface CreatedResourceProofBinding {
 export interface CausalPlacement {
   readonly anchor: CanvasPoint
   readonly gap: 24
-  readonly obstacleProjectionDigest: Digest
 }
 
 export interface NodeCreateTemplate {

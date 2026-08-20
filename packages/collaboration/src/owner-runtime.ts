@@ -26,6 +26,12 @@ import type {
 } from "./contracts"
 import { ordinarySha256 } from "./digest"
 import { CollaborationKernelError } from "./errors"
+import {
+  createOwnerStateCommitmentIssuer,
+  inspectOwnerStateCommitment,
+  ownerStateCommitmentDescriptorDigest,
+  type OwnerStateCommitment,
+} from "./owner-state-commitment"
 
 const OWNER_FACT_ARTIFACT_LIMIT = 64
 const OWNER_FACT_LIMIT = 64
@@ -38,6 +44,7 @@ interface OwnerRuntimeRecord {
   readonly authority: CurrentProtocolAuthority
   readonly factoryIdentity: object
   readonly canonicalJcs: ReturnType<typeof createCanonicalJcsEvidenceIssuer>
+  readonly stateCommitment: ReturnType<typeof createOwnerStateCommitmentIssuer>
   readonly protocolPort: object
   readonly closurePort: object
   readonly externalFactPortFactory: object
@@ -61,13 +68,20 @@ const liveExternalFactPorts = new WeakMap<object, OwnerRuntimeRecord>()
 const liveProcessValues = new WeakMap<object, ProcessValueRecord>()
 const documentGenerations = new WeakMap<object, { depth: number; generation: number }>()
 const liveCanonicalEvidence = new WeakMap<object, Readonly<{ runtimeIdentity: object; document: object; generation: number; evidence: CanonicalJcsEvidence }>>()
+const liveStateCommitments = new WeakMap<object, Readonly<{
+  runtimeIdentity: object
+  document: object
+  generation: number
+  commitment: OwnerStateCommitment
+}>>()
+const activeOwnerValidations = new WeakMap<object, object>()
 const liveAcceptedReplicaApplyEvidence = new WeakMap<object, Readonly<{
   runtime: object
   target: object
   state: object
   scopeDigest: Digest
   canonicalStateDigest: Digest
-  fullUpdateDigest: Digest
+  materializationDigest: Digest
   postStateVectorDigest: Digest
   yjsUpdateDigest: Digest
   generation: number
@@ -88,14 +102,14 @@ function ensureDocumentGenerationTracker(document: Y.Doc): { depth: number; gene
 }
 
 export function issueAcceptedReplicaApplyEvidence<K extends DocumentOwnerKind>(runtime: DocumentOwnerRuntime<K>, input: Readonly<{
-  scopeDigest: Digest; target: object; state: OwnerValidatedState<K>; canonicalStateDigest: Digest; fullUpdateDigest: Digest
+  scopeDigest: Digest; target: object; state: OwnerValidatedState<K>; canonicalStateDigest: Digest; materializationDigest: Digest
   postStateVectorDigest: Digest; yjsUpdateDigest: Digest; generation: number
 }>): object {
   const record = objectRecord(runtime, liveRuntimes, "A live selected document-owner runtime is required")
   const stateRecord = objectRecord(input.state, liveProcessValues, "Owner process value is structural, stale or belongs to another runtime")
   if (stateRecord.owner !== record.owner || stateRecord.factoryIdentity !== record.factoryIdentity || stateRecord.kind !== "state") invalid("Owner process value is structural, stale or belongs to another runtime")
   const evidence = Object.freeze({})
-  liveAcceptedReplicaApplyEvidence.set(evidence, { runtime: runtime as object, target: input.target, state: input.state as object, scopeDigest: parseDigest(input.scopeDigest), canonicalStateDigest: parseDigest(input.canonicalStateDigest), fullUpdateDigest: parseDigest(input.fullUpdateDigest), postStateVectorDigest: parseDigest(input.postStateVectorDigest), yjsUpdateDigest: parseDigest(input.yjsUpdateDigest), generation: input.generation })
+  liveAcceptedReplicaApplyEvidence.set(evidence, { runtime: runtime as object, target: input.target, state: input.state as object, scopeDigest: parseDigest(input.scopeDigest), canonicalStateDigest: parseDigest(input.canonicalStateDigest), materializationDigest: parseDigest(input.materializationDigest), postStateVectorDigest: parseDigest(input.postStateVectorDigest), yjsUpdateDigest: parseDigest(input.yjsUpdateDigest), generation: input.generation })
   return evidence
 }
 
@@ -113,8 +127,11 @@ export function createSelectedDocumentOwnerArtifactFactory<K extends DocumentOwn
       }
       const factoryIdentity = Object.freeze({})
       const canonicalJcs = createCanonicalJcsEvidenceIssuer()
+      const stateCommitment = createOwnerStateCommitmentIssuer({ owner, ownerSchemaDigest: artifactDigest })
+      let selectedStateCommitmentDescriptorDigest: Digest | undefined
       const processValues = Object.freeze({
         canonicalJcs,
+        stateCommitment,
         wrapValidatedState(value: unknown): OwnerValidatedState<K> {
           const wrapped = Object.freeze({ owner, value }) as OwnerValidatedState<K>
           liveProcessValues.set(wrapped, { owner, factoryIdentity, kind: "state" })
@@ -140,6 +157,37 @@ export function createSelectedDocumentOwnerArtifactFactory<K extends DocumentOwn
           }
           return state
         },
+        bindStateCommitment(
+          document: Y.Doc,
+          state: OwnerValidatedState<K>,
+          commitment: OwnerStateCommitment,
+        ) {
+          const stateRecord = objectRecord(state, liveProcessValues, "Owner process value is structural, stale or belongs to another runtime")
+          const tracker = documentGenerations.get(document)
+          const inspected = inspectOwnerStateCommitment(stateCommitment, commitment)
+          if (
+            stateRecord.owner !== owner ||
+            stateRecord.kind !== "state" ||
+            stateRecord.factoryIdentity !== factoryIdentity ||
+            activeOwnerValidations.get(factoryIdentity) !== document ||
+            !tracker ||
+            tracker.depth !== 0 ||
+            selectedStateCommitmentDescriptorDigest === undefined ||
+            inspected === null ||
+            inspected.owner !== owner ||
+            inspected.ownerSchemaDigest !== artifactDigest ||
+            inspected.descriptorDigest !== selectedStateCommitmentDescriptorDigest
+          ) {
+            invalid("Owner state commitment is not bound to the exact active validated state")
+          }
+          liveStateCommitments.set(state, {
+            runtimeIdentity: factoryIdentity,
+            document,
+            generation: tracker.generation,
+            commitment,
+          })
+          return state
+        },
       }) as OwnerProcessValueFactory<K>
       let definitions: Readonly<{
         protocol: DocumentOwnerProtocolDefinition<K>
@@ -161,11 +209,15 @@ export function createSelectedDocumentOwnerArtifactFactory<K extends DocumentOwn
       try {
         const protocolPort = createProtocolPort(definitions.protocol, owner, factoryIdentity)
         assertDocumentOwnerBinding(protocolPort)
+        selectedStateCommitmentDescriptorDigest = ownerStateCommitmentDescriptorDigest(
+          protocolPort.canonicalizerDescriptor.stateCommitment,
+        )
         const runtimeRecordShell = {
           owner,
           authority,
           factoryIdentity,
           canonicalJcs,
+          stateCommitment,
           protocolPort,
           closurePort: Object.freeze({}),
           externalFactPortFactory: Object.freeze({}),
@@ -175,7 +227,7 @@ export function createSelectedDocumentOwnerArtifactFactory<K extends DocumentOwn
         }
         const externalFactPortFactory = createExternalFactPortFactory(owner, factoryIdentity, runtimeRecordShell)
         const closurePort = createClosurePort(definitions.closure, protocolPort, owner, factoryIdentity, runtimeRecordShell)
-        const record: OwnerRuntimeRecord = Object.freeze({ owner, authority, factoryIdentity, canonicalJcs, protocolPort, closurePort, externalFactPortFactory, armCandidateTransactionCapture: definition.armCandidateTransactionCapture, installValidatedPostCache: definition.installValidatedPostCache, readCertifiedCanonicalDigest: definition.readCertifiedCanonicalDigest })
+        const record: OwnerRuntimeRecord = Object.freeze({ owner, authority, factoryIdentity, canonicalJcs, stateCommitment, protocolPort, closurePort, externalFactPortFactory, armCandidateTransactionCapture: definition.armCandidateTransactionCapture, installValidatedPostCache: definition.installValidatedPostCache, readCertifiedCanonicalDigest: definition.readCertifiedCanonicalDigest })
         const runtime = Object.freeze({ artifactDigest, protocolPort, closurePort, externalFactPortFactory }) as DocumentOwnerRuntime<K>
         liveRuntimes.set(runtime, record)
         liveProtocolPorts.set(protocolPort, record)
@@ -221,7 +273,7 @@ export function installOwnerValidatedPostCache<K extends DocumentOwnerKind>(
     readonly durableHeadDigest: Parameters<NonNullable<SelectedDocumentOwnerArtifactDefinition<K>["installValidatedPostCache"]>>[0]["durableHeadDigest"]
     readonly applyEvidence: object
     readonly scopeDigest: Digest
-    readonly fullUpdateDigest: Digest
+    readonly materializationDigest: Digest
     readonly postStateVectorDigest: Digest
     readonly yjsUpdateDigest: Digest
   }>,
@@ -232,7 +284,7 @@ export function installOwnerValidatedPostCache<K extends DocumentOwnerKind>(
     invalid("Owner process value is structural, stale or belongs to another runtime")
   }
   const evidence = liveAcceptedReplicaApplyEvidence.get(input.applyEvidence)
-  if (!evidence || evidence.runtime !== runtime || evidence.target !== input.target || evidence.state !== input.state || evidence.scopeDigest !== input.scopeDigest || evidence.canonicalStateDigest !== input.canonicalStateDigest || evidence.fullUpdateDigest !== input.fullUpdateDigest || evidence.postStateVectorDigest !== input.postStateVectorDigest || evidence.yjsUpdateDigest !== input.yjsUpdateDigest || evidence.generation < 1) return
+  if (!evidence || evidence.runtime !== runtime || evidence.target !== input.target || evidence.state !== input.state || evidence.scopeDigest !== input.scopeDigest || evidence.canonicalStateDigest !== input.canonicalStateDigest || evidence.materializationDigest !== input.materializationDigest || evidence.postStateVectorDigest !== input.postStateVectorDigest || evidence.yjsUpdateDigest !== input.yjsUpdateDigest || evidence.generation < 1) return
   liveAcceptedReplicaApplyEvidence.delete(input.applyEvidence)
   record.installValidatedPostCache?.(input as never)
 }
@@ -284,6 +336,41 @@ export function consumeOwnerCanonicalJcsEvidence<K extends DocumentOwnerKind>(
   return consumeCanonicalJcsEvidence(runtimeRecord.canonicalJcs, binding.evidence)?.bytes ?? null
 }
 
+/** Consumes the only current canonical-state authority: an issuer-bound root. */
+export function consumeOwnerStateCommitmentDigest<K extends DocumentOwnerKind>(
+  runtime: DocumentOwnerRuntime<K>,
+  document: Y.Doc,
+  state: OwnerValidatedState<K>,
+): Digest | null {
+  const runtimeRecord = objectRecord(runtime, liveRuntimes, "A live selected document-owner runtime is required")
+  const stateRecord = objectRecord(state, liveProcessValues, "Owner process value is structural, stale or belongs to another runtime")
+  const binding = liveStateCommitments.get(state)
+  const tracker = documentGenerations.get(document)
+  if (
+    !binding ||
+    !tracker ||
+    tracker.depth !== 0 ||
+    tracker.generation !== binding.generation ||
+    binding.runtimeIdentity !== runtimeRecord.factoryIdentity ||
+    binding.document !== document ||
+    stateRecord.owner !== runtimeRecord.owner ||
+    stateRecord.kind !== "state" ||
+    stateRecord.factoryIdentity !== runtimeRecord.factoryIdentity
+  ) return null
+  const inspected = inspectOwnerStateCommitment(runtimeRecord.stateCommitment, binding.commitment)
+  const descriptorDigest = ownerStateCommitmentDescriptorDigest(
+    runtime.protocolPort.canonicalizerDescriptor.stateCommitment,
+  )
+  if (
+    inspected === null ||
+    inspected.owner !== runtimeRecord.owner ||
+    inspected.ownerSchemaDigest !== runtime.protocolPort.schemaDigest ||
+    inspected.descriptorDigest !== descriptorDigest
+  ) return null
+  liveStateCommitments.delete(state)
+  return inspected.rootDigest
+}
+
 export function assertOwnerExternalFactPort(
   port: unknown,
   runtime: DocumentOwnerRuntime,
@@ -318,9 +405,7 @@ function createProtocolPort<K extends DocumentOwnerKind>(
       return definition.decodeIntent(cloneBytes(exactJcs, "owner intent"))
     },
     validateBase(document: Parameters<DocumentOwnerProtocolDefinition<K>["validateBase"]>[0]) {
-      const result = definition.validateBase(document)
-      if (typeof result !== "string") requireProcessValue(result, owner, factoryIdentity, "state")
-      return result
+      return runOwnerValidation(factoryIdentity, document, () => definition.validateBase(document), owner)
     },
     applyIntent(
       base: OwnerValidatedState<K>,
@@ -341,9 +426,12 @@ function createProtocolPort<K extends DocumentOwnerKind>(
     ) {
       requireProcessValue(base, owner, factoryIdentity, "state")
       requireProcessValue(result, owner, factoryIdentity, "result")
-      const value = definition.validatePost(base, candidate, result)
-      if (typeof value !== "string") requireProcessValue(value, owner, factoryIdentity, "state")
-      return value
+      return runOwnerValidation(
+        factoryIdentity,
+        candidate,
+        () => definition.validatePost(base, candidate, result),
+        owner,
+      )
     },
     canonicalStateBytes(document: Parameters<DocumentOwnerProtocolDefinition<K>["canonicalStateBytes"]>[0]) {
       const result = definition.canonicalStateBytes(document)
@@ -355,6 +443,36 @@ function createProtocolPort<K extends DocumentOwnerKind>(
     },
   }) as DocumentOwnerProtocolPort<K>
   return port
+}
+
+function runOwnerValidation<K extends DocumentOwnerKind>(
+  factoryIdentity: object,
+  document: Y.Doc,
+  validate: () => OwnerValidatedState<K> | "pending" | "rejected",
+  owner: K,
+): OwnerValidatedState<K> | "pending" | "rejected" {
+  if (activeOwnerValidations.has(factoryIdentity)) invalid("Owner validation cannot be re-entered")
+  const tracker = ensureDocumentGenerationTracker(document)
+  if (tracker.depth !== 0) invalid("Owner validation cannot run inside a Yjs transaction")
+  activeOwnerValidations.set(factoryIdentity, document)
+  try {
+    const result = validate()
+    if (typeof result === "string") return result
+    requireProcessValue(result, owner, factoryIdentity, "state")
+    const binding = liveStateCommitments.get(result)
+    if (
+      !binding ||
+      binding.runtimeIdentity !== factoryIdentity ||
+      binding.document !== document ||
+      binding.generation !== tracker.generation ||
+      tracker.depth !== 0
+    ) {
+      invalid("Owner validation did not return its exact commitment-bound sealed state")
+    }
+    return result
+  } finally {
+    activeOwnerValidations.delete(factoryIdentity)
+  }
 }
 
 function createClosurePort<K extends DocumentOwnerKind>(

@@ -4,7 +4,16 @@ import type {
   CanvasApplicationCommandResult,
   CanvasApplicationQueryResult,
 } from "@convax/canvas/application"
-import { encodeBase64url, parseDigest, parseId128, parseProjectId, type Digest } from "@convax/collaboration"
+import { createCanvasDocument, createTextNode } from "@convax/canvas"
+import { canvasProjectionResourceMetadataKey } from "@convax/canvas/collaboration"
+import {
+  encodeBase64url,
+  parseDigest,
+  parseId128,
+  parseProjectId,
+  parseUint64,
+  type Digest,
+} from "@convax/collaboration"
 import type { ProjectCanvasCatalogProjection, ProjectCanvasRouteCommandResult } from "@convax/project/canvas"
 
 import type { CanvasCollaborationSessionOwner } from "./canvas-collaboration-session-owner"
@@ -25,9 +34,25 @@ describe("Project collaboration composition", () => {
       format: "convax.project-canvas-route-command", kind: "project.canvas.route.create", title: "Canvas",
     } })).toBe(harness.routeResult)
     expect(await harness.composition.projectIndexes.queryCurrentBlobDigests({ projectId: PROJECT_A })).toEqual(new Set())
+    expect(await harness.composition.projectIndexes.queryCurrentResourcesExact?.({
+      projectId: PROJECT_A,
+      targets: [{ uri: "convax-project://resource", ownerProofDigest: FRAME }],
+    })).toEqual([])
+    expect(harness.projectIndexes.queryCurrentResourcesExact).toHaveBeenCalledWith({
+      projectId: PROJECT_A,
+      targets: [{ uri: "convax-project://resource", ownerProofDigest: FRAME }],
+    })
     expect(await harness.composition.projectIndexes.queryFileMaterializationPlan({ projectId: PROJECT_A })).toEqual({
       projectId: PROJECT_A,
       entries: [],
+    })
+    expect(await harness.composition.projectIndexes.queryFileMaterializationEntries?.({
+      projectId: PROJECT_A,
+      paths: ["Notes/a.md"],
+    })).toEqual({ projectId: PROJECT_A, entries: [] })
+    expect(harness.projectIndexes.queryFileMaterializationEntries).toHaveBeenCalledWith({
+      projectId: PROJECT_A,
+      paths: ["Notes/a.md"],
     })
     expect(await harness.composition.canvasSessions.query({ scopeId: PROJECT_A, canvasId: "canvas-main" }))
       .toBe(harness.queryResult)
@@ -81,6 +106,67 @@ describe("Project collaboration composition", () => {
     await harness.composition.dispose()
   })
 
+  test("decorates a cold mounted projection from the same ProjectIndex exact-resource owner", async () => {
+    const suffix = encodeBase64url(new Uint8Array(32).fill(8))
+    const entity = Object.freeze({ kind: "node" as const, id: `n_${suffix}`, incarnation: `ni_${suffix}` })
+    const canvasId = `cv_${"1".repeat(64)}`
+    const projectionIdentity = Object.freeze({
+      format: "convax.canvas-certified-projection-identity" as const,
+      canvasId: canvasId as never,
+      ownerSchemaDigest: parseDigest("1".repeat(64)),
+      stateCommitmentDigest: parseDigest("2".repeat(64)),
+    })
+    const resource = Object.freeze({
+      format: "convax.canvas-resource-ref" as const,
+      uri:
+        `convax-project://${PROJECT_A}/epochs/AQEBAQEBAQEBAQEBAQEBAQ/entries/pf_${"1".repeat(64)}` +
+        `?blob=sha256%3A${"2".repeat(64)}`,
+      mediaClass: "text" as const,
+      mime: "text/markdown",
+      byteLength: parseUint64("5"),
+      contentDigest: parseDigest("2".repeat(64)),
+      ownerProofDigest: parseDigest("4".repeat(64)),
+    })
+    const sessionProjection = Object.freeze({
+      format: "convax.canvas-session-projection" as const,
+      ref: { canvasId, scopeId: PROJECT_A },
+      sessionId: SESSION_A,
+      document: createCanvasDocument({
+        id: canvasId,
+        nodes: [createTextNode({
+          id: entity.id,
+          metadata: { [canvasProjectionResourceMetadataKey]: resource },
+          position: { x: 0, y: 0 },
+          resourceState: { status: "stale" },
+        })],
+      }),
+      edgeEntities: Object.freeze([]),
+      nodeEntities: Object.freeze([{ nodeId: entity.id, entity }]),
+      projectionIdentity,
+      resourceHierarchy: Object.freeze({
+        format: "convax.canvas-resource-hierarchy-snapshot" as const,
+        projectionIdentity,
+        completeness: "unavailable" as const,
+        entries: Object.freeze([]),
+      }),
+      canUndo: false,
+      canRedo: false,
+    })
+    const harness = composition(sessionProjection)
+
+    const opened = await harness.composition.canvasSessions.open({
+      ref: sessionProjection.ref,
+      actor: { id: "desktop:renderer:7", kind: "renderer" },
+    })
+
+    expect(opened.resourceHierarchy).toMatchObject({ completeness: "unavailable", entries: [] })
+    expect(harness.projectIndexes.queryCurrentResourcesExact).toHaveBeenCalledWith({
+      projectId: PROJECT_A,
+      targets: [{ uri: resource.uri, ownerProofDigest: resource.ownerProofDigest }],
+    })
+    await harness.composition.dispose()
+  })
+
   test("quiesces both port families in order and drops session bindings", async () => {
     const harness = composition()
     const ref = { scopeId: PROJECT_A, canvasId: "canvas-main" }
@@ -111,7 +197,8 @@ describe("Project collaboration composition", () => {
   })
 })
 
-function composition() {
+function composition(sessionProjection: Awaited<ReturnType<CanvasCollaborationSessionOwner["open"]>> =
+  Object.freeze({ sessionId: SESSION_A }) as never) {
   const events: string[] = []
   const catalog = Object.freeze({ marker: "catalog" }) as unknown as ProjectCanvasCatalogProjection
   const routeResult = Object.freeze({ marker: "route" }) as unknown as ProjectCanvasRouteCommandResult
@@ -127,7 +214,7 @@ function composition() {
   })
   const close = mock(() => undefined)
   const requireRendererLease = mock(() => undefined)
-  const queryRenderer = mock(async () => Object.freeze({ sessionId: SESSION_A }) as never)
+  const queryRenderer = mock(async () => sessionProjection)
   const quiesceSessions = mock(async () => {
     events.push("canvas:quiesce")
   })
@@ -136,6 +223,7 @@ function composition() {
     submitRouteCommand: mock(async () => routeResult),
     queryCurrentBlobDigests: mock(async () => new Set<Digest>()),
     queryCurrentResources: mock(async () => []),
+    queryCurrentResourcesExact: mock(async () => []),
     admitManagedBlob: mock(async () => Object.freeze({ status: "partial-success", code: "entry-not-found" }) as never),
     createDirectory: mock(async () => Object.freeze({ status: "partial-success", code: "entry-not-found" }) as never),
     publishFile: mock(async () => Object.freeze({ status: "partial-success", code: "entry-not-found" }) as never),
@@ -143,15 +231,18 @@ function composition() {
     tombstoneEntry: mock(async () => Object.freeze({ status: "partial-success", code: "entry-not-found" }) as never),
     queryFileMaterializationPlan: mock(async ({ projectId }: { projectId: string }) =>
       Object.freeze({ projectId, entries: Object.freeze([]) })),
+    queryFileMaterializationEntries: mock(async ({ projectId }: { projectId: string; paths: readonly string[] }) =>
+      Object.freeze({ projectId, entries: Object.freeze([]) })),
     quiesceProject: mock(async () => {
       events.push("index:quiesce")
     }),
   })
   const canvasSessions: CanvasCollaborationSessionOwner = {
-    open: mock(async () => Object.freeze({ sessionId: SESSION_A }) as never),
+    open: mock(async () => sessionProjection),
     close,
     requireRendererLease,
     queryRenderer,
+    queryRendererResourceTargets: mock(async () => Object.freeze({ marker: "resource-targets" }) as never),
     submitRenderer: mock(async () => Object.freeze({ marker: "renderer-submit" }) as never),
     executeApplication: mock(async () => Object.freeze({ marker: "application-submit" }) as never),
     deliverApplicationCommit: mock(async () => Object.freeze({ status: "unavailable" as const })),
@@ -165,6 +256,7 @@ function composition() {
     subscribe(listener) { listeners.add(listener); return () => listeners.delete(listener) },
     query: mock(async () => queryResult),
     submit: mock(async () => commandResult),
+    submitCertifiedResourceAppend: mock(async () => Object.freeze({ marker: "certified-command" }) as never),
     dispose: mock(() => undefined),
   }
   const canvasRoutes = Object.freeze({

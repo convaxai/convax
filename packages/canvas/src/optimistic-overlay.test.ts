@@ -73,6 +73,33 @@ describe("Canvas optimistic overlay", () => {
     store.dispose()
   })
 
+  test("does not re-read authority for an overlay-only reconciliation", () => {
+    let authorityReads = 0
+    const overlay = new CanvasOptimisticOverlayCoordinator()
+    const scheduled: Array<() => void> = []
+    const store = new CanvasCombinedPresentationStore({
+      authoritative: {
+        getSnapshot: () => {
+          authorityReads += 1
+          return "authority"
+        },
+        subscribe: () => () => undefined,
+      },
+      overlay,
+      schedule: (task) => scheduled.push(task),
+    })
+    store.subscribe(() => undefined)
+    const readsAfterMount = authorityReads
+
+    const operation = overlay.begin("scope", [ghost("saving")])
+    scheduled.shift()!()
+    overlay.settle(operation.token)
+    scheduled.shift()!()
+
+    expect(authorityReads).toBe(readsAfterMount)
+    store.dispose()
+  })
+
   test("invokes the presentation scheduler without rebinding its receiver", () => {
     const overlay = new CanvasOptimisticOverlayCoordinator()
     const scheduled: Array<() => void> = []

@@ -14,6 +14,10 @@ export interface ReachableOrdinaryPathIndex {
   readonly pathByEntryId: ReadonlyMap<string, string>
 }
 
+// Owner-validated snapshots and their map views are immutable. Cache only by
+// exact snapshot identity so a newly accepted state can never inherit stale paths.
+const reachableOrdinaryPathIndexes = new WeakMap<ProjectIndexSnapshot, ReachableOrdinaryPathIndex>()
+
 /**
  * Resolves the current materialized path without constructing counterfactual
  * dependency evidence for ordinary reachable path winners. Exceptional conflict,
@@ -33,6 +37,8 @@ export function projectEntryMaterializedPath(
 }
 
 export function createReachableOrdinaryPathIndex(snapshot: ProjectIndexSnapshot): ReachableOrdinaryPathIndex {
+  const cached = reachableOrdinaryPathIndexes.get(snapshot)
+  if (cached !== undefined) return cached
   const tombstoned = new Set([...snapshot.entryTombstones.values()].map((record) => record.entryId))
   const selectedClaims = new Map<ProjectEntryId, ProjectEntryLocationClaim>()
   for (const claim of snapshot.entryLocations.values()) {
@@ -93,5 +99,7 @@ export function createReachableOrdinaryPathIndex(snapshot: ProjectIndexSnapshot)
       }
     }
   }
-  return Object.freeze({ entryIdByPath, pathByEntryId })
+  const index = Object.freeze({ entryIdByPath, pathByEntryId })
+  reachableOrdinaryPathIndexes.set(snapshot, index)
+  return index
 }

@@ -11,6 +11,8 @@ export interface SessionUndoCursor {
 
 export interface SessionUndoCoordinator {
   recordDurableRoot(rootOperationId: Id128): void
+  canUndo(): boolean
+  canRedo(): boolean
   peekUndo(): SessionUndoCursor | null
   peekRedo(): SessionUndoCursor | null
   commitUndo(cursorToken: Id128, durableInverseOperationId: Id128): void
@@ -39,6 +41,14 @@ export class TransientSessionUndoCoordinator implements SessionUndoCoordinator {
     this.requireNoPending()
     this.undo.push(parseId128(rootOperationId))
     this.redo.length = 0
+  }
+
+  canUndo(): boolean {
+    return this.undo.length > 0
+  }
+
+  canRedo(): boolean {
+    return this.redo.length > 0
   }
 
   peekUndo(): SessionUndoCursor | null {

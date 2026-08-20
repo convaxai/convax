@@ -283,6 +283,7 @@ export class CanvasCombinedPresentationStore<Authoritative> {
   readonly #overlay: Pick<CanvasOptimisticOverlayCoordinator, "getSnapshot" | "subscribe">
   readonly #schedule: (task: () => void) => void
   #scheduled = false
+  #authoritativeDirty = false
   #snapshot: CanvasCombinedPresentationSnapshot<Authoritative>
   #unsubscribeAuthoritative: (() => void) | null = null
   #unsubscribeOverlay: (() => void) | null = null
@@ -315,11 +316,15 @@ export class CanvasCombinedPresentationStore<Authoritative> {
   subscribe(listener: () => void): () => void {
     this.#listeners.add(listener)
     if (this.#listeners.size === 1) {
-      const invalidate = () => this.#invalidate(this.#authoritative, this.#overlay)
-      this.#unsubscribeAuthoritative = this.#authoritative.subscribe(invalidate)
-      this.#unsubscribeOverlay = this.#overlay.subscribe(invalidate)
+      this.#unsubscribeAuthoritative = this.#authoritative.subscribe(() =>
+        this.#invalidate(this.#authoritative, this.#overlay, true),
+      )
+      this.#unsubscribeOverlay = this.#overlay.subscribe(() =>
+        this.#invalidate(this.#authoritative, this.#overlay, false),
+      )
       const authoritative = this.#authoritative.getSnapshot()
       const overlay = this.#overlay.getSnapshot()
+      this.#authoritativeDirty = false
       if (authoritative !== this.#snapshot.authoritative || overlay !== this.#snapshot.overlay) {
         this.#snapshot = Object.freeze({ authoritative, overlay })
       }
@@ -345,14 +350,20 @@ export class CanvasCombinedPresentationStore<Authoritative> {
   #invalidate(
     authoritative: { getSnapshot(): Authoritative },
     overlay: Pick<CanvasOptimisticOverlayCoordinator, "getSnapshot">,
+    authoritativeDirty: boolean,
   ): void {
+    if (authoritativeDirty) this.#authoritativeDirty = true
     if (this.#scheduled) return
     this.#scheduled = true
     try {
       this.#schedule(() => {
         this.#scheduled = false
+        const authoritativeSnapshot = this.#authoritativeDirty
+          ? authoritative.getSnapshot()
+          : this.#snapshot.authoritative
+        this.#authoritativeDirty = false
         this.#snapshot = Object.freeze({
-          authoritative: authoritative.getSnapshot(),
+          authoritative: authoritativeSnapshot,
           overlay: overlay.getSnapshot(),
         })
         for (const listener of [...this.#listeners]) listener()

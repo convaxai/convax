@@ -1,5 +1,7 @@
 import { describe, expect, test } from "bun:test"
 import {
+  applyYjsUpdate,
+  canonicalStateDigest,
   encodeBase64url,
   installCurrentProtocolAuthority,
   parseActorId,
@@ -14,6 +16,7 @@ import {
   type CurrentProtocolAuthority,
 } from "@convax/collaboration"
 import { createCanvasDocumentOwnerRuntime } from "./session"
+import { createCanvasReconstructionYDoc } from "./ydoc"
 import {
   buildCanvasGenesisProofCarrier,
   installCanvasGenesisProofCarrierVerifierFactory,
@@ -62,9 +65,23 @@ describe("current CVXCGP03 Canvas genesis proof carrier", () => {
     expect(result.status).toBe("built")
     if (result.status !== "built") return
     expect(new TextDecoder().decode(result.proofCarrierExactBytes.slice(0, 8))).toBe("CVXCGP03")
-    expect(result.validatedIdentity.identity.projectIndexRouteDependencyFrameDigest).toBe(digest(90))
+    expect(result.validatedIdentity.identity.projectIndexRouteDependency).toEqual({
+      kind: "frame",
+      digest: digest(90),
+    })
     expect(result.validatedIdentity.checkpointObjectDigest).toBe(result.checkpointObjectDigest)
     expect(created.verifier(result.proofCarrierExactBytes).status).toBe("validated")
+    const reconstructed = createCanvasReconstructionYDoc()
+    try {
+      applyYjsUpdate(reconstructed, result.acceptedBase.fullUpdate, Object.freeze({ format: "canvas-genesis-test" }))
+      const legacyBytes = runtimeResult.protocolPort.canonicalStateBytes(reconstructed)
+      if (legacyBytes === "rejected") throw new Error("failed to encode reconstructed Canvas genesis")
+      expect(result.acceptedBase.canonicalStateDigest).not.toBe(
+        canonicalStateDigest(runtimeResult.artifactDigest, legacyBytes),
+      )
+    } finally {
+      reconstructed.destroy()
+    }
   })
 
   test("rejects a tampered section and never exposes a partial identity", async () => {

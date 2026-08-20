@@ -1,11 +1,14 @@
 import {
   documentScopeDigest,
+  inspectAcceptedFrameObject,
   localOwnerEditAuthorizationCoreDigest,
   parseActorId,
   parseDigest,
   parseDocumentScope,
   parseReplicaId,
 } from "@convax/collaboration"
+import { requiredCanvasBlobDigests } from "@convax/canvas/collaboration"
+import { requiredProjectIndexBlobDigests } from "@convax/project"
 import type {
   ActorId,
   CollaborationKernelPorts,
@@ -209,7 +212,7 @@ export async function createMainProjectCollaborationProductionRuntime(input: {
   readonly localAuthority: CurrentLocalReplicaAuthoritySource
   readonly incomingAuthority: IncomingReplicaAuthoritySource
 }): Promise<MainProjectCollaborationProductionRuntime> {
-  const materializers = createProjectCollaborationMaterializerRegistry()
+  const materializers = createProjectCollaborationMaterializerRegistry(input.authority)
   const persistence = await NodeCollaborationPersistence.open({
     collaborationDirectory: input.collaborationDirectory,
     localActorId: input.actorId,
@@ -273,7 +276,9 @@ export async function createMainProjectCollaborationProductionRuntime(input: {
 }
 
 /** One Project writer routes materialization by exact document scope. */
-export function createProjectCollaborationMaterializerRegistry(): ProjectCollaborationMaterializerRegistry {
+export function createProjectCollaborationMaterializerRegistry(
+  authority: CurrentProtocolAuthority,
+): ProjectCollaborationMaterializerRegistry {
   const entries = new Map<Digest, NodeReplicaHeadMaterializer>()
   const registry: ProjectCollaborationMaterializerRegistry = {
     register({ scope, materializer }) {
@@ -287,14 +292,22 @@ export function createProjectCollaborationMaterializerRegistry(): ProjectCollabo
         if (entries.get(key) === materializer) entries.delete(key)
       }
     },
-    inspectFrame(ref, exactBytes) {
-      return requireMaterializer(ref.scope).inspectFrame(ref, exactBytes)
+    async inspectFrame(ref, exactBytes) {
+      const materializer = entries.get(documentScopeDigest(ref.scope))
+      if (materializer) return await materializer.inspectFrame(ref, exactBytes)
+      const frame = inspectAcceptedFrameObject(authority, ref, exactBytes)
+      return Object.freeze({
+        ref,
+        requiredBlobDigests: ref.scope.docKind === "project-index"
+          ? requiredProjectIndexBlobDigests(frame)
+          : requiredCanvasBlobDigests(frame),
+      })
     },
     applyAcceptedFrame(input) {
       return requireMaterializer(input.ref.scope).applyAcceptedFrame(input)
     },
-    observeAcceptedFrame(ref, exactBytes) {
-      requireMaterializer(ref.scope).observeAcceptedFrame?.(ref, exactBytes)
+    observeAcceptedFrame(ref, exactBytes, durableDelta) {
+      requireMaterializer(ref.scope).observeAcceptedFrame?.(ref, exactBytes, durableDelta)
     },
     actorHeadsDigest(actorHeads) {
       return requireMaterializer(actorHeads.scope).actorHeadsDigest(actorHeads)

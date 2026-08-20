@@ -2,6 +2,7 @@ import { builtinModules } from "node:module"
 import { dirname, join, relative, resolve, sep } from "node:path"
 
 import { verifyCurrentProtocolDescriptorFile } from "./collaboration-protocol/generate"
+import { verifyCurrentProtocolSchemaArtifacts } from "./collaboration-protocol/schema-artifacts"
 
 type PackageManifest = {
   dependencies?: Record<string, string>
@@ -120,17 +121,17 @@ const allowedInternalRuntimeDependencies = new Map<string, ReadonlySet<string>>(
 ])
 const allowedInternalSubpaths = new Map<string, ReadonlySet<string>>([
   ["@convax/canvas -> @convax/bounded-value", new Set(["."])],
-  ["@convax/canvas -> @convax/collaboration", new Set(["."])],
+  ["@convax/canvas -> @convax/collaboration", new Set([".", "./migration"])],
   ["@convax/canvas -> @convax/uri", new Set(["."])],
   ["@convax/canvas -> @convax/ui", new Set([".", "./theme.css"])],
-  ["@convax/project -> @convax/canvas", new Set(["./application", "./collaboration", "./core"])],
-  ["@convax/project -> @convax/collaboration", new Set(["."])],
+  ["@convax/project -> @convax/canvas", new Set(["./application", "./collaboration", "./collaboration-migration", "./core"])],
+  ["@convax/project -> @convax/collaboration", new Set([".", "./migration"])],
   ["@convax/project -> @convax/project-files", new Set([".", "./contracts", "./drag", "./identity", "./project-uri"])],
   ["@convax/project -> @convax/uri", new Set(["."])],
   ["@convax/project -> @convax/ui", new Set([".", "./theme.css"])],
   ["@convax/project-files -> @convax/uri", new Set(["."])],
   ["@convax/plugin-sdk -> @convax/bounded-value", new Set(["."])],
-  ["@convax/desktop -> @convax/collaboration", new Set(["."])],
+  ["@convax/desktop -> @convax/collaboration", new Set([".", "./migration"])],
   ["@convax/desktop -> @convax/uri", new Set(["."])],
 ])
 const nodeBuiltinSpecifiers = new Set(builtinModules.flatMap((name) => [name, `node:${name}`]))
@@ -299,6 +300,7 @@ for (const assertion of retiredNexusIntegrationAssertions) {
   }
 }
 await verifyCurrentProtocolDescriptorFile(repositoryRoot)
+await verifyCurrentProtocolSchemaArtifacts(repositoryRoot)
 requireContractMarkers("AGENTS.md", rootContract, [
   "## Single current collaboration protocol",
   "current protocol descriptor whose exact `protocolDigest` is the only protocol",

@@ -5,7 +5,7 @@ import { encodeBase64url, parseActorId, parseDigest, parseId128 } from "@convax/
 import { canvasSessionIpcChannels } from "../canvas-session-contracts"
 import { createCanvasSessionPreloadClient } from "./canvas-session-client"
 
-const ref = Object.freeze({ canvasId: "canvas-one", scopeId: "project-one" })
+const ref = Object.freeze({ canvasId: `cv_${"1".repeat(64)}`, scopeId: "project-one" })
 const sessionId = parseId128(encodeBase64url(new Uint8Array(16).fill(1)))
 const entitySuffix = encodeBase64url(new Uint8Array(32).fill(2))
 const entity = Object.freeze({
@@ -24,6 +24,12 @@ const document = createCanvasDocument({
     }),
   ],
 })
+const projectionIdentity = Object.freeze({
+  format: "convax.canvas-certified-projection-identity" as const,
+  canvasId: ref.canvasId,
+  ownerSchemaDigest: parseDigest("e".repeat(64)),
+  stateCommitmentDigest: parseDigest("f".repeat(64)),
+})
 const projection = Object.freeze({
   format: "convax.canvas-session-projection" as const,
   ref,
@@ -31,6 +37,13 @@ const projection = Object.freeze({
   document,
   edgeEntities: Object.freeze([]),
   nodeEntities: Object.freeze([Object.freeze({ nodeId: entity.id, entity })]),
+  projectionIdentity,
+  resourceHierarchy: Object.freeze({
+    format: "convax.canvas-resource-hierarchy-snapshot" as const,
+    projectionIdentity,
+    completeness: "complete" as const,
+    entries: Object.freeze([]),
+  }),
   canUndo: true,
   canRedo: false,
 })
@@ -146,6 +159,30 @@ describe("preload Canvas session client", () => {
       nodeEntities: [{ nodeId: entity.id, entity: { ...entity, incarnation: "node-v1" } }],
     }))
     await expect(withInvalidEntity.client.open(ref)).rejects.toThrow("canonical ni_")
+
+    const withoutHierarchy = setup(() => {
+      const { resourceHierarchy: _resourceHierarchy, ...missing } = projection
+      return missing
+    })
+    await expect(withoutHierarchy.client.open(ref)).rejects.toThrow("field set")
+
+    const widenedHierarchy = setup(() => ({
+      ...projection,
+      resourceHierarchy: { ...projection.resourceHierarchy, hostPath: "/private/Notes/a.md" },
+    }))
+    await expect(widenedHierarchy.client.open(ref)).rejects.toThrow("unknown or missing fields")
+
+    const mismatchedHierarchy = setup(() => ({
+      ...projection,
+      resourceHierarchy: {
+        ...projection.resourceHierarchy,
+        projectionIdentity: {
+          ...projectionIdentity,
+          stateCommitmentDigest: parseDigest("0".repeat(64)),
+        },
+      },
+    }))
+    await expect(mismatchedHierarchy.client.open(ref)).rejects.toThrow("owner projection identity")
   })
 
   test("rejects stale scope/session responses and malformed operation receipts", async () => {

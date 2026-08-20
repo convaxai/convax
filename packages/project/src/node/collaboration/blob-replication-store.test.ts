@@ -16,7 +16,11 @@ import {
 import { CONTROL_PROTOCOL_EXPECTED_IDENTITIES } from "../../collaboration-protocol/control-descriptor"
 import { createBlobDurableAck } from "../../collaboration/blob-replication"
 import type { ProjectIndexResourceReference } from "../../collaboration/project-index"
-import { createCompleteProjectBlobRootScanPort, ProjectBlobReplicationStore } from "./blob-replication-store"
+import {
+  createCompleteProjectBlobRootScanPort,
+  projectBlobPresenceStructureMetricsForTests,
+  ProjectBlobReplicationStore,
+} from "./blob-replication-store"
 
 const id = (fill: number) => parseId128(encodeBase64url(new Uint8Array(16).fill(fill)))
 const actor = (fill: number) => parseActorId(encodeBase64url(new Uint8Array(32).fill(fill)))
@@ -128,6 +132,68 @@ describe("Project/node blob replication store", () => {
     } finally { await fs.rm(root, { recursive: true, force: true }) }
   })
 
+  durabilityTest("reuses an exact durable presence entry without republishing and still verifies its object", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "convax-blob-presence-fast-path-"))
+    try {
+      const directory = await collaborationDirectory(root, "project")
+      const store = await open(directory)
+      const bytes = new TextEncoder().encode("already-durable")
+      const reference = resource(bytes)
+      const published: string[] = []
+      store.subscribePublished((blobDigest) => published.push(blobDigest))
+
+      const first = await store.admitVerifiedBytes(reference, bytes)
+      await expect(store.admitVerifiedBytes(
+        reference,
+        new Uint8Array(bytes.byteLength).fill(0xff),
+      )).rejects.toThrow("match")
+      const second = await store.admitVerifiedBytes(reference, bytes)
+
+      expect(second).toEqual(first)
+      expect(published).toEqual([reference.blob.digest])
+
+      const digestPath = path.join(
+        directory,
+        "blob-replication",
+        "cache",
+        "sha256",
+        reference.blob.digest.slice(0, 2),
+        reference.blob.digest,
+      )
+      await fs.writeFile(digestPath, new Uint8Array(bytes.byteLength).fill(0xff))
+      await expect(store.admitVerifiedBytes(reference, bytes)).rejects.toThrow("digest")
+      expect(published).toEqual([reference.blob.digest])
+    } finally { await fs.rm(root, { recursive: true, force: true }) }
+  })
+
+  durabilityTest("keeps repeated empty-text presence admission independent of retained blob count", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "convax-blob-presence-structure-"))
+    try {
+      const directory = await collaborationDirectory(root, "project")
+      let seededBlobCount = 0
+      for (const retainedBlobCount of [256, 1_024, 4_096]) {
+        const bytes = new Uint8Array()
+        const reference = resource(bytes)
+        await seedBlobCache(directory, seededBlobCount, retainedBlobCount, bytes)
+        seededBlobCount = retainedBlobCount
+        const store = await open(directory)
+        const presencePath = path.join(directory, "blob-replication", "presence-index-v2.bin")
+        const inodeBefore = (await fs.stat(presencePath, { bigint: true })).ino
+        const before = projectBlobPresenceStructureMetricsForTests()
+
+        const evidence = await store.admitVerifiedBytes(reference, bytes)
+
+        const after = projectBlobPresenceStructureMetricsForTests()
+        expect(evidence.reference.blob.digest).toBe(reference.blob.digest)
+        expect(after.exactDigestLookups - before.exactDigestLookups, `${retainedBlobCount} exact lookups`).toBe(1)
+        expect(after.historicalEntryVisits - before.historicalEntryVisits, `${retainedBlobCount} historical visits`).toBe(0)
+        expect(after.sortComparisons - before.sortComparisons, `${retainedBlobCount} sort comparisons`).toBe(0)
+        expect(after.indexRewrites - before.indexRewrites, `${retainedBlobCount} presence rewrites`).toBe(0)
+        expect((await fs.stat(presencePath, { bigint: true })).ino, `${retainedBlobCount} presence inode`).toBe(inodeBefore)
+      }
+    } finally { await fs.rm(root, { recursive: true, force: true }) }
+  }, 30_000)
+
   durabilityTest("persists verified remote ACK but keeps it pending until the same current replica frame ACK exists", async () => {
     const root = await fs.mkdtemp(path.join(os.tmpdir(), "convax-blob-ack-"))
     try {
@@ -211,4 +277,31 @@ function resource(bytes: Uint8Array, family = "a"): ProjectIndexResourceReferenc
     blob: { format: "convax.blob-ref" as const, algorithm: "sha256" as const, digest, byteLength: String(bytes.byteLength) as never, mime: "application/octet-stream" },
     versionRecordDigest: ordinarySha256(new TextEncoder().encode(`version:${digest}`)),
   })
+}
+
+async function seedBlobCache(
+  collaborationDirectory: string,
+  previousBlobCount: number,
+  retainedBlobCount: number,
+  exactBytes: Uint8Array,
+): Promise<void> {
+  const cacheRoot = path.join(collaborationDirectory, "blob-replication", "cache", "sha256")
+  const values: Readonly<{ digest: ReturnType<typeof ordinarySha256>; bytes: Uint8Array }>[] = []
+  for (let index = previousBlobCount; index < retainedBlobCount; index += 1) {
+    const bytes = index === 0 ? exactBytes : new TextEncoder().encode(`retained-blob-${index}`)
+    values.push(Object.freeze({ digest: ordinarySha256(bytes), bytes }))
+  }
+  await Promise.all([...new Set(values.map(({ digest }) => digest.slice(0, 2)))].map((prefix) =>
+    fs.mkdir(path.join(cacheRoot, prefix), { recursive: true })
+  ))
+  const pending: Promise<void>[] = []
+  for (const { digest, bytes } of values) {
+    const directory = path.join(cacheRoot, digest.slice(0, 2))
+    pending.push(fs.writeFile(path.join(directory, digest), bytes).then(() => undefined))
+    if (pending.length === 128) {
+      await Promise.all(pending)
+      pending.length = 0
+    }
+  }
+  await Promise.all(pending)
 }

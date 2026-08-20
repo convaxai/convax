@@ -11,6 +11,21 @@ export type {
   CanonicalJcsEvidence,
   CanonicalJcsEvidenceIssuer,
 } from "./canonical-jcs-evidence"
+export {
+  OWNER_STATE_CANONICAL_KEY_PATH_POLICY,
+  OWNER_STATE_COMMITMENT_CODEC,
+  OWNER_STATE_MAX_CANONICAL_KEY_UTF8_BYTES,
+  OWNER_STATE_MAX_CANONICAL_NAME_UTF8_BYTES,
+  ownerStateCommitmentDescriptorDigest,
+  parseOwnerStateCommitmentDescriptor,
+} from "./owner-state-commitment"
+export type {
+  OwnerStateCommitment,
+  OwnerStateCommitmentDescriptor,
+  OwnerStateCommitmentIssuer,
+  OwnerStateCommitmentMutation,
+  OwnerStateCommitmentSource,
+} from "./owner-state-commitment"
 
 export type {
   CurrentProtocolArtifactDescriptor,
@@ -228,6 +243,7 @@ export type {
 export {
   assertDocumentOwnerRuntime,
   assertOwnerExternalFactPort,
+  consumeOwnerStateCommitmentDigest,
   createSelectedDocumentOwnerArtifactFactory,
 } from "./owner-runtime"
 
@@ -255,6 +271,7 @@ export {
   incomingFrameClosure,
   inspectAcceptedFrameObject,
   materializeAcceptedFrame,
+  parseAcceptedHeadDurableDeltaMetadata,
   replicaActorHeadSetDigest,
   validateAcceptedHeadMaterializationEvidence,
 } from "./accepted-head"
@@ -272,19 +289,26 @@ export {
 export { canonicalStateDigest } from "./digest"
 
 export type {
+  AcceptedFrameAtomicCommitPortEvidence,
+  AcceptedFrameAtomicQuarantinePortEvidence,
+  AcceptedHeadCheckpointMaterializationPort,
+  AcceptedHeadCheckpointMaterializationRequest,
+  AcceptedHeadCheckpointMaterializationResult,
+  AcceptedHeadDeltaChainEntry,
+  AcceptedHeadDurableDeltaMetadata,
+  AcceptedHeadIdentityView,
   AcceptedHeadMaterializationEvidence,
+  AcceptedHeadTransitionView,
   AcceptedHeadView,
   CollaborationKernelPorts,
   CollaborationPersistencePort,
-  CompareAndCommitReplicaHeadPortResult,
+  CommitAcceptedFramePortRequest,
+  CommitAcceptedFramePortResult,
   ExactBaseResolverPort,
   ExactReconstructedBase,
-  HeadCommitPortEvidence,
-  HeadCommitQuarantinePortEvidence,
   IncomingAuthorityVerificationPort,
   IncomingOwnerFactResolution,
   IncomingOwnerFactResolverPort,
-  JournalAppendPortEvidence,
   KernelQuarantineReason,
   LocalAuthorityPort,
   LocalFrameAuthority,
@@ -293,7 +317,10 @@ export type {
   PendingInboxPort,
   ProjectionInvalidationPort,
   ReferenceScanResult,
+  ValidatedAcceptedHeadTransition,
 } from "./ports"
+
+export { ACCEPTED_FRAME_OUTBOX_REQUIREMENT } from "./ports"
 
 export {
   assertRemoteImmutableIngressObjectReceipt,

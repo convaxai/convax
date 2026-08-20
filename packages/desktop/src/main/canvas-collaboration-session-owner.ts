@@ -1,10 +1,13 @@
 import {
   canvasOperationReceipt,
   canvasSnapshotFromValidatedOwnerState,
+  assertEntityRef,
   constructCanvasAuthoritativeIntent,
   constructCanvasHistoryIntent,
   deriveCanvasCommandOperationId,
   discoverCanvasHistoryIntentDependencies,
+  readCanvasCertifiedProjectionIdentity,
+  readCanvasCertifiedProjectionPatch,
   projectCanvasDocument,
   projectCanvas,
   type BoundedOperationReceipt,
@@ -15,14 +18,16 @@ import {
   type CanvasSnapshot,
 } from "@convax/canvas/collaboration"
 import {
-  createCanvasNodeContentGuard,
-  matchesCanvasNodeContentGuard,
   queryCanvasNodes,
   type CanvasCommandActor,
   type CanvasApplicationCommand,
   type CanvasApplicationCommandRequest,
   type CanvasApplicationCommandResult,
   type CanvasApplicationQueryResult,
+  type CanvasCertifiedAddResourcesResult,
+  type CanvasCertifiedResourceAppendRequest,
+  type CanvasCertifiedResourceAppendResult,
+  type CanvasCertifiedResourceAppendPort,
   type CanvasCollaborationApplicationPort,
   type CanvasDocumentRef,
   type CanvasNodeQuery,
@@ -30,6 +35,7 @@ import {
 } from "@convax/canvas/application"
 import type { CanvasDocument } from "@convax/canvas"
 import {
+  encodeRestrictedJcs,
   TransientSessionUndoCoordinator,
   parseId128,
   type Id128,
@@ -47,6 +53,7 @@ import type {
   CanvasSessionInvalidationDto,
   CanvasSessionProjectionDto,
 } from "../canvas-session-contracts"
+import type { CanvasResourceProjectionDelivery } from "../desktop-protocol"
 
 export type { CanvasSessionInvalidationDto, CanvasSessionProjectionDto } from "../canvas-session-contracts"
 
@@ -96,7 +103,8 @@ export interface CreateCanvasCollaborationSessionOwnerOptions {
   readonly diagnostics?: CanvasSubmitDiagnosticsPort
 }
 
-export interface CanvasCollaborationSessionOwner extends CanvasCollaborationApplicationPort {
+export interface CanvasCollaborationSessionOwner
+  extends CanvasCollaborationApplicationPort, CanvasCertifiedResourceAppendPort {
   open(input: {
     readonly ref: CanvasDocumentRef
     readonly actor: CanvasCommandActor
@@ -112,6 +120,19 @@ export interface CanvasCollaborationSessionOwner extends CanvasCollaborationAppl
     readonly sessionId: Id128
   }): void
   queryRenderer(ref: CanvasDocumentRef, sessionId: Id128): Promise<CanvasSessionProjectionDto>
+  /**
+   * Main-only bounded resource view. It verifies the mounted lease and exact live
+   * node incarnations while cloning only the selected nodes from the accepted
+   * snapshot projection cache.
+   */
+  queryRendererResourceTargets(
+    ref: CanvasDocumentRef,
+    sessionId: Id128,
+    targets: readonly Readonly<{
+      readonly entity: CanvasEntityRef & { readonly kind: "node" }
+      readonly nodeId: string
+    }>[],
+  ): Promise<CanvasDocument>
   submitRenderer(input: {
     readonly ref: CanvasDocumentRef
     readonly sessionId: Id128
@@ -134,15 +155,8 @@ export interface CanvasCollaborationSessionOwner extends CanvasCollaborationAppl
     readonly ref: CanvasDocumentRef
     readonly rendererActorId: string
     readonly sessionId: Id128
-    readonly result: CanvasApplicationCommandResult
-  }): Promise<
-    | Readonly<{
-        status: "accepted"
-        acceptedFrameDigest: Digest
-        projection: CanvasSessionProjectionDto
-      }>
-    | Readonly<{ status: "unavailable" }>
-  >
+    readonly result: CanvasApplicationCommandResult | CanvasCertifiedAddResourcesResult
+  }): Promise<CanvasResourceProjectionDelivery>
   /** Main-only host surface; Plugin/renderer IPC must not expose it directly. */
   queryAuthoritative(ref: CanvasDocumentRef): Promise<CanvasAuthoritativeProjection>
   /** Main-only host surface; Plugin/renderer IPC must not expose it directly. */
@@ -204,6 +218,8 @@ interface CachedCanvasProjection {
     readonly nodeId: string
     readonly entity: CanvasEntityRef & { readonly kind: "node" }
   }>[]
+  readonly nodesById: ReadonlyMap<string, CanvasDocument["nodes"][number]>
+  readonly nodeEntitiesById: ReadonlyMap<string, CanvasEntityRef & { readonly kind: "node" }>
 }
 
 // One accepted owner snapshot can feed both the application result and the
@@ -240,6 +256,44 @@ export function createCanvasCollaborationSessionOwner(
     async queryRenderer(ref, sessionId) {
       const lease = requireLease(ref, sessionId)
       return exclusiveLease(lease, () => projectLease(lease))
+    },
+    async queryRendererResourceTargets(ref, sessionId, targets) {
+      const lease = requireLease(ref, sessionId)
+      return exclusiveLease(lease, async () => {
+        if (!Array.isArray(targets) || targets.length < 1 || targets.length > 4_096) {
+          throw new Error("Canvas renderer resource targets are invalid")
+        }
+        for (let index = 0; index < targets.length; index += 1) {
+          if (!Object.hasOwn(targets, index)) throw new Error("Canvas renderer resource targets are invalid")
+        }
+        const snapshot = await lease.owner.document.query(requireCanvasSnapshot)
+        const projected = cachedCanvasProjection(snapshot)
+        const selected = new Set<string>()
+        const nodes = targets.map((target) => {
+          if (target) assertEntityRef(target.entity, "node")
+          if (
+            !target ||
+            target.entity.kind !== "node" ||
+            target.nodeId !== target.entity.id ||
+            selected.has(target.nodeId)
+          ) {
+            throw new Error("Canvas renderer resource target is invalid")
+          }
+          const currentEntity = projected.nodeEntitiesById.get(target.nodeId)
+          const node = projected.nodesById.get(target.nodeId)
+          if (
+            !currentEntity ||
+            !node ||
+            currentEntity.id !== target.entity.id ||
+            currentEntity.incarnation !== target.entity.incarnation
+          ) {
+            throw new Error("Canvas renderer resource target is stale")
+          }
+          selected.add(target.nodeId)
+          return node
+        })
+        return structuredClone({ ...projected.document, edges: [], nodes })
+      })
     },
     async submitRenderer(input) {
       const lease = requireLease(input.ref, input.sessionId)
@@ -298,24 +352,60 @@ export function createCanvasCollaborationSessionOwner(
         return await exclusiveLease(lease, async () => {
           const frameDigest = input.result.acceptedFrameDigest
           if (!frameDigest) return Object.freeze({ status: "unavailable" as const })
-          const snapshot = await lease.owner.document.query(requireCanvasSnapshot)
-          const receipt = canvasOperationReceipt(
-            snapshot,
-            input.result.operationReceipt.actorId,
-            input.result.operationReceipt.operationId,
-          )
-          if (!receipt || JSON.stringify(receipt) !== JSON.stringify(input.result.operationReceipt)) {
+          if (!("projectionDelivery" in input.result) || input.result.projectionDelivery.status !== "certified") {
             return Object.freeze({ status: "unavailable" as const })
           }
+          const receipt = input.result.operationReceipt
+          const patch = input.result.projectionDelivery.patch
+          const createdNodeIds = new Set(input.result.createdNodeIds)
+          const patchNodeIds = new Set(patch.nodes.map((node) => node.ref.id))
+          if (
+            patch.canvasId !== input.ref.canvasId ||
+            !sameCanonicalValue(patch.receipt, receipt) ||
+            createdNodeIds.size !== input.result.createdNodeIds.length ||
+            patchNodeIds.size !== patch.nodes.length ||
+            patchNodeIds.size !== createdNodeIds.size ||
+            patch.nodes.some((node) => !createdNodeIds.has(node.ref.id))
+          ) return Object.freeze({ status: "unavailable" as const })
+          const runtimeNodeIds = new Set<string>()
+          let runtimePatchesValid = true
+          for (const prepared of input.result.preparedResources) {
+            if (runtimeNodeIds.has(prepared.nodeId) || !patchNodeIds.has(prepared.nodeId)) {
+              runtimePatchesValid = false
+              break
+            }
+            runtimeNodeIds.add(prepared.nodeId)
+          }
+          runtimePatchesValid &&= runtimeNodeIds.size === patchNodeIds.size
           if (!lease.deliveredOperationIds.has(receipt.operationId)) {
             rememberDeliveredOperation(lease, receipt.operationId)
             recordLocalSemanticRoot(lease.owner, lease, "saved-locally", receipt, frameDigest)
           }
-          const projection = projectSnapshot(lease.owner, lease, snapshot)
           return Object.freeze({
-            status: "accepted" as const,
+            format: "convax.canvas-resource-certified-projection-delivery" as const,
+            status: "certified" as const,
+            ref: lease.owner.ref,
+            sessionId: lease.sessionId,
             acceptedFrameDigest: frameDigest,
-            projection: mergeApplicationRuntimeResourceStates(projection, input.result, receipt),
+            canUndo: lease.undo.canUndo(),
+            canRedo: lease.undo.canRedo(),
+            patch,
+            resourceHierarchy: Object.freeze({
+              format: "convax.canvas-resource-hierarchy-delta" as const,
+              projectionIdentity: Object.freeze({
+                format: "convax.canvas-certified-projection-identity" as const,
+                canvasId: patch.canvasId,
+                ownerSchemaDigest: patch.ownerSchemaDigest,
+                stateCommitmentDigest: patch.resultStateCommitmentDigest,
+              }),
+              entries: Object.freeze([]),
+            }),
+            runtimePatches: runtimePatchesValid
+              ? Object.freeze(input.result.preparedResources.map((prepared) => Object.freeze({
+                  nodeId: prepared.nodeId,
+                  state: structuredClone(prepared.state),
+                })))
+              : Object.freeze([]),
           })
         })
       } catch {
@@ -403,11 +493,35 @@ export function createCanvasCollaborationSessionOwner(
         affectedNodeIds: result.affectedNodeIds,
         changed: true,
         createdNodeIds: result.createdNodeIds,
+        ...(result.createdResourceNodeIds === undefined
+          ? {}
+          : { createdResourceNodeIds: result.createdResourceNodeIds }),
         document: canvasDocumentFromSnapshot(result.snapshot),
         operationReceipt: result.operationReceipt,
         acceptedFrameDigest: result.acceptedFrameDigest,
         warnings: [],
       }))
+    },
+    async submitCertifiedResourceAppend(
+      request: CanvasCertifiedResourceAppendRequest,
+    ): Promise<CanvasCertifiedResourceAppendResult> {
+      const current = await trace(request.envelope.commandId, "session-acquire/open", () => documentEntry(request))
+      const result = await submitApplicationCommand(current, undefined, request)
+      const patch = readCanvasCertifiedProjectionPatch(result.snapshot, result.operationReceipt)
+      return Object.freeze({
+        affectedNodeIds: Object.freeze([...result.affectedNodeIds]),
+        changed: true,
+        createdNodeIds: Object.freeze([...result.createdNodeIds]),
+        ...(result.createdResourceNodeIds === undefined
+          ? {}
+          : { createdResourceNodeIds: Object.freeze([...result.createdResourceNodeIds]) }),
+        operationReceipt: result.operationReceipt,
+        acceptedFrameDigest: result.acceptedFrameDigest,
+        projectionDelivery: patch === null
+          ? Object.freeze({ status: "unavailable" as const })
+          : Object.freeze({ status: "certified" as const, patch }),
+        warnings: Object.freeze([...result.warnings]),
+      })
     },
     dispose() {
       if (disposed) return
@@ -500,6 +614,7 @@ export function createCanvasCollaborationSessionOwner(
       affectedNodeIds: string[]
       changed: true
       createdNodeIds: string[]
+      createdResourceNodeIds?: readonly string[]
       operationReceipt: BoundedOperationReceipt
       snapshot: CanvasSnapshot
       acceptedFrameDigest: Digest
@@ -507,7 +622,7 @@ export function createCanvasCollaborationSessionOwner(
     }>
   > {
     let beforeIds = new Set<string>()
-    let createdNodesAreReceiptNodes = false
+    let orderedCreatedNodeIds: readonly string[] | undefined
     let caller: CanvasIntentCaller | undefined
     const operationId = deriveCanvasCommandOperationId({
       ref: request,
@@ -534,12 +649,19 @@ export function createCanvasCollaborationSessionOwner(
           // resources-create has only expected-absent derived node/edge results;
           // its receipt therefore already is the exact created-entity set. Avoid
           // projecting the whole pre-commit Canvas solely to rediscover that set.
-          createdNodesAreReceiptNodes = adapted.command.kind === "resources-create"
-          if (!createdNodesAreReceiptNodes) {
+          const resourcesCreate = adapted.command.kind === "resources-create"
+          if (!resourcesCreate) {
             beforeIds = new Set(projectCanvas(snapshot).nodes.map((node) => node.ref.id))
           }
           caller = adapted.caller
-          return prepareCanvasCommand(current, snapshot, context, adapted.command, signal)
+          const prepared = await prepareCanvasCommand(current, snapshot, context, adapted.command, signal)
+          if (resourcesCreate) {
+            if (prepared.typedIntent.kind !== "canvas.resources.add") {
+              throw new Error("Canvas resource command did not construct its closed resource intent")
+            }
+            orderedCreatedNodeIds = Object.freeze(prepared.typedIntent.body.nodes.map((node) => node.nodeId))
+          }
+          return prepared
         },
       }),
     )
@@ -556,17 +678,32 @@ export function createCanvasCollaborationSessionOwner(
       result.operationReceipt,
       committed.frame.frameDigest,
     )
-    const createdNodeIds = createdNodesAreReceiptNodes
-      ? result.operationReceipt.resultEntities.filter((entity) => entity.kind === "node").map((entity) => entity.id)
+    const receiptNodeIds = result.operationReceipt.resultEntities
+      .filter((entity) => entity.kind === "node")
+      .map((entity) => entity.id)
+    const receiptNodeIdSet = new Set(receiptNodeIds)
+    const createdResourceNodeIds =
+      orderedCreatedNodeIds !== undefined &&
+      receiptNodeIds.length === receiptNodeIdSet.size &&
+      orderedCreatedNodeIds.length === receiptNodeIdSet.size &&
+      orderedCreatedNodeIds.every((nodeId) => receiptNodeIdSet.has(nodeId))
+        ? orderedCreatedNodeIds
+        : undefined
+    if (orderedCreatedNodeIds !== undefined && createdResourceNodeIds === undefined) {
+      console.error("Canvas resource receipt does not match the constructed resource ordinals")
+    }
+    const createdNodeIds = createdResourceNodeIds ?? (orderedCreatedNodeIds !== undefined
+      ? receiptNodeIds
       : canvasDocumentFromSnapshot(result.snapshot)
           .nodes.map((node) => node.id)
-          .filter((id) => !beforeIds.has(id))
+          .filter((id) => !beforeIds.has(id)))
     return Object.freeze({
       affectedNodeIds: result.operationReceipt.resultEntities
         .filter((entity) => entity.kind === "node")
         .map((entity) => entity.id),
       changed: true,
-      createdNodeIds,
+      createdNodeIds: [...createdNodeIds],
+      ...(createdResourceNodeIds === undefined ? {} : { createdResourceNodeIds }),
       operationReceipt: result.operationReceipt,
       snapshot: result.snapshot,
       acceptedFrameDigest: committed.frame.frameDigest,
@@ -759,6 +896,8 @@ export function createCanvasCollaborationSessionOwner(
     lease: CanvasRendererLease,
     snapshot: CanvasSnapshot,
   ): CanvasSessionProjectionDto {
+    const projectionIdentity = readCanvasCertifiedProjectionIdentity(snapshot)
+    if (!projectionIdentity) throw new Error("Canvas owner projection identity is unavailable")
     const projected = cachedCanvasProjection(snapshot)
     return Object.freeze({
       format: "convax.canvas-session-projection",
@@ -767,8 +906,15 @@ export function createCanvasCollaborationSessionOwner(
       document: structuredClone(projected.document),
       edgeEntities: projected.edgeEntities,
       nodeEntities: projected.nodeEntities,
-      canUndo: lease.undo.getSnapshot().undo.length > 0,
-      canRedo: lease.undo.getSnapshot().redo.length > 0,
+      projectionIdentity,
+      resourceHierarchy: Object.freeze({
+        format: "convax.canvas-resource-hierarchy-snapshot" as const,
+        projectionIdentity,
+        completeness: "unavailable" as const,
+        entries: Object.freeze([]),
+      }),
+      canUndo: lease.undo.canUndo(),
+      canRedo: lease.undo.canRedo(),
     })
   }
 
@@ -883,6 +1029,11 @@ function cachedCanvasProjection(snapshot: CanvasSnapshot): CachedCanvasProjectio
   const existing = cachedCanvasProjections.get(snapshot)
   if (existing !== undefined) return existing
   const projected = projectCanvasDocument(projectCanvas(snapshot))
+  const nodeEntities = Object.freeze(
+    [...projected.nodeEntities.entries()].map(([nodeId, entity]) =>
+      Object.freeze({ nodeId, entity: Object.freeze({ ...entity }) }),
+    ),
+  )
   const value = Object.freeze({
     document: projected.document,
     edgeEntities: Object.freeze(
@@ -890,89 +1041,18 @@ function cachedCanvasProjection(snapshot: CanvasSnapshot): CachedCanvasProjectio
         Object.freeze({ edgeId, entity: Object.freeze({ ...entity }) }),
       ),
     ),
-    nodeEntities: Object.freeze(
-      [...projected.nodeEntities.entries()].map(([nodeId, entity]) =>
-        Object.freeze({ nodeId, entity: Object.freeze({ ...entity }) }),
-      ),
-    ),
+    nodeEntities,
+    nodesById: new Map(projected.document.nodes.map((node) => [node.id, node])),
+    nodeEntitiesById: new Map(nodeEntities.map(({ nodeId, entity }) => [nodeId, entity])),
   })
   cachedCanvasProjections.set(snapshot, value)
   return value
 }
 
-/**
- * Restores Main-prepared runtime presentation into the first post-commit
- * projection without allowing that transient result to replace Canvas-owned
- * identity, geometry, or durable node content.
- */
-function mergeApplicationRuntimeResourceStates(
-  projection: CanvasSessionProjectionDto,
-  result: CanvasApplicationCommandResult,
-  receipt: BoundedOperationReceipt,
-): CanvasSessionProjectionDto {
-  if (result.document.id !== projection.document.id) return projection
-
-  const resultNodes = uniqueBy(result.document.nodes, (node) => node.id)
-  const projectedEntities = uniqueBy(projection.nodeEntities, (entry) => entry.nodeId)
-  const receiptEntities = uniqueBy(
-    receipt.resultEntities.filter(
-      (entity): entity is CanvasEntityRef & { readonly kind: "node" } => entity.kind === "node",
-    ),
-    (entity) => entity.id,
-  )
-  let changed = false
-  const nodes = projection.document.nodes.map((node) => {
-    const prepared = resultNodes.get(node.id)
-    const projectedEntity = projectedEntities.get(node.id)?.entity
-    const receiptEntity = receiptEntities.get(node.id)
-    if (
-      prepared === undefined ||
-      projectedEntity === undefined ||
-      receiptEntity === undefined ||
-      !sameCanvasEntity(projectedEntity, receiptEntity) ||
-      !isRuntimeResourceKind(node.data.kind) ||
-      !isRuntimeResourceKind(prepared.data.kind) ||
-      prepared.data.resourceState === undefined ||
-      !matchesCanvasNodeContentGuard(node, createCanvasNodeContentGuard(prepared))
-    ) {
-      return node
-    }
-    changed = true
-    return {
-      ...node,
-      data: { ...node.data, resourceState: structuredClone(prepared.data.resourceState) },
-    }
-  })
-  if (!changed) return projection
-  return Object.freeze({
-    ...projection,
-    document: { ...projection.document, nodes },
-  })
-}
-
-function uniqueBy<T>(values: readonly T[], keyOf: (value: T) => string): ReadonlyMap<string, T> {
-  const unique = new Map<string, T>()
-  const duplicates = new Set<string>()
-  for (const value of values) {
-    const key = keyOf(value)
-    if (unique.has(key)) {
-      unique.delete(key)
-      duplicates.add(key)
-    } else if (!duplicates.has(key)) {
-      unique.set(key, value)
-    }
-  }
-  return unique
-}
-
-function sameCanvasEntity(left: CanvasEntityRef, right: CanvasEntityRef): boolean {
-  return left.kind === right.kind && left.id === right.id && left.incarnation === right.incarnation
-}
-
-function isRuntimeResourceKind(kind: string): boolean {
-  return (
-    kind === "text" || kind === "image" || kind === "video" || kind === "audio" || kind === "file" || kind === "folder"
-  )
+function sameCanonicalValue(left: unknown, right: unknown): boolean {
+  const leftBytes = encodeRestrictedJcs(left)
+  const rightBytes = encodeRestrictedJcs(right)
+  return leftBytes.byteLength === rightBytes.byteLength && leftBytes.every((byte, index) => byte === rightBytes[index])
 }
 
 function normalizeActor(actor: CanvasCommandActor): CanvasCommandActor {

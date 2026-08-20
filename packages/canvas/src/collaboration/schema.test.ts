@@ -69,27 +69,21 @@ describe("CanvasYDoc v2 closed canonical schema", () => {
     expect(validateCanvasYDoc(reconstructed)).toEqual(validateCanvasYDoc(source))
   })
 
-  test("reproduces the frozen current digest ledger and vectors A through E", () => {
-    expect(CANVAS_DIGEST_DOMAINS).toHaveLength(29)
+  test("reproduces the frozen current digest ledger and remaining current vectors", () => {
+    expect(CANVAS_DIGEST_DOMAINS).toHaveLength(28)
     expect(CANVAS_DIGEST_DOMAINS).toContain("convax.canvas-derived-id")
     expect([...CANVAS_DIGEST_DOMAINS].sort()).toEqual([...CANVAS_DIGEST_DOMAINS])
     expect(
       canvasOwnerCanonicalizerDigest(
         parseDigest("e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"),
       ),
-    ).toBe(parseDigest("5779d138e8cb93127fee8fbf7c0d7007486a5f3df36585451762a9c8696ebfaa"))
+    ).toBe(parseDigest("12a931a5714f459e2080e59fb21403c2ac786e783003f2de11f513073d9a43aa"))
     expect(
       canvasDigest("convax.canvas-effective-data", {
         format: "convax.canvas-effective-data",
         data: { format: "convax.canvas-node-data", kind: "agent", title: "A", instructions: null },
       }),
     ).toBe(parseDigest("7aeb046a6803a1f4d290d70ba0e9fe5327c2f5b8007c29b3b4e94251e65a8d36"))
-    expect(
-      canvasDigest("convax.canvas-obstacle-projection", {
-        format: "convax.canvas-obstacle-projection",
-        obstacles: [],
-      }),
-    ).toBe(parseDigest("8d0219bc5fc511ef992295fa592d683451130288a0bf3ea9dd5084c6dc3be910"))
     expect(
       canvasDigest("convax.canvas-metadata-effective", {
         format: "convax.canvas-metadata-effective",

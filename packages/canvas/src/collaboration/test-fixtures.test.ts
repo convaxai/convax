@@ -1,4 +1,5 @@
 import {
+  currentProtocolDescriptor,
   encodeBase64url,
   parseActorId,
   parseCanvasId,
@@ -16,7 +17,6 @@ import {
   dataRegisterDigest,
   effectiveDataDigest,
   nodeIdentityDigest,
-  obstacleProjectionDigest,
 } from "./projection"
 import { applyCanvasCandidateIntent } from "./reducer"
 import type {
@@ -30,8 +30,13 @@ import type {
 import { derivedNodeRef } from "./validation"
 import { cloneCanvasYDoc, createCanvasYDoc, validateCanvasYDoc } from "./ydoc"
 
-export const SCHEMA_DIGEST = parseDigest("09d5f8748d91474de45eb3a88fe6d3054adb79e8a44dd311c9024ab95b27250a")
-export const PROTOCOL_DIGEST = parseDigest("8295f918e8f7b8297c080db03672fc410542280f639d9b40a8e324e560f07ae9")
+const currentDescriptor = currentProtocolDescriptor()
+const currentCanvasSchemaArtifact = currentDescriptor.artifacts.find(
+  (artifact) => artifact.name === "canvas-schema" && artifact.format === "convax.canvas-protocol-schema",
+)
+if (!currentCanvasSchemaArtifact) throw new TypeError("Current Canvas schema artifact is unavailable")
+export const SCHEMA_DIGEST = parseDigest(currentCanvasSchemaArtifact.digest)
+export const PROTOCOL_DIGEST = parseDigest(currentDescriptor.protocolDigest)
 export const VALIDATION_ARTIFACT_SET_DIGEST = parseDigest(
   "163cab7b5ca1bd13bb4f96d9b41b4e6e884e29619a4e1fc964ec72d630950db2",
 )
@@ -158,13 +163,12 @@ export function createPendingFile(
   title = `file-${operationContext.operationId}`,
 ): CanvasEntityRef & { kind: "node" } {
   const node = derivedNodeRef(operationContext, U0)
-  const base = validateCanvasYDoc(document)
   applyOk(document, operationContext, {
     format: "convax.typed-intent",
     kind: "canvas.resources.pending.create",
     guard: { existingEndpoints: [], derivedNodes: [{ ordinal: U0, node, expectedAbsent: true }], derivedEdges: [] },
     body: {
-      placement: { anchor: { x: 0, y: 0 }, gap: 24, obstacleProjectionDigest: obstacleProjectionDigest(base) },
+      placement: { anchor: { x: 0, y: 0 }, gap: 24 },
       nodes: [
         {
           ordinal: U0,

@@ -9,6 +9,7 @@ import type {
   OwnerHistoryMaterializationDefinition,
   OwnerProcessValueFactory,
   OwnerIntentValidationContext,
+  OwnerStateCommitment,
   SelectedDocumentOwnerArtifactDefinition,
   CurrentProtocolAuthority,
 } from "@convax/collaboration"
@@ -21,7 +22,7 @@ import {
 import type * as Y from "yjs"
 import type { CanvasNodeGeometryUpdate } from "../commands"
 import { parseCanvasDocument } from "../document"
-import type { CanvasDocument } from "../types"
+import type { CanvasDocument, CanvasEdge, CanvasNode } from "../types"
 import { createCanvasExternalFactContext, discoverCanvasIntentDependencies } from "./external-facts"
 import { constructCanvasHistoryIntent, discoverCanvasHistoryIntentDependencies } from "./command-construction"
 import { assertCanvasTypedIntent, decodeCanvasTypedIntent } from "./intent-validation"
@@ -47,6 +48,20 @@ import type { CanvasOptimisticOverlaySnapshot } from "../optimistic-overlay"
 import { canvasOwnerCanonicalizerDescriptor, operationKey } from "./validation"
 import { CanvasOwnerStateCache } from "./owner-state-cache"
 import { validateCanvasYDoc } from "./ydoc"
+import { isSealedCanvasSnapshotMap } from "./persistent-append-map"
+import { canvasStateCommitmentMutations, canvasStateCommitmentSource } from "./state-commitment"
+import {
+  bindCanvasCertifiedProjectionPatch,
+  bindCanvasCertifiedProjectionRoot,
+} from "./projection-patch"
+import type {
+  CanvasRendererProjectionChange,
+  CanvasRendererProjectionPatchChange,
+} from "./renderer-projection-store"
+import type {
+  CanvasRendererViewportProjection,
+  CanvasRendererViewportQuery,
+} from "./renderer-viewport-index"
 
 interface CanvasOwnerResultValue {
   readonly ownerOpaqueResult: CanvasIntentApplyResult
@@ -146,6 +161,14 @@ function createCanvasProtocolDefinition(
   const stateCache = canvasOwnerStateCache
   const canonicalizerDescriptor = canvasOwnerCanonicalizerDescriptor(schemaDigest)
   const canonicalizerDigest = ownerCanonicalizerDescriptorDigest(canonicalizerDescriptor)
+  const commitmentsBySnapshot = new WeakMap<CanvasSnapshot, OwnerStateCommitment>()
+  const buildCommitment = (snapshot: CanvasSnapshot) => {
+    const commitment = processValues.stateCommitment.build(
+      canvasStateCommitmentSource(snapshot, canonicalizerDescriptor.stateCommitment),
+    )
+    commitmentsBySnapshot.set(snapshot, commitment)
+    return commitment
+  }
   return Object.freeze({
     owner: "canvas",
     schemaDigest,
@@ -164,7 +187,14 @@ function createCanvasProtocolDefinition(
         const state = stateCache.validate(document)
         if (stateCache.traversalCounts().fullValidation !== before)
           recordCanvasOwnerDiagnostic(diagnostics, "full-validation")
-        return processValues.wrapValidatedState(state)
+        const commitment = commitmentsBySnapshot.get(state) ?? buildCommitment(state)
+        const bound = processValues.bindStateCommitment(document, processValues.wrapValidatedState(state), commitment)
+        bindCanvasCertifiedProjectionRoot({
+          snapshot: state,
+          ownerSchemaDigest: schemaDigest,
+          stateCommitmentDigest: processValues.stateCommitment.digest(commitment),
+        })
+        return bound
       } catch {
         return "rejected"
       }
@@ -206,24 +236,48 @@ function createCanvasProtocolDefinition(
         const baseSnapshot = canvasSnapshotFromValidatedOwnerState(_base)
         if (baseSnapshot === null) return "rejected"
         const fast = consumeCanvasDuplicateValidatedPost(candidate, baseSnapshot, value.ownerOpaqueResult)
+        if (fast.status === "stale-candidate") return "rejected"
         const before = stateCache.traversalCounts().fullValidation
-        const snapshot = fast?.snapshot ?? stateCache.validate(candidate)
+        const snapshot = fast.status === "accepted" ? fast.snapshot : stateCache.validate(candidate)
         if (stateCache.traversalCounts().fullValidation !== before)
           recordCanvasOwnerDiagnostic(diagnostics, "full-validation")
-        stateCache.installValidatedSnapshot(
+        stateCache.installValidatedSnapshot(candidate, snapshot)
+        const baseCommitment = commitmentsBySnapshot.get(baseSnapshot) ?? buildCommitment(baseSnapshot)
+        const commitment = fast.status === "accepted"
+          ? processValues.stateCommitment.apply(
+              baseCommitment,
+              canvasStateCommitmentMutations(snapshot, fast.changed),
+            )
+          : buildCommitment(snapshot)
+        commitmentsBySnapshot.set(snapshot, commitment)
+        const bound = processValues.bindStateCommitment(
           candidate,
-          snapshot,
-          fast
-            ? {
-                base: baseSnapshot,
-                changed: fast.changed,
-                issuer: processValues.canonicalJcs,
-              }
-            : undefined,
+          processValues.wrapValidatedState(snapshot),
+          commitment,
         )
-        const state = processValues.wrapValidatedState(snapshot)
-        const evidence = stateCache.canonicalEvidence(candidate)
-        return evidence ? processValues.bindCanonicalJcsEvidence(candidate, state, evidence) : state
+        bindCanvasCertifiedProjectionRoot({
+          snapshot: baseSnapshot,
+          ownerSchemaDigest: schemaDigest,
+          stateCommitmentDigest: processValues.stateCommitment.digest(baseCommitment),
+        })
+        bindCanvasCertifiedProjectionRoot({
+          snapshot,
+          ownerSchemaDigest: schemaDigest,
+          stateCommitmentDigest: processValues.stateCommitment.digest(commitment),
+        })
+        if (
+          fast.status === "accepted" &&
+          (value.ownerOpaqueResult.receipt.intentKind === "canvas.resources.add" ||
+            value.ownerOpaqueResult.receipt.intentKind === "canvas.resources.pending.create")
+        ) {
+          bindCanvasCertifiedProjectionPatch({
+            base: baseSnapshot,
+            result: snapshot,
+            changed: fast.changed,
+            receipt: value.ownerOpaqueResult.receipt,
+          })
+        }
+        return bound
       } catch {
         return "rejected"
       }
@@ -323,11 +377,15 @@ export function canvasSnapshotFromValidatedOwnerState(
   if (
     typeof value !== "object" ||
     value === null ||
-    !(value as { nodes?: unknown }).nodes ||
-    !((value as { nodes: unknown }).nodes instanceof Map) ||
-    !((value as { edges?: unknown }).edges instanceof Map) ||
-    !((value as { semanticHistory?: unknown }).semanticHistory instanceof Map) ||
-    !((value as { operations?: unknown }).operations instanceof Map)
+    !isSealedCanvasSnapshotMap((value as { nodes?: unknown }).nodes) ||
+    !isSealedCanvasSnapshotMap((value as { edges?: unknown }).edges) ||
+    !isSealedCanvasSnapshotMap((value as { containments?: unknown }).containments) ||
+    !isSealedCanvasSnapshotMap((value as { generationBegins?: unknown }).generationBegins) ||
+    !isSealedCanvasSnapshotMap((value as { generationTerminals?: unknown }).generationTerminals) ||
+    !isSealedCanvasSnapshotMap((value as { generationDismissals?: unknown }).generationDismissals) ||
+    !isSealedCanvasSnapshotMap((value as { generationRecoveryFailures?: unknown }).generationRecoveryFailures) ||
+    !isSealedCanvasSnapshotMap((value as { semanticHistory?: unknown }).semanticHistory) ||
+    !isSealedCanvasSnapshotMap((value as { operations?: unknown }).operations)
   )
     return null
   return value as CanvasSnapshot
@@ -354,9 +412,22 @@ function canvasOwnerResultValue(result: OwnerApplyResult<"canvas">): CanvasOwner
 
 export interface CanvasRendererProjectionStore {
   getProjection(): CanvasDocument
+  /** Optional exact keyed reads supplied by the Canvas certified store. */
+  resolveEdge?(edgeId: string): CanvasEdge | undefined
   resolveEdgeEntity?(edgeId: string): (CanvasEntityRef & { readonly kind: "edge" }) | undefined
+  resolveNode?(nodeId: string): CanvasNode | undefined
   resolveNodeEntity(nodeId: string): (CanvasEntityRef & { readonly kind: "node" }) | undefined
+  /** Optional bounded mounted-view query supplied by the certified session store. */
+  queryViewport?(input: CanvasRendererViewportQuery): CanvasRendererViewportProjection
+  /** Optional exact host-neutral Project-resource hierarchy query. */
+  queryResourceHierarchy?(
+    input: import("./renderer-resource-hierarchy-index").CanvasRendererResourceHierarchyKey,
+  ): import("./renderer-resource-hierarchy-index").CanvasRendererResourceHierarchyQueryResult
+  /** Optional session-instance proof used by bounded visual history. */
+  ownsProjectionChange?(change: CanvasRendererProjectionPatchChange): boolean
   subscribe(listener: () => void): () => void
+  /** Optional hot channel. Patch listeners must never call getProjection. */
+  subscribeProjectionChanges?(listener: (change: CanvasRendererProjectionChange) => void): () => void
 }
 
 export type CanvasRendererCommand = Readonly<{

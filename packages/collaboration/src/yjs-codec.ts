@@ -10,6 +10,13 @@ export const LOCAL_CANDIDATE_ORIGIN = Object.freeze({ format: "convax.local-cand
 export const ACCEPTED_FRAME_ORIGIN = Object.freeze({ format: "convax.accepted-frame-origin" })
 export const RECONSTRUCTION_ORIGIN = Object.freeze({ format: "convax.reconstruction-origin" })
 
+let candidateDeltaFullDocumentEncodes = 0
+
+/** Package-private structural evidence; never enters protocol values. */
+export function testOnlyYjsCodecWorkCounts() {
+  return Object.freeze({ candidateDeltaFullDocumentEncodes })
+}
+
 export interface YjsDocumentFactory {
   createDocument(): Y.Doc
 }
@@ -48,6 +55,7 @@ export function encodeFullUpdate(document: Y.Doc, maximum = 32 * 1024 * 1024): U
 
 export function encodeCandidateDelta(candidate: Y.Doc, baseStateVector: StateVector): Uint8Array {
   requireDoc(candidate)
+  candidateDeltaFullDocumentEncodes += 1
   const update = Y.encodeStateAsUpdate(candidate, parseStateVector(baseStateVector))
   assertByteLength(update, 0, KERNEL_LIMITS.yjsUpdateBytes, "Yjs update-v1 delta")
   return cloneBytes(update)
@@ -107,16 +115,42 @@ export function validateCanonicalDelta(
 ): { readonly document: Y.Doc; readonly postStateVector: StateVector } {
   assertUpdateAuthoredByReplica(update, replicaId)
   const document = cloneExactBaseDocument(factory, fullBaseUpdate, baseStateVector)
+  let transactions = 0
+  let updates = 0
+  let exactOrigins = true
+  let observedUpdate: Uint8Array | undefined
+  const beforeTransaction = (transaction: Y.Transaction) => {
+    transactions += 1
+    if (transaction.origin !== ACCEPTED_FRAME_ORIGIN) exactOrigins = false
+  }
+  const updateObserver = (bytes: Uint8Array, origin: unknown) => {
+    updates += 1
+    observedUpdate = updates === 1 ? cloneBytes(bytes, "validated exact Yjs update") : undefined
+    if (origin !== ACCEPTED_FRAME_ORIGIN) exactOrigins = false
+  }
+  document.on("beforeTransaction", beforeTransaction)
+  document.on("update", updateObserver)
   try {
     applyYjsUpdate(document, update, ACCEPTED_FRAME_ORIGIN)
-    const reencoded = Y.encodeStateAsUpdate(document, baseStateVector)
-    if (!sameBytes(reencoded, update)) {
-      throw new CollaborationCodecError("unsupported-yjs-codec", "Yjs update is not byte-identical after exact-base isolated apply")
+    if (
+      transactions !== 1 ||
+      updates !== 1 ||
+      !exactOrigins ||
+      observedUpdate === undefined ||
+      !sameBytes(observedUpdate, update)
+    ) {
+      throw new CollaborationCodecError(
+        "unsupported-yjs-codec",
+        "Yjs update does not reproduce one byte-identical exact-base apply event",
+      )
     }
     return Object.freeze({ document, postStateVector: encodeStateVector(document) })
   } catch (error) {
     document.destroy()
     throw error
+  } finally {
+    document.off("beforeTransaction", beforeTransaction)
+    document.off("update", updateObserver)
   }
 }
 

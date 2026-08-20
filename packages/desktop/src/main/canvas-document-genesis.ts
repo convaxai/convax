@@ -8,6 +8,7 @@ import {
   type CanvasGenesisProofCarrierVerifier,
 } from "@convax/canvas/collaboration"
 import {
+  acceptedHeadMaterializedStateDigest,
   assertDocumentOwnerRuntime,
   parseDigest,
   parseDocumentScope,
@@ -139,9 +140,23 @@ export function createCanvasDocumentGenesisVerifierPort(input: {
       assertNotAborted(request.signal)
       if (built.status !== "built") return Object.freeze({ status: built.status })
       if (
-        built.validatedIdentity.identity.projectIndexRouteDependencyFrameDigest !== predecessorFrameDigest ||
+        built.validatedIdentity.identity.projectIndexRouteDependency.kind !== "frame" ||
+        built.validatedIdentity.identity.projectIndexRouteDependency.digest !== predecessorFrameDigest ||
         built.validatedIdentity.checkpointObjectDigest !== built.checkpointObjectDigest
       ) return Object.freeze({ status: "rejected" })
+      const acceptedBase = Object.freeze({
+        ...built.acceptedBase,
+        scope,
+        fullUpdate: new Uint8Array(built.acceptedBase.fullUpdate),
+        stateVector: new Uint8Array(built.acceptedBase.stateVector) as typeof built.acceptedBase.stateVector,
+      })
+      const materializationDigest = acceptedHeadMaterializedStateDigest({
+        ...acceptedBase,
+        headDigest: built.checkpointObjectDigest,
+        // The materialized-state digest does not consume itself. Supplying the
+        // checkpoint digest keeps this complete view closed while deriving it.
+        materializationDigest: built.checkpointObjectDigest,
+      })
       return Object.freeze({
         status: "verified",
         candidate: Object.freeze({
@@ -149,12 +164,7 @@ export function createCanvasDocumentGenesisVerifierPort(input: {
           checkpointObjectDigest: built.checkpointObjectDigest,
           checkpointExactBytes: new Uint8Array(built.checkpointExactBytes),
           proofCarrierExactBytes: new Uint8Array(built.proofCarrierExactBytes),
-          acceptedBase: Object.freeze({
-            ...built.acceptedBase,
-            scope,
-            fullUpdate: new Uint8Array(built.acceptedBase.fullUpdate),
-            stateVector: new Uint8Array(built.acceptedBase.stateVector) as typeof built.acceptedBase.stateVector,
-          }),
+          acceptedBase: Object.freeze({ ...acceptedBase, materializationDigest }),
         }),
       })
     },

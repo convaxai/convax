@@ -69,7 +69,7 @@ describe("local Project reset authority", () => {
     expect(records.manifest.oldProjectEpoch).toBeNull()
     expect(records.manifest.newProjectEpoch).toBe(native.projectIndexScope.projectEpoch)
     expect(records.manifest.newProjectIndexShardEpoch).toBe(native.projectIndexScope.shardEpoch)
-    expect(records.manifest.emptyProjectIndexCanonicalStateDigest).toBe(native.emptyProjectIndexCanonicalStateDigest)
+    expect(records.manifest.emptyProjectIndexCanonicalStateDigest).toBe(native.projectIndexGenesisCanonicalStateDigest)
     expect(records.confirmation.core.confirmationPrincipal.kind).toBe("local-project-owner")
     expect(records.confirmation.core.ordinaryProjectFilesPreserved).toBeTrue()
     const archive = await onlyMatchingEntry(fixture.projectRoot, ".convax-archive-")

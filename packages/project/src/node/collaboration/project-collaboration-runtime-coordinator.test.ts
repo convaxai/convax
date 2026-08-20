@@ -50,6 +50,79 @@ describe("NodeProjectCollaborationRuntimeCoordinator", () => {
     await coordinator.dispose()
   })
 
+  test("reuses the open runtime identity without re-resolving root or actor", async () => {
+    const projectRoot = await createProjectRoot()
+    let rootReads = 0
+    let identityReads = 0
+    const releasedIdentities: object[] = []
+    const coordinator = new NodeProjectCollaborationRuntimeCoordinator({
+      identity: {
+        async resolveLocalActorId() {
+          identityReads += 1
+          return localActorId
+        },
+        releaseRuntimeIdentity({ runtimeIdentity }) {
+          releasedIdentities.push(runtimeIdentity)
+        },
+      },
+      materializer: inertMaterializer(),
+      projects: {
+        async resolveProjectRoot() {
+          rootReads += 1
+          return projectRoot
+        },
+      },
+      quiescence: { async quiesceProject() {} },
+    })
+
+    const projectIndex = await coordinator.acquire("project-a")
+    const canvas = await coordinator.acquire("project-a")
+    expect(projectIndex.runtimeIdentity).toBe(canvas.runtimeIdentity)
+    expect(rootReads).toBe(1)
+    expect(identityReads).toBe(1)
+
+    projectIndex.release()
+    expect(() => projectIndex.assertLive()).toThrow("no longer live")
+    expect(() => canvas.assertLive()).not.toThrow()
+    expect(releasedIdentities).toEqual([])
+    canvas.release()
+    expect(releasedIdentities).toEqual([projectIndex.runtimeIdentity])
+
+    const reopened = await coordinator.acquire("project-a")
+    expect(reopened.runtimeIdentity).not.toBe(projectIndex.runtimeIdentity)
+    expect(rootReads).toBe(2)
+    expect(identityReads).toBe(2)
+    reopened.release()
+    await coordinator.dispose()
+  })
+
+  test("revokes the runtime identity even when persistence disposal fails", async () => {
+    const projectRoot = await createProjectRoot()
+    const releasedIdentities: object[] = []
+    const coordinator = new NodeProjectCollaborationRuntimeCoordinator({
+      identity: {
+        async resolveLocalActorId() { return localActorId },
+        releaseRuntimeIdentity({ runtimeIdentity }) { releasedIdentities.push(runtimeIdentity) },
+      },
+      materializer: inertMaterializer(),
+      projects: { async resolveProjectRoot() { return projectRoot } },
+      quiescence: { async quiesceProject() {} },
+      writerFactory: {
+        async open() {
+          return {
+            dispose() { throw new Error("dispose-fault") },
+          } as unknown as ProjectCollaborationRuntimeLease["persistence"]
+        },
+      },
+    })
+    const lease = await coordinator.acquire("project-a")
+
+    expect(() => lease.release()).toThrow("dispose-fault")
+    expect(releasedIdentities).toEqual([lease.runtimeIdentity])
+    expect(() => lease.assertLive()).toThrow("no longer live")
+    await coordinator.dispose()
+  })
+
   test("opens two Projects with independently resolved local actors", async () => {
     const firstRoot = await createProjectRoot()
     const secondRoot = await createProjectRoot()
@@ -218,6 +291,7 @@ describe("NodeProjectCollaborationRuntimeCoordinator", () => {
     expect(() => coordinator.acquire("project-a")).toThrow(
       expect.objectContaining({ code: "runtime-disposed" }),
     )
+    expect(() => lease.assertLive()).toThrow(expect.objectContaining({ code: "runtime-disposed" }))
     lease.release()
   })
 })

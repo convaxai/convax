@@ -9,7 +9,7 @@ export const CAUSAL_EDIT_PREFIX_BYTES = 88 as const
  * by the current protocol descriptor and must equal this anchor.
  */
 export const CURRENT_PROTOCOL_IDENTITIES = Object.freeze({
-  protocolDigest: "8295f918e8f7b8297c080db03672fc410542280f639d9b40a8e324e560f07ae9",
+  protocolDigest: "85df6e09686b40e4ec470a61183f436dcadfe5b6ca5b12456e00f5e581d24745",
   uriProtocolDigest: "9030aecd6902888e5e91532fcc2ec3f1a377e79ae59c092ee80fbbf1a01fac38",
   limitsDigest: "88c018e5289f8b9a359f6ae171aed00885d5fa0913f4a1c36274b35e4cee12f7",
   channelContractDigest: "0fa34e8d93f26e585e6d9baa0ecf0c09a38494d03247b91843e2bca0e93df242",
@@ -17,22 +17,22 @@ export const CURRENT_PROTOCOL_IDENTITIES = Object.freeze({
 
 export const PROTOCOL_SCHEMA_ARTIFACTS = Object.freeze([
   Object.freeze({
-    artifactDigest: "09d5f8748d91474de45eb3a88fe6d3054adb79e8a44dd311c9024ab95b27250a",
+    artifactDigest: "bbe6517167713bbcf8ccd33f35272009c0833f74f4a3cf09f4e5b66fd7efd9e7",
     format: "convax.canvas-protocol-schema",
     name: "canvas-schema",
   }),
   Object.freeze({
-    artifactDigest: "1449c229278d0e30ddb800751c025ec546e8e0aea3c1e99215da411e3500a7dc",
+    artifactDigest: "5773bc9eadbd93bace3820cc8000f0b4eb3cc54f5ebed8b0cef77b327cba457c",
     format: "convax.collaboration-kernel-protocol-schema",
     name: "collaboration-kernel",
   }),
   Object.freeze({
-    artifactDigest: "ac6605ee974a47be65a02c478e854971cbd54146db147cf943391a0f4f557e45",
+    artifactDigest: "482313db5564bedd00619f5bc3b661158762053e45ac5111b9d98c17ee7f70ec",
     format: "convax.control-plane-protocol-schema",
     name: "control-plane",
   }),
   Object.freeze({
-    artifactDigest: "99ebca8cc048f6cf919d55a9829091e2450e59a10b87b5410d9b0243459be37c",
+    artifactDigest: "1d78937e092197b7adfc693feaae795f53ac3c2209f3ed2cc61992c959ce48a3",
     format: "convax.project-persistence-protocol-schema",
     name: "project-persistence",
   }),
@@ -52,7 +52,7 @@ export const YJS_WIRE_CODEC = Object.freeze({
   package: "yjs",
   packageIntegrity: "sha512-Eq+5BRfbeGyqGVrTJL3bEcr8gKkxPuyuoHmAwpk52fDb8kOVMrfVSTRPd6yiGgX5Fskb96qCRjzjbRjrL4YEnw==",
   stateVectorCodec: "Y.encodeStateVector",
-  updateCodec: "Y.encodeStateAsUpdate",
+  updateCodec: "Y.Doc.update-event",
   updateVersion: "v1",
   version: "13.6.31",
 } as const)
@@ -62,6 +62,8 @@ export const YJS_WIRE_CODEC = Object.freeze({
  * package-owned source data and participates in the current protocol digest.
  */
 export const PROTOCOL_DIGEST_DOMAIN_REGISTRY = Object.freeze([
+  "convax.accepted-head-durable-delta-metadata",
+  "convax.accepted-head-metadata-identity",
   "convax.active-peer-directory-core",
   "convax.actual-write-evidence",
   "convax.authorization-mutation-core",
@@ -130,6 +132,12 @@ export const PROTOCOL_DIGEST_DOMAIN_REGISTRY = Object.freeze([
   "convax.native-object-store-key",
   "convax.owner-actual-write-evidence",
   "convax.owner-canonicalizer-descriptor",
+  "convax.owner-state-commitment-collection-leaf",
+  "convax.owner-state-commitment-collection-root",
+  "convax.owner-state-commitment-descriptor",
+  "convax.owner-state-commitment-radix-node",
+  "convax.owner-state-commitment-root",
+  "convax.owner-state-commitment-scalar-leaf",
   "convax.peer-channel-contract",
   "convax.peer-channel-open-core",
   "convax.peer-freshness-ticket-core",
@@ -224,6 +232,8 @@ export const KERNEL_LIMITS = Object.freeze({
 } as const)
 
 export const KERNEL_DIGEST_DOMAINS = Object.freeze({
+  acceptedHeadDurableDeltaMetadata: "convax.accepted-head-durable-delta-metadata",
+  acceptedHeadMetadataIdentity: "convax.accepted-head-metadata-identity",
   actualWriteEvidence: "convax.actual-write-evidence",
   canonicalState: "convax.canonical-state",
   causalContext: "convax.causal-context",
@@ -240,6 +250,12 @@ export const KERNEL_DIGEST_DOMAINS = Object.freeze({
   localOwnerEditAuthorizationCore: "convax.local-owner-edit-authorization-core",
   ownerActualWriteEvidence: "convax.owner-actual-write-evidence",
   ownerCanonicalizerDescriptor: "convax.owner-canonicalizer-descriptor",
+  ownerStateCommitmentCollectionLeaf: "convax.owner-state-commitment-collection-leaf",
+  ownerStateCommitmentCollectionRoot: "convax.owner-state-commitment-collection-root",
+  ownerStateCommitmentDescriptor: "convax.owner-state-commitment-descriptor",
+  ownerStateCommitmentRadixNode: "convax.owner-state-commitment-radix-node",
+  ownerStateCommitmentRoot: "convax.owner-state-commitment-root",
+  ownerStateCommitmentScalarLeaf: "convax.owner-state-commitment-scalar-leaf",
   protocolSchemaArtifact: "convax.protocol-schema-artifact",
   protocolSchemaBundleCore: "convax.protocol-schema-bundle-core",
   prunableCheckpointSetCertificateCore: "convax.prunable-checkpoint-set-certificate-core",

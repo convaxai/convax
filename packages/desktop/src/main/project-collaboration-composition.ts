@@ -14,6 +14,12 @@ import type {
   CanvasCollaborationSessionOwner,
   CanvasSessionInvalidationDto,
 } from "./canvas-collaboration-session-owner"
+import type { CanvasSessionProjectionDto } from "../canvas-session-contracts"
+import type { CanvasResourceProjectionDelivery } from "../desktop-protocol"
+import {
+  projectCanvasResourceHierarchyDelta,
+  projectCanvasResourceHierarchySnapshot,
+} from "./canvas-resource-hierarchy-projection"
 import type { MainProjectIndexRuntimeRegistry } from "./main-project-index-runtime-registry"
 import type { MainProjectCanvasRouteRuntimeRegistry } from "./project-canvas-route-runtime-registry"
 
@@ -42,6 +48,7 @@ export interface MainProjectCollaborationComposition {
 interface BoundSession {
   readonly ref: CanvasDocumentRef
   readonly owner: CanvasCollaborationSessionOwner
+  readonly runtime: MainProjectCollaborationPorts
 }
 
 /**
@@ -77,6 +84,13 @@ export function createMainProjectCollaborationComposition(input: Readonly<{
     async queryCurrentResources(request) {
       return (await runtimeFor(request.projectId)).projectIndexes.queryCurrentResources(request)
     },
+    async queryCurrentResourcesExact(request) {
+      const projection = (await runtimeFor(request.projectId)).projectIndexes
+      if (!projection.queryCurrentResourcesExact) {
+        throw new Error("ProjectIndex exact current-resource projection is unavailable")
+      }
+      return projection.queryCurrentResourcesExact(request)
+    },
     async createDirectory(request) {
       return (await runtimeFor(request.projectId)).projectIndexes.createDirectory(request)
     },
@@ -95,6 +109,13 @@ export function createMainProjectCollaborationComposition(input: Readonly<{
     async queryFileMaterializationPlan(request) {
       return (await runtimeFor(request.projectId)).projectIndexes.queryFileMaterializationPlan(request)
     },
+    async queryFileMaterializationEntries(request) {
+      const projection = (await runtimeFor(request.projectId)).projectIndexes
+      if (!projection.queryFileMaterializationEntries) {
+        throw new Error("ProjectIndex exact file materialization projection is unavailable")
+      }
+      return projection.queryFileMaterializationEntries(request)
+    },
   }
   Object.freeze(projectIndexes)
 
@@ -102,13 +123,17 @@ export function createMainProjectCollaborationComposition(input: Readonly<{
     async open(request) {
       const runtime = await runtimeFor(parseProjectId(request.ref.scopeId))
       subscribeOwner(runtime.canvasSessions)
-      const projection = await runtime.canvasSessions.open(request)
+      const projection = await decorateProjection(runtime, await runtime.canvasSessions.open(request))
       const sessionId = parseId128(projection.sessionId)
       if (sessions.has(sessionId)) {
         runtime.canvasSessions.close({ ref: request.ref, sessionId })
         throw new Error("Canvas owner reused a live session identity")
       }
-      sessions.set(sessionId, Object.freeze({ ref: normalizeRef(request.ref), owner: runtime.canvasSessions }))
+      sessions.set(sessionId, Object.freeze({
+        ref: normalizeRef(request.ref),
+        owner: runtime.canvasSessions,
+        runtime,
+      }))
       return projection
     },
     close(request) {
@@ -119,23 +144,55 @@ export function createMainProjectCollaborationComposition(input: Readonly<{
     requireRendererLease(request) {
       return requireSession(request.ref, request.sessionId).owner.requireRendererLease(request)
     },
-    queryRenderer(ref, sessionId) {
-      return requireSession(ref, sessionId).owner.queryRenderer(ref, sessionId)
+    async queryRenderer(ref, sessionId) {
+      const bound = requireSession(ref, sessionId)
+      return decorateProjection(bound.runtime, await bound.owner.queryRenderer(ref, sessionId))
     },
-    submitRenderer(request) {
-      return requireSession(request.ref, request.sessionId).owner.submitRenderer(request)
+    queryRendererResourceTargets(ref, sessionId, targets) {
+      return requireSession(ref, sessionId).owner.queryRendererResourceTargets(ref, sessionId, targets)
     },
-    executeApplication(request) {
-      return requireSession(request.ref, request.sessionId).owner.executeApplication(request)
+    async submitRenderer(request) {
+      const bound = requireSession(request.ref, request.sessionId)
+      const result = await bound.owner.submitRenderer(request)
+      return Object.freeze({
+        ...result,
+        projection: await decorateProjection(bound.runtime, result.projection),
+      })
     },
-    deliverApplicationCommit(request) {
-      return requireSession(request.ref, request.sessionId).owner.deliverApplicationCommit(request)
+    async executeApplication(request) {
+      const bound = requireSession(request.ref, request.sessionId)
+      const result = await bound.owner.executeApplication(request)
+      return Object.freeze({
+        ...result,
+        projection: await decorateProjection(bound.runtime, result.projection),
+      })
     },
-    undo(request) {
-      return requireSession(request.ref, request.sessionId).owner.undo(request)
+    async deliverApplicationCommit(request) {
+      const bound = requireSession(request.ref, request.sessionId)
+      return decorateCertifiedDelivery(
+        bound.runtime,
+        await bound.owner.deliverApplicationCommit(request),
+      )
     },
-    redo(request) {
-      return requireSession(request.ref, request.sessionId).owner.redo(request)
+    async undo(request) {
+      const bound = requireSession(request.ref, request.sessionId)
+      const result = await bound.owner.undo(request)
+      return result === null
+        ? null
+        : Object.freeze({
+            ...result,
+            projection: await decorateProjection(bound.runtime, result.projection),
+          })
+    },
+    async redo(request) {
+      const bound = requireSession(request.ref, request.sessionId)
+      const result = await bound.owner.redo(request)
+      return result === null
+        ? null
+        : Object.freeze({
+            ...result,
+            projection: await decorateProjection(bound.runtime, result.projection),
+          })
     },
     flush(ref, sessionId) {
       return sessionId === undefined
@@ -147,6 +204,9 @@ export function createMainProjectCollaborationComposition(input: Readonly<{
     },
     async submit(request: CanvasApplicationCommandRequest) {
       return (await runtimeFor(parseProjectId(request.scopeId))).canvasSessions.submit(request)
+    },
+    async submitCertifiedResourceAppend(request) {
+      return (await runtimeFor(parseProjectId(request.scopeId))).canvasSessions.submitCertifiedResourceAppend(request)
     },
     async queryAuthoritative(ref) {
       return (await runtimeFor(parseProjectId(ref.scopeId))).canvasSessions.queryAuthoritative(ref)
@@ -280,6 +340,33 @@ export function createMainProjectCollaborationComposition(input: Readonly<{
 
   function requireLive(): void {
     if (disposed) throw new Error("Project collaboration composition is disposed")
+  }
+
+  async function decorateProjection(
+    runtime: MainProjectCollaborationPorts,
+    projection: CanvasSessionProjectionDto,
+  ): Promise<CanvasSessionProjectionDto> {
+    const resourceHierarchy = await projectCanvasResourceHierarchySnapshot({
+      currentResources: runtime.projectIndexes,
+      document: projection.document,
+      nodeEntities: projection.nodeEntities,
+      projectId: runtime.projectId,
+      projectionIdentity: projection.projectionIdentity,
+    })
+    return Object.freeze({ ...projection, resourceHierarchy })
+  }
+
+  async function decorateCertifiedDelivery(
+    runtime: MainProjectCollaborationPorts,
+    delivery: CanvasResourceProjectionDelivery,
+  ): Promise<CanvasResourceProjectionDelivery> {
+    if (delivery.status !== "certified") return delivery
+    const resourceHierarchy = await projectCanvasResourceHierarchyDelta({
+      currentResources: runtime.projectIndexes,
+      patch: delivery.patch,
+      projectId: runtime.projectId,
+    })
+    return Object.freeze({ ...delivery, resourceHierarchy })
   }
 }
 

@@ -2,7 +2,7 @@ import { afterAll, beforeEach, describe, expect, mock, test } from "bun:test"
 import { isValidElement, type ReactElement, type ReactNode } from "react"
 import { renderToStaticMarkup } from "react-dom/server"
 import type { CanvasRendererCollaborationClient, CanvasRendererCommand } from "../collaboration"
-import type { CanvasDocument, CanvasEdge, CanvasNode } from "../types"
+import type { CanvasDocument, CanvasEdge, CanvasNode, CanvasResourceRuntimeState } from "../types"
 import type { CanvasAppearanceInput } from "../appearance"
 
 const fitView = mock(async () => undefined)
@@ -252,6 +252,14 @@ mock.module("@xyflow/react", () => ({
 }))
 
 const { createCanvasDocument, createGroupNode, createTextNode } = await import("../document")
+const { parseUint64 } = await import("@convax/collaboration")
+const { canvasProjectionResourceMetadataKey } = await import("../collaboration/projection")
+const { context: canvasTestContext, digest: canvasTestDigest } = await import("../collaboration/test-fixtures.test")
+const { canvasCanonicalResourceIdentity } = await import("../resource-runtime-projection")
+const {
+  CanvasPersistentRuntimeMap,
+  canvasPersistentRuntimeMapWorkCounts,
+} = await import("../persistent-runtime-map")
 const { setCanvasGroupFolded } = await import("../group-fold")
 const { CANVAS_NODE_INPUT_HANDLE_ID, CANVAS_NODE_OUTPUT_HANDLE_ID } = await import("../connections")
 const {
@@ -963,11 +971,12 @@ describe("CanvasEditor resource mutation", () => {
       replace,
       service: {
         hydrateStale,
-        markStale(document, shouldInvalidate) {
+        markStale(document, nodeIds) {
+          const targets = new Set(nodeIds ?? document.nodes.map((node) => node.id))
           return {
             ...document,
             nodes: document.nodes.map((node) =>
-              shouldInvalidate?.(node)
+              targets.has(node.id)
                 ? {
                     ...node,
                     data: {
@@ -987,7 +996,7 @@ describe("CanvasEditor resource mutation", () => {
 
     const mountedNode = document.nodes[0]
     const mountedState = mountedNode!.data.resourceState
-    const first = controller.invalidateResources((node) => node.id === "note")
+    const first = controller.invalidateResources(["note"])
     expect(document).toBe(initial)
     expect(document.nodes[0]).toBe(mountedNode)
     expect(document.nodes[0]!.data.resourceState).toBe(mountedState)
@@ -1001,7 +1010,7 @@ describe("CanvasEditor resource mutation", () => {
     expect(hydrateStale.mock.calls[0]![0].document.nodes[1]).toBe(initial.nodes[1])
     expect(replace).not.toHaveBeenCalled()
 
-    const second = controller.invalidateResources((node) => node.id === "other")
+    const second = controller.invalidateResources(["other"])
     expect(hydrateStale).toHaveBeenCalledTimes(1)
 
     pending[0]!.resolve({
@@ -1043,6 +1052,296 @@ describe("CanvasEditor resource mutation", () => {
     expect(selection).toEqual({ nodeIds: ["note"] })
     expect(viewport).toEqual({ x: 17, y: 29, zoom: 1.35 })
     expect(persist).not.toHaveBeenCalled()
+  })
+
+  test("marks and hydrates only explicitly invalidated resource nodes", async () => {
+    let document = createCanvasDocument({
+      id: "canvas-selective-resource-refresh",
+      nodes: [
+        {
+          id: "first",
+          data: {
+            kind: "text",
+            label: "First",
+            metadata: { resource: "Notes/first.md" },
+            resourceState: { status: "ready", text: "first-before" },
+          },
+          position: { x: 0, y: 0 },
+          type: "file",
+        },
+        {
+          id: "second",
+          data: {
+            kind: "text",
+            label: "Second",
+            metadata: { resource: "Notes/second.md" },
+            resourceState: { status: "ready", text: "second-before" },
+          },
+          position: { x: 20, y: 20 },
+          type: "file",
+        },
+      ],
+    })
+    const markStale = mock((current: typeof document) => ({
+      ...current,
+      nodes: current.nodes.map((node) => ({
+        ...node,
+        data: { ...node.data, resourceState: { status: "stale" as const } },
+      })),
+    }))
+    const hydrateStale = mock(
+      async (input: { document: typeof document; nodeIds?: readonly string[]; signal: AbortSignal }) => ({
+        ...input.document,
+        nodes: input.document.nodes.map((node) =>
+          input.nodeIds?.includes(node.id)
+            ? { ...node, data: { ...node.data, resourceState: { status: "ready" as const, text: `${node.id}-after` } } }
+            : node,
+        ),
+      }),
+    )
+    const controller = new CanvasResourceRefreshController({
+      current: () => ({
+        document,
+        scope: { documentId: document.id, generation: 0, scopeId: "project-one" },
+      }),
+      replace(next) {
+        document = next
+      },
+      service: { hydrateStale, markStale },
+    })
+
+    await controller.invalidateResources(["first", "first"])
+
+    expect(markStale).toHaveBeenCalledWith(expect.anything(), ["first"])
+    expect(hydrateStale.mock.calls[0]?.[0].nodeIds).toEqual(["first"])
+    expect(document.nodes[0]!.data.resourceState).toEqual({ status: "ready", text: "first-after" })
+    expect(document.nodes[1]!.data.resourceState).toEqual({ status: "ready", text: "second-before" })
+  })
+
+  test("hydrates one offscreen hierarchy target in a 10k Canvas through keyed reads and direct runtime-map writes", async () => {
+    const resource = {
+      format: "convax.canvas-resource-ref" as const,
+      uri:
+        `convax-project://project/epochs/${canvasTestContext(1, 1, 1).operationId}/entries/` +
+        `pf_${"a".repeat(64)}`,
+      mediaClass: "text" as const,
+      mime: "text/markdown",
+      byteLength: parseUint64("1"),
+      contentDigest: canvasTestDigest(121),
+      ownerProofDigest: canvasTestDigest(122),
+    }
+    const nodes = Array.from({ length: 10_000 }, (_, index) =>
+      createTextNode({
+        id: `offscreen-${index}`,
+        metadata: { [canvasProjectionResourceMetadataKey]: resource },
+        position: { x: index * 400, y: 0 },
+        resourceState: { status: "stale" },
+      }),
+    )
+    const nodesById = new Map(nodes.map((node) => [node.id, node]))
+    let runtimeStates = CanvasPersistentRuntimeMap.empty<{ state: CanvasResourceRuntimeState }>()
+    for (const node of nodes) {
+      runtimeStates = runtimeStates.set(node.id, { state: { status: "ready", text: `before-${node.id}` } })
+    }
+    const targetNode = nodes[9_999]!
+    const target = {
+      entity: { kind: "node" as const, id: targetNode.id, incarnation: "offscreen-incarnation" },
+      nodeId: targetNode.id,
+    }
+    let fullProjectionReads = 0
+    let keyedNodeReads = 0
+    let exactRuntimeWrites = 0
+    const markStale = mock((document: CanvasDocument) => ({
+      ...document,
+      nodes: document.nodes.map((node) => ({
+        ...node,
+        data: { ...node.data, resourceState: { status: "stale" as const } },
+      })),
+    }))
+    const hydrateStale = mock(async ({ document }: { document: CanvasDocument }) => ({
+      ...document,
+      nodes: document.nodes.map((node) => ({
+        ...node,
+        data: { ...node.data, resourceState: { status: "ready" as const, text: "after" } },
+      })),
+    }))
+    const controller = new CanvasResourceRefreshController({
+      current: () => {
+        fullProjectionReads += 1
+        return {
+          document: createCanvasDocument({ id: "must-not-read" }),
+          scope: { documentId: "must-not-read", generation: 0, scopeId: "project" },
+        }
+      },
+      exact: {
+        capture(candidate) {
+          keyedNodeReads += 1
+          const node = nodesById.get(candidate.nodeId)
+          const ownerToken = runtimeStates.get(candidate.nodeId)
+          const resourceIdentity = node ? canvasCanonicalResourceIdentity(node) : undefined
+          if (!node || !ownerToken || !resourceIdentity) return null
+          return {
+            entity: candidate.entity,
+            node: { ...node, data: { ...node.data, resourceState: ownerToken.state } },
+            nodeId: node.id,
+            ownerToken,
+            rendererId: "renderer:text",
+            resourceIdentity,
+          }
+        },
+        header: () => ({ id: "canvas-offscreen", metadata: { title: "Offscreen" } }),
+        replace(replacements) {
+          if (replacements.length !== 1) return false
+          const replacement = replacements[0]!
+          if (runtimeStates.get(replacement.capture.nodeId) !== replacement.capture.ownerToken) return false
+          runtimeStates = runtimeStates.set(replacement.capture.nodeId, { state: replacement.state })
+          exactRuntimeWrites += 1
+          return true
+        },
+      },
+      replace: () => {
+        throw new Error("exact hierarchy hydration must not replace a full Canvas document")
+      },
+      service: { hydrateStale, markStale },
+    })
+
+    const workBefore = canvasPersistentRuntimeMapWorkCounts()
+    await controller.invalidateExactResources([target])
+    const workAfter = canvasPersistentRuntimeMapWorkCounts()
+
+    expect(fullProjectionReads).toBe(0)
+    expect(keyedNodeReads).toBe(1)
+    expect(markStale.mock.calls[0]?.[0].nodes).toHaveLength(1)
+    expect(hydrateStale.mock.calls[0]?.[0].document.nodes).toHaveLength(1)
+    expect(exactRuntimeWrites).toBe(1)
+    expect(runtimeStates.get(targetNode.id)?.state).toEqual({ status: "ready", text: "after" })
+    expect(workAfter.historicalEntryVisits - workBefore.historicalEntryVisits).toBe(0)
+    expect(workAfter.pathCopies - workBefore.pathCopies).toBeLessThanOrEqual(64)
+  }, 30_000)
+
+  test("retains an in-flight exact target when a disjoint invalidation queues a trailing refresh", async () => {
+    let document = createCanvasDocument({
+      id: "canvas-disjoint-resource-refresh",
+      nodes: [
+        createTextNode({
+          id: "first",
+          metadata: { resource: "Notes/first.md" },
+          position: { x: 0, y: 0 },
+          resourceState: { status: "ready", text: "first-before" },
+        }),
+        createTextNode({
+          id: "second",
+          metadata: { resource: "Notes/second.md" },
+          position: { x: 20, y: 20 },
+          resourceState: { status: "ready", text: "second-before" },
+        }),
+      ],
+    })
+    const pending: Array<{
+      input: { document: typeof document; nodeIds?: readonly string[] }
+      resolve(document: typeof document): void
+    }> = []
+    const hydrateStale = mock(
+      (input: { document: typeof document; nodeIds?: readonly string[]; signal: AbortSignal }) =>
+        new Promise<typeof document>((resolve) => pending.push({ input, resolve })),
+    )
+    const controller = new CanvasResourceRefreshController({
+      current: () => ({
+        document,
+        scope: { documentId: document.id, generation: 0, scopeId: "project-one" },
+      }),
+      replace(next) {
+        document = next
+      },
+      service: {
+        hydrateStale,
+        markStale(current) {
+          return {
+            ...current,
+            nodes: current.nodes.map((node) => ({
+              ...node,
+              data: { ...node.data, resourceState: { status: "stale" as const } },
+            })),
+          }
+        },
+      },
+    })
+
+    const first = controller.invalidateResources(["first"])
+    const second = controller.invalidateResources(["second"])
+    expect(hydrateStale).toHaveBeenCalledTimes(1)
+    expect(pending[0]!.input.nodeIds).toEqual(["first"])
+
+    pending[0]!.resolve({
+      ...pending[0]!.input.document,
+      nodes: pending[0]!.input.document.nodes.map((node) =>
+        node.id === "first"
+          ? { ...node, data: { ...node.data, resourceState: { status: "ready" as const, text: "first-after" } } }
+          : node,
+      ),
+    })
+    await Promise.resolve()
+    await Promise.resolve()
+
+    expect(hydrateStale).toHaveBeenCalledTimes(2)
+    expect(pending[1]!.input.nodeIds).toEqual(["first", "second"])
+    pending[1]!.resolve({
+      ...pending[1]!.input.document,
+      nodes: pending[1]!.input.document.nodes.map((node) =>
+        pending[1]!.input.nodeIds?.includes(node.id)
+          ? { ...node, data: { ...node.data, resourceState: { status: "ready" as const, text: `${node.id}-after` } } }
+          : node,
+      ),
+    })
+    await Promise.all([first, second])
+
+    expect(document.nodes.map((node) => node.data.resourceState)).toEqual([
+      { status: "ready", text: "first-after" },
+      { status: "ready", text: "second-after" },
+    ])
+  })
+
+  test("merges a large full hydration through indexed node lookups", async () => {
+    const nodes = Array.from({ length: 10_000 }, (_, index) =>
+      createTextNode({
+        id: `large-${index}`,
+        metadata: { index },
+        position: { x: index, y: index },
+        resourceState: { status: "stale" },
+      }),
+    )
+    Object.defineProperty(nodes, "find", {
+      configurable: true,
+      value: () => {
+        throw new Error("large hydration must not scan requested nodes per current node")
+      },
+    })
+    let document = createCanvasDocument({ id: "large-hydration", nodes })
+    const controller = new CanvasResourceRefreshController({
+      current: () => ({
+        document,
+        scope: { documentId: document.id, generation: 0, scopeId: "project-large" },
+      }),
+      replace(next) {
+        document = next
+      },
+      service: {
+        hydrateStale: async ({ document: stale }) => ({
+          ...stale,
+          nodes: stale.nodes.map((node) => ({
+            ...node,
+            data: { ...node.data, resourceState: { status: "ready" as const, text: node.id } },
+          })),
+        }),
+        markStale: (current) => current,
+      },
+    })
+
+    await controller.refreshStaleResources()
+
+    expect(document.nodes).toHaveLength(10_000)
+    expect(document.nodes.every((node) => node.data.resourceState?.status === "ready")).toBeTrue()
+    expect(document.nodes[9_999]!.data.resourceState).toEqual({ status: "ready", text: "large-9999" })
   })
 
   test("discards a stale hydration result and schedules a trailing pass after scope or reference changes", async () => {
@@ -1865,8 +2164,8 @@ describe("CanvasEditor insertion surfaces", () => {
     expect(source).toContain('data-convax-node-search-panel="true"')
     expect(source).toContain("bindCanvasSearchDismissal({")
     expect(source).toContain("const searchResults = useMemo(")
-    expect(source).toContain("searchOpen ? queryCanvasNodes(history.document")
-    expect(source).toContain("[history.document, query, searchOpen]")
+    expect(source).toContain("searchOpen ? queryCanvasNodes(readCurrentBulkDocument()")
+    expect(source).toContain("[query, readCurrentBulkDocument, searchOpen, viewportProjectionRevision]")
     expect(markup).not.toContain("<span>Search</span>")
     expect(buttonActions.get("Search")).toBeFunction()
     expect(buttonActions.get("Fit view")).toBeFunction()

@@ -1,180 +1,173 @@
-# Durable collaboration hot-path evidence
+# Add Text durable hot-path evidence
 
-Date: 2026-08-07
+Date: 2026-08-24
 
-Scope: ProjectIndex and Canvas local-owner durable commits through the current
-Collaboration Kernel and production Node persistence. The implementation keeps
-the collaboration wire and durable formats unchanged and preserves:
-
-```text
-object -> outbox -> journal -> atomic head -> replicaDoc
-```
-
-No fsync was removed, merged, reordered, or moved after `replicaDoc`.
+Scope: the normal fixed-size local Add Text flow, from immediate Renderer feedback
+through Project file publication, one ProjectIndex mutation, one Canvas mutation,
+accepted projection delivery, and editable text presentation.
 
 ## Decision
 
-The original approximately 615 ms packaged Main result was not primarily disk
-fsync and was not one indivisible ProjectIndex proof. The measured hot path
-contained repeated full-state reconstruction, canonical traversal, full-update
-hash/copy work, and repeated materialized-head reconstruction around the same
-durable root.
+The previous implementation made a fixed-size edit pay for retained state multiple
+times. It flattened and hashed complete owner state, asked Yjs to rescan the retained
+StructStore to encode a small delta, copied reachable-frame sets and materialized
+heads, wrote four separately durable collaboration records per shard, queried whole
+ProjectIndex projections, rehydrated a whole Canvas, and republished the complete
+React Flow node array.
 
-The accepted implementation uses only rebuildable, process-private
-accelerations:
+The current implementation is a breaking single-current-protocol cutover. It does
+not keep a predecessor decoder. Unsupported private collaboration bytes are retained
+byte-exact in a recoverable archive; after explicit user confirmation the upgraded
+Project starts a fresh current genesis.
 
-1. Owner-issued incremental canonical JCS evidence for the exact changed
-   collection, with full validation/canonicalization fallback.
-2. Digest- and durable-head-bound accepted materialization evidence. Public
-   typed-array mutation cannot change the private installed bytes.
-3. One exact local candidate plus an issuer-bound proof, eliminating the second
-   clone/apply/re-encode canonical-delta pass for the normal one-transaction
-   owner path.
-4. A disk-bound `verifyReplicaHeadCurrent` fast verification that still reads
-   and hashes the authoritative durable-head record and falls back on any head,
-   frontier, below-head, disposition, or trust uncertainty.
-5. A single kernel-private standby candidate built during an idle event-loop
-   turn. It is bound to scope, head, frontier, full-update digest, state-vector
-   digest, and document generation; it is consumed once. Mutation, client-id
-   drift, crash, incoming/recovery, disposal, or any binding mismatch destroys
-   it and falls back to an exact clone.
-6. A module-private accepted-head ownership transfer in the Node persistence
-   adapter. The journal append makes the one defensive copy; pending-head,
-   atomic-head, and verified-cache handoff rebind that already-owned immutable
-   value instead of copying the same multi-megabyte update at every boundary.
-   Public load, genesis, recovery, cache-miss, and fallback paths still copy.
+The current protocol identity is:
 
-The standby is not an authority and does not create a queue of background work.
-There is at most one timer and one standby document. A command that arrives
-before the idle build completes performs the original exact clone synchronously.
+```text
+protocolDigest = b5b5980bca795d622049657409f1c3b3ed5d4f2eed98773caaea909520c42214
+```
 
-## Rejected alternatives
+Its generated source-closure artifacts are:
 
-`Y.mergeUpdates` is not a safe or faster replacement for the canonical
-post-document full update.
+| Owner artifact | Digest |
+| --- | --- |
+| Canvas schema | `58f5c364345b4816a4aae1abed5c962a2deccb361817ed59ddaf950e1217decc` |
+| Collaboration kernel | `ea1c93b9434b572d2c9816bc86015bf354f0cb135e73768c0b574bbb5ae0d74b` |
+| Control plane | `482313db5564bedd00619f5bc3b661158762053e45ac5111b9d98c17ee7f70ec` |
+| Project persistence | `235f216452723a02c873292df26747d2d2c5e0bfb675ca302378f82c6e48a48b` |
 
-| ProjectIndex resources | Base bytes | `mergeUpdates` | canonical full encode |
-| ---: | ---: | ---: | ---: |
-| 32 | 93 KB | 0.727 ms | 0.233 ms |
-| 512 | 1.47 MB | 8.84 ms | 3.31 ms |
-| 2,048 | 5.90 MB | 34.35 ms | 13.17 ms |
+The artifact generator records sorted exact source-file SHA-256 values, can be run
+repeatedly without changing output, and is checked before packaging.
 
-These are 30-run measurements on Yjs 13.6.31. In a 100-step sequence containing
-delete/replace operations, merged bytes differed from canonical full-update
-bytes in 100/100 cases even though state vectors and document semantics matched.
-Using a merge rope would therefore be slower, would change reopen/checkpoint
-byte behavior, and would move compaction cost into a later command or an
-unbounded background backlog.
+## Current normal flow
 
-## Current warm results
+1. Renderer creates a Canvas-owned Portal ghost without inserting it into React
+   Flow's authoritative node array. First feedback is bounded by the changed ghost,
+   not total Canvas size.
+2. Project publishes the user-visible Markdown file first and without clobbering.
+   The repeated empty-text blob takes an exact digest lookup and re-verifies the
+   durable object; it does not sort or rewrite the presence index.
+3. ProjectIndex resolves only exact target/ancestor keys, applies a fixed number of
+   persistent-index and Merkle-Patricia updates, then appends one accepted-frame WAL
+   record and performs one file sync.
+4. Canvas applies one typed intent. Placement, generation state, quick-connect
+   anchors, canonical commitment, and projection use persistent exact indexes. The
+   kernel signs the exact update bytes emitted by the sole candidate transaction;
+   it does not call the retained-StructStore delta encoder.
+5. Canvas appends one accepted-frame WAL record and performs one file sync.
+6. Main returns an owner-certified fixed-size projection patch plus separately
+   validated transient runtime state. Renderer applies that patch to the Canvas-owned
+   keyed projection and bounded viewport. It does not query or materialize the whole
+   accepted Canvas on the successful lane.
 
-The fixed ProjectIndex resource matrix uses a queue-free warm definition: setup
-has settled, one owner query has completed, and one event-loop turn is allowed
-for the single bounded standby build. Fixture construction is excluded from the
-timed commit.
+ProjectIndex and Canvas remain distinct authorities. File-first publication and the
+two durable roots are intentionally not combined into a cross-shard transaction.
 
-For 2,048 resources (`fullUpdate=5,896,213` bytes), new-text with real production
-persistence, 30 independent samples:
+## Complexity contract
 
-| Metric | p50 | p95 | p99 |
+For fixed-size Add Text, normal hot work is bounded by changed bytes and a fixed
+number of changed keys. Balanced indexes may path-copy logarithmically; bounded-key
+Merkle-Patricia commitment work is independent of collection cardinality. The hot
+path must not enumerate unrelated:
+
+- Canvas nodes, edges, generation records, semantic history, or Yjs structs;
+- ProjectIndex entries, resource families, locations, or materialization rows;
+- blob-presence entries, accepted frames, outbox history, or reachable-frame sets;
+- Renderer projection arrays, React Flow's complete document, or runtime overlays.
+
+Bulk commands whose requested/output set is large may cost O(output). Cold open,
+explicit recovery, checkpoint construction, export, cache loss, and truly pathless
+filesystem invalidation may rebuild or traverse complete state once. They are
+explicit boundaries, not work deferred from a successful fixed-size mutation.
+
+Structural gates cover the boundary rather than relying on wall-clock assertions:
+
+- owner commitment build/apply/digest at 1, 1k, and 10k entries;
+- exact local Yjs transaction capture with retained StructStore history;
+- ProjectIndex exact queries and incremental state at 256, 1,024, and 4,096 entries;
+- 1,000 real Kernel/Project WAL appends with zero directory sync, cold scan,
+  historical visit, or full-update materialization on the hot path;
+- blob exact-presence admission at 256, 1,024, and 4,096 entries with one lookup,
+  zero historical visit, zero sort, and zero presence-index rewrite;
+- Canvas certified patch and Renderer application at 1, 1k, and 10k nodes with zero
+  full projection build/traversal/materialization;
+- generation history through 4,096 records with zero historical-generation visits;
+- same-row dense placement through 10k nodes with bounded interval visits;
+- quick-connect relation creation through 10k nodes with exact keyed reads;
+- focused ancestry through depth 4,096 with two visits, and malformed/rootless
+  ancestry capped at the 256-node working-set budget;
+- a bounded mounted view of at most 256 authoritative nodes and 512 edges, with
+  optimistic node and edge ghosts kept outside React Flow arrays.
+
+## Durability
+
+Every new document precreates `journals/accepted-frames.wal`. A normal accepted
+frame appends one checksummed, digest-chained `CVXAWREC` record to the `CVXAWL01`
+file and performs exactly one file sync. The record closes the exact signed frame,
+state vector, durable delta, logical outbox, journal transition, and resulting head.
+
+The process updates only disposable caches after that sync. A post-sync cache,
+observer, or response failure cannot turn a durable success into a reported failed
+mutation. Response-loss retry returns the byte-identical accepted result. Cold open
+validates the complete checksum/digest chain and replays exact signed frames;
+truncated tails are repaired only by a writer before another append. ACK,
+checkpoint, prune, quarantine, and recovery remain explicit maintenance boundaries.
+
+The normal ProjectIndex and Canvas roots each report one durability barrier:
+
+```text
+stage=accepted-frame-wal  barrierKind=file-sync  callCount=1
+```
+
+No normal accepted-frame root performs a directory sync or writes the retired
+object/outbox/journal/head sequence.
+
+## Packaged Electron results
+
+The clean run used one Electron process and one growing fixture, one unmeasured
+warm-up, then 30 measured Add Text operations. Diagnostics and record-all logging
+were disabled for these timings.
+
+| Metric | p50 | p95 | p99 / max |
 | --- | ---: | ---: | ---: |
-| total durable commit | 68.99 ms | 73.63 ms | 73.88 ms |
-| candidate clone | 0.0013 ms | 0.0018 ms | 0.0019 ms |
-| canonicalize | 4.73 ms | 5.34 ms | 5.55 ms |
-| state encode | 17.00 ms | 19.53 ms | 19.82 ms |
+| click to first Renderer feedback | 5.9 ms | 12.0 ms | 12.5 ms |
+| click to Main durable commit result | 68.9 ms | 281.9 ms | 310.7 ms |
+| commit result to authoritative reconcile | 45.6 ms | 89.9 ms | 92.0 ms |
+| click to authoritative reconcile | 124.4 ms | 324.7 ms | 345.5 ms |
 
-Every sample produced one ProjectIndex semantic root and retained all eleven
-physical sync calls. Grouped validation performs two calls per root: base
-validation and final frame decode. The normal local path performs zero
-`canonical-delta-validation` calls.
+With 30 samples, nearest-rank p99 is the maximum and is not presented as a stable
+tail estimate. The <20 ms interaction target is met by first feedback, including
+the growing-Canvas run. The authoritative result is not claimed to be <20 ms: it
+contains no-clobber file publication and two serial durable authorities, and its
+tail is dominated by operating-system persistence latency rather than retained
+document traversal.
 
-After the accepted-head transfer removed repeated persistence-boundary copies,
-new-image at the same cardinality completed 100 real/warm samples with p50
-74.80 ms, p95 83.32 ms, and p99 87.52 ms. All 100 samples produced one semantic
-root and kept eleven physical sync calls. Its p99 stage values were 13.94 ms
-for reducer, 7.07 ms for canonicalize, 18.39 ms for state encode, 19.91 ms for
-outbox, 14.90 ms for journal, and 13.17 ms for atomic head. This supersedes the
-earlier 30-sample observation whose one 248 ms outbox stall produced a 315.02 ms
-maximum; packaged Electron remains the final gate.
+A separate diagnostics run used one warm-up and two measured operations. It is not
+included in the timing table. Every measured Add Text produced one ProjectIndex root
+and one Canvas root, and every root reported one accepted-frame-WAL file sync. The
+observed sync durations were approximately 3.3-6.5 ms. The sampled Collaboration
+roots were approximately 14-22 ms for ProjectIndex and 19-22 ms for Canvas; fixed
+delta encoding itself was below 0.001 ms on the warm samples.
 
-Canvas duplicate retained all eleven sync calls. The selected 512-node,
-retained-32 real/warm cell had p95 77.16 ms across 20 independent samples. The
-retained-512 real endpoint was 51.36 ms in one long-fixture sample; its no-op
-comparison was 13.79 ms.
+## Rejected shortcuts
 
-Independent live Canvas counts 1/8/32 use distinct ProjectIndex routes, Canvas
-genesis documents, scopes, runtimes, persistence bindings, and sessions. Only
-route zero is timed. Every idle shard's history, head, frontier, canonical
-digest, full update, and state vector must remain exact before and after the
-sample.
+- weakening or moving durability after `replicaDoc` publication;
+- combining ProjectIndex and Canvas into a cross-owner WAL;
+- moving a full scan, hash, hydration, or React Flow rebuild to background work;
+- trusting Renderer-generated changed keys, paths, nodes, or Merkle roots;
+- using private React Flow/Zustand internals as a complexity contract;
+- retaining a predecessor collaboration decoder or silently rewriting old Projects.
 
-## Remaining linear work
+## Falsification conditions
 
-The optimization removes full ProjectIndex schema traversal and candidate clone
-from the queue-free warm path. It does not remove canonical post-document
-`encodeStateAsUpdate`, and the ProjectIndex reducer still clones four snapshot
-maps. Those costs grow with materialized state bytes. At 2,048 resources the
-no-op warm p95 remains about 58 ms, with state encoding about 23 ms.
+This result is invalid if a normal fixed-size Add Text:
 
-Retained-history fixture construction is also cumulative: constructing 512
-ProjectIndex operations by replaying every prior durable commit did not finish
-within ten minutes in the current benchmark and was stopped. This setup cost is
-not a timed-operation result. ProjectIndex timed samples through retained 128
-did not grow monotonically, and the Canvas retained-512 endpoint completed, but
-the ProjectIndex retained-512 fixture remains an explicit benchmark gap.
-A faster 512-frame setup requires either paying the same production acceptance
-barriers ahead of time or a separately approved batch recovery/import primitive;
-neither is part of this optimization. The benchmark infrastructure is verified
-and all existing tests pass with accurate metrics aggregation; the fixture gap
-remains explicitly documented until the required primitive is approved.
-
-### Completed regression validation
-
-Every falsification condition from the authority section has dedicated
-regression coverage:
-
-- All six standby candidate bindings (scopeDigest, durableHeadDigest,
-  frontierDigest, fullUpdateDigest, stateVectorDigest, documentGeneration) are
-  individually tested for drift and verified to fall back to an exact clone.
-- Crash injection at each durability barrier (outbox, journal, head) is tested
-  for exact byte preservation of the recovered frame.
-- The incoming frame path is verified to reject exact-base canonical digest
-  mismatches and to exercise the complete object→outbox→journal→head acceptance
-  chain for a valid cross-kernel frame.
-- The eleven physical sync count is tested in both ProjectIndex (for all
-  resource levels) and Canvas duplicate (for all node counts) benchmarks.
-- The multi-shard Canvas sample verifies idle shard sets remain unchanged
-  through the timed commit.
-
-### Outstanding: Packaged Electron latency smoke
-
-The final Electron latency smoke could not run in the restricted environment
-because binding its loopback debugger port was denied and the required
-escalation was rejected by the platform usage limit. That gate must be rerun
-before the performance objective is declared complete.
-
-## Authority and failure conditions
-
-- Every local command verifies the current durable head before consuming any
-  standby or owner evidence.
-- Incoming, reopen, recovery, cache miss, mutation, and digest mismatch retain
-  the full validation/materialization path.
-- A cache or standby never authorizes a frame and never changes frame bytes.
-- The exact signed frame crosses all durability barriers before `replicaDoc`.
-- Below-head data or a disposition head forces full reload/recovery.
-
-The implementation is falsified if any of the following occurs:
-
-- a wrong scope/head/frontier/full-update/state-vector/generation binding hits;
-- a post-validation mutation crosses the first durable object write;
-- an incoming or recovery frame skips the complete validator;
-- crash injection changes durable frame, journal, or head bytes;
-- an idle Canvas shard changes during a count-matrix sample;
-- physical sync count differs from eleven for the normal real commit;
-- packaged Main p95 exceeds 120 ms, p99 exceeds 250 ms, or a normal operation
-  exceeds 500 ms.
-
-The local production build succeeds, but the final Electron latency smoke could
-not run in the restricted environment because binding its loopback debugger port
-was denied and the required escalation was rejected by the platform usage limit.
-That gate must be rerun before the performance objective is declared complete.
+- visits retained Canvas, ProjectIndex, blob, Yjs, WAL, or Renderer history;
+- materializes a whole accepted projection on the certified-success lane;
+- performs more than one accepted-frame WAL sync per owner root or any hot directory
+  sync;
+- reports success before file-first publication and both durable roots complete;
+- accepts a stale/cross-owner commitment, projection patch, runtime sidecar, or
+  candidate transaction;
+- loses an external/pathless filesystem invalidation in order to preserve latency;
+- decodes or mutates an unsupported archived Project instead of requiring the
+  confirmed archive-and-fresh-genesis flow.

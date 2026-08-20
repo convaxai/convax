@@ -414,16 +414,24 @@ export function findOpenCanvasPoint(
   const gap = 24
   const occupied = document.nodes
     .filter((node) => node.parentId === parentId)
+    .map((node) => ({ node, size: getCanvasNodePresentationSize(node) }))
     .sort(
       (left, right) =>
-        Math.hypot(left.position.x - preferred.x, left.position.y - preferred.y) -
-        Math.hypot(right.position.x - preferred.x, right.position.y - preferred.y),
+        Math.hypot(left.node.position.x - preferred.x, left.node.position.y - preferred.y) -
+        Math.hypot(right.node.position.x - preferred.x, right.node.position.y - preferred.y),
     )
+  const spatialIndex = createCanvasPlacementSpatialIndex(
+    occupied.map(({ node, size: nodeSize }) => ({
+      bottom: node.position.y + nodeSize.height + gap,
+      left: node.position.x,
+      right: node.position.x + nodeSize.width + gap,
+      top: node.position.y,
+    })),
+  )
   const boundedCandidates = bounds ? createBoundedCanvasPlacementCandidates(bounds, preferred, size, gap) : []
   const candidates = [
     preferred,
-    ...occupied.flatMap((node) => {
-      const nodeSize = getCanvasNodePresentationSize(node)
+    ...occupied.flatMap(({ node, size: nodeSize }) => {
       return [
         { x: node.position.x + nodeSize.width + gap, y: preferred.y },
         { x: preferred.x, y: node.position.y + nodeSize.height + gap },
@@ -433,25 +441,119 @@ export function findOpenCanvasPoint(
     }),
     ...boundedCandidates,
   ]
-    .filter((candidate) => Number.isFinite(candidate.x) && Number.isFinite(candidate.y))
-    .filter((candidate) => !bounds || canvasPlacementFitsBounds(candidate, size, bounds))
-    .filter(
-      (candidate, index, all) => all.findIndex((other) => other.x === candidate.x && other.y === candidate.y) === index,
-    )
-  const open = candidates.find(
-    (candidate) =>
-      !occupied.some((node) => {
-        const nodeSize = getCanvasNodePresentationSize(node)
-        return (
-          candidate.x < node.position.x + nodeSize.width + gap &&
-          candidate.x + size.width + gap > node.position.x &&
-          candidate.y < node.position.y + nodeSize.height + gap &&
-          candidate.y + size.height + gap > node.position.y
-        )
-      }),
-  )
-  if (open) return open
+  const seenYByX = new Map<number, Set<number>>()
+  for (const candidate of candidates) {
+    if (!Number.isFinite(candidate.x) || !Number.isFinite(candidate.y)) continue
+    if (bounds && !canvasPlacementFitsBounds(candidate, size, bounds)) continue
+    let seenY = seenYByX.get(candidate.x)
+    if (!seenY) {
+      seenY = new Set<number>()
+      seenYByX.set(candidate.x, seenY)
+    }
+    if (seenY.has(candidate.y)) continue
+    seenY.add(candidate.y)
+    if (
+      !canvasPlacementSpatialIndexIntersects(spatialIndex, {
+        bottom: candidate.y + size.height + gap,
+        left: candidate.x,
+        right: candidate.x + size.width + gap,
+        top: candidate.y,
+      })
+    ) {
+      return candidate
+    }
+  }
   return bounds ? findOpenCanvasPoint(document, preferred, size, undefined, parentId) : preferred
+}
+
+interface CanvasPlacementRectangle {
+  bottom: number
+  left: number
+  right: number
+  top: number
+}
+
+interface CanvasPlacementSpatialIndex {
+  bounds: CanvasPlacementRectangle
+  children?: readonly CanvasPlacementSpatialIndex[]
+  rectangles?: readonly CanvasPlacementRectangle[]
+}
+
+const canvasPlacementSpatialIndexBranchingFactor = 16
+
+/** Bulk-loaded, immutable R-tree used only for deterministic placement queries. */
+function createCanvasPlacementSpatialIndex(
+  rectangles: readonly CanvasPlacementRectangle[],
+): CanvasPlacementSpatialIndex | undefined {
+  if (rectangles.length === 0) return undefined
+  let level = packCanvasPlacementSpatialLevel(
+    rectangles.map((rectangle) => ({ bounds: rectangle, rectangles: [rectangle] })),
+  )
+  while (level.length > 1) level = packCanvasPlacementSpatialLevel(level)
+  return level[0]
+}
+
+function packCanvasPlacementSpatialLevel(
+  entries: readonly CanvasPlacementSpatialIndex[],
+): CanvasPlacementSpatialIndex[] {
+  if (entries.length <= canvasPlacementSpatialIndexBranchingFactor) {
+    return [canvasPlacementSpatialParent(entries)]
+  }
+  const leafCount = Math.ceil(entries.length / canvasPlacementSpatialIndexBranchingFactor)
+  const sliceCount = Math.ceil(Math.sqrt(leafCount))
+  const sliceSize = Math.ceil(entries.length / sliceCount)
+  const byX = [...entries].sort(
+    (left, right) => canvasPlacementRectangleCenterX(left.bounds) - canvasPlacementRectangleCenterX(right.bounds),
+  )
+  const packed: CanvasPlacementSpatialIndex[] = []
+  for (let sliceStart = 0; sliceStart < byX.length; sliceStart += sliceSize) {
+    const slice = byX
+      .slice(sliceStart, sliceStart + sliceSize)
+      .sort(
+        (left, right) => canvasPlacementRectangleCenterY(left.bounds) - canvasPlacementRectangleCenterY(right.bounds),
+      )
+    for (let index = 0; index < slice.length; index += canvasPlacementSpatialIndexBranchingFactor) {
+      packed.push(canvasPlacementSpatialParent(slice.slice(index, index + canvasPlacementSpatialIndexBranchingFactor)))
+    }
+  }
+  return packed
+}
+
+function canvasPlacementSpatialParent(entries: readonly CanvasPlacementSpatialIndex[]): CanvasPlacementSpatialIndex {
+  const bounds = entries.reduce(
+    (result, entry) => ({
+      bottom: Math.max(result.bottom, entry.bounds.bottom),
+      left: Math.min(result.left, entry.bounds.left),
+      right: Math.max(result.right, entry.bounds.right),
+      top: Math.min(result.top, entry.bounds.top),
+    }),
+    { bottom: -Infinity, left: Infinity, right: -Infinity, top: Infinity },
+  )
+  if (entries.every((entry) => entry.rectangles?.length === 1 && entry.children === undefined)) {
+    return { bounds, rectangles: entries.map((entry) => entry.rectangles![0]!) }
+  }
+  return { bounds, children: entries }
+}
+
+function canvasPlacementSpatialIndexIntersects(
+  index: CanvasPlacementSpatialIndex | undefined,
+  query: CanvasPlacementRectangle,
+): boolean {
+  if (!index || !canvasPlacementRectanglesIntersect(index.bounds, query)) return false
+  if (index.rectangles) return index.rectangles.some((rectangle) => canvasPlacementRectanglesIntersect(rectangle, query))
+  return index.children?.some((child) => canvasPlacementSpatialIndexIntersects(child, query)) ?? false
+}
+
+function canvasPlacementRectanglesIntersect(left: CanvasPlacementRectangle, right: CanvasPlacementRectangle) {
+  return left.left < right.right && left.right > right.left && left.top < right.bottom && left.bottom > right.top
+}
+
+function canvasPlacementRectangleCenterX(rectangle: CanvasPlacementRectangle) {
+  return rectangle.left + (rectangle.right - rectangle.left) / 2
+}
+
+function canvasPlacementRectangleCenterY(rectangle: CanvasPlacementRectangle) {
+  return rectangle.top + (rectangle.bottom - rectangle.top) / 2
 }
 
 function createBoundedCanvasPlacementCandidates(

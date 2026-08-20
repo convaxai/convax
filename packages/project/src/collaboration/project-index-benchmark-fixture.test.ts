@@ -27,7 +27,7 @@ describe("ProjectIndex benchmark fixture", () => {
   })
 
   test("rejects fixture cardinalities outside the bounded benchmark range", () => {
-    expect(() => createProjectIndexBenchmarkFixture(-1)).toThrow("safe integer from 0 through 2048")
-    expect(() => createProjectIndexBenchmarkFixture(2049)).toThrow("safe integer from 0 through 2048")
+    expect(() => createProjectIndexBenchmarkFixture(-1)).toThrow("safe integer from 0 through 4096")
+    expect(() => createProjectIndexBenchmarkFixture(4097)).toThrow("safe integer from 0 through 4096")
   })
 })

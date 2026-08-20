@@ -3,8 +3,7 @@ import os from "node:os"
 import path from "node:path"
 import {
   applyYjsUpdate,
-  canonicalStateDigest,
-  causalHeadRefFromDecodedFrame,
+  acceptedHeadMaterializedStateDigest,
   causalFrontierDigest,
   decodeCausalEditFrame,
   encodeBase64url,
@@ -21,7 +20,6 @@ import {
   parseUint64,
   replicaActorHeadSetDigest,
   validateAcceptedHeadMaterializationEvidence,
-  type AcceptedHeadMaterializationEvidence,
   type AcceptedHeadView,
   type CollaborationKernelPorts,
   type CollaborationLatencyDiagnostic,
@@ -35,6 +33,7 @@ import {
 } from "@convax/collaboration"
 import {
   PROJECT_INDEX_PROTOCOL_SCHEMA_ARTIFACT_DIGEST,
+  projectIndexCanonicalStateCommitmentDigest,
   requiredProjectIndexBlobDigests,
   createProjectIndexReconstructionYDoc,
 } from "@convax/project"
@@ -85,7 +84,7 @@ const fullRetainedFrames = [1, 32, 128, 512] as const
 const smokeCanvasCounts = [1] as const
 const fullCanvasCounts = [1, 8, 32] as const
 const allOperations = ["new-text", "new-image", "ordinary-canvas-duplicate"] as const
-const durabilityStages = ["object", "outbox", "journal", "head"] as const
+const durabilityStages = ["accepted-frame-wal"] as const
 export const durableBusinessStages = [
   "queue",
   "operation-lookup",
@@ -97,11 +96,7 @@ export const durableBusinessStages = [
   "canonicalize",
   "state-encode",
   "sign",
-  "object",
-  "outbox",
-  "journal",
-  "head",
-  "post-head-check",
+  "atomic-accepted-frame-commit",
   "replica-apply",
   "projection",
 ] as const
@@ -145,7 +140,7 @@ export interface ProjectIndexBenchmarkCellResult {
     >
   >
   readonly kernelDurabilityStages: Readonly<
-    Record<"object" | "outbox" | "journal" | "head", Readonly<{ durationMs: Distribution; callCount: number }>>
+    Record<"accepted-frame-wal", Readonly<{ durationMs: Distribution; callCount: number }>>
   >
   readonly durability: Readonly<{
     physicalSyncCount: number
@@ -199,7 +194,7 @@ function benchmarkMetadata(input: {
     }),
     durability: Object.freeze({
       "no-op": "real Kernel and ProjectIndex owner with in-memory barrier-shaped persistence",
-      real: "production NodeCollaborationPersistence and production materializer wiring with unchanged fsync barriers",
+      real: "production NodeCollaborationPersistence and production materializer wiring with one atomic WAL fsync barrier",
     }),
     setupExcludedFromTiming: true as const,
   })
@@ -428,7 +423,7 @@ async function runSample(input: {
   const barrierTracker = new BenchmarkBarrierTracker()
   try {
     const initial = cloneAcceptedHead(input.fixtureHead)
-    const materializerCounter = createBenchmarkCountingMaterializerRegistry()
+    const materializerCounter = createBenchmarkCountingMaterializerRegistry(authority)
     const materializers = materializerCounter.registry
     const persistence =
       input.mode === "real"
@@ -625,7 +620,7 @@ function createCardinalityFixtureHead(resources: number): AcceptedHeadView {
   try {
     const seeded = populateProjectIndexBenchmarkFixture(candidate.document, resources)
     if (seeded.ownerResourceCount !== resources) throw new Error("benchmark resource fixture cardinality mismatches")
-    return initialHead(owner, scope, candidate.document)
+    return initialHead(owner, authority, scope, candidate.document)
   } finally {
     candidate.document.destroy()
   }
@@ -639,11 +634,11 @@ function cloneAcceptedHead(head: AcceptedHeadView): AcceptedHeadView {
   })
 }
 
-export function createBenchmarkCountingMaterializerRegistry(): {
+export function createBenchmarkCountingMaterializerRegistry(authority: CurrentProtocolAuthority): {
   readonly registry: ProjectCollaborationMaterializerRegistry
   readonly applyCount: () => number
 } {
-  const base = createProjectCollaborationMaterializerRegistry()
+  const base = createProjectCollaborationMaterializerRegistry(authority)
   let count = 0
   const registry: ProjectCollaborationMaterializerRegistry = Object.freeze({
     register: (input) => base.register(input),
@@ -652,7 +647,8 @@ export function createBenchmarkCountingMaterializerRegistry(): {
       count += 1
       return base.applyAcceptedFrame(input)
     },
-    observeAcceptedFrame: (ref, exactBytes) => base.observeAcceptedFrame?.(ref, exactBytes),
+    observeAcceptedFrame: (ref, exactBytes, durableDelta) =>
+      base.observeAcceptedFrame?.(ref, exactBytes, durableDelta),
     actorHeadsDigest: (actorHeads) => base.actorHeadsDigest(actorHeads),
   })
   return Object.freeze({ registry, applyCount: () => count })
@@ -756,24 +752,28 @@ export async function openBenchmarkNodePersistence(
 
 function initialHead(
   owner: ReturnType<typeof createMainProjectIndexOwnerRuntime>,
+  authority: CurrentProtocolAuthority,
   scope: Parameters<typeof createEmptyProjectIndexGenesisCandidate>[0]["scope"],
   document: ReturnType<typeof createEmptyProjectIndexGenesisCandidate>["document"],
 ): AcceptedHeadView {
   const frontier = Object.freeze({ format: "convax.causal-frontier" as const, heads: Object.freeze([]) })
   const validated = owner.protocolPort.validateBase(document)
   if (validated === "rejected") throw new Error("benchmark fixture rejected by production owner")
-  const canonicalBytes = owner.protocolPort.canonicalStateBytes(document)
-  if (canonicalBytes === "rejected") throw new Error("benchmark fixture canonicalization rejected")
-  return Object.freeze({
+  const headDigest = ordinarySha256(encoder.encode("benchmark-head:genesis"))
+  const fullUpdate = encodeFullUpdate(document)
+  const stateVector = encodeStateVector(document)
+  const base = Object.freeze({
     scope,
-    headDigest: ordinarySha256(encoder.encode("benchmark-head:genesis")),
+    headDigest,
     frontier,
     frontierDigest: causalFrontierDigest(frontier),
     actorHeads: Object.freeze({ format: "convax.replica-actor-head-set" as const, scope, heads: Object.freeze([]) }),
-    fullUpdate: encodeFullUpdate(document),
-    stateVector: encodeStateVector(document),
-    canonicalStateDigest: canonicalStateDigest(owner.protocolPort.schemaDigest, canonicalBytes),
+    fullUpdate,
+    stateVector,
+    canonicalStateDigest: projectIndexCanonicalStateCommitmentDigest(document, authority),
+    materializationDigest: headDigest,
   })
+  return Object.freeze({ ...base, materializationDigest: acceptedHeadMaterializedStateDigest(base) })
 }
 
 function noOpPorts(
@@ -867,7 +867,6 @@ function artifactMaterials(authority: CurrentProtocolAuthority): ValidationArtif
 export class BenchmarkNoOpPersistence implements CollaborationPersistencePort {
   private head: AcceptedHeadView
   private frame?: { ref: FrameObjectRef; bytes: Uint8Array }
-  private materialization?: AcceptedHeadView
   private acceptedFrames = 0
   constructor(
     initial: AcceptedHeadView,
@@ -877,78 +876,45 @@ export class BenchmarkNoOpPersistence implements CollaborationPersistencePort {
     this.head = initial
   }
   loadReplicaHead = async () => this.head
-  putImmutableFrame = async (ref: FrameObjectRef, bytes: Uint8Array) => {
-    this.frame = { ref, bytes: Uint8Array.from(bytes) }
-  }
-  putReplicationOutboxRef = async () => undefined
-  appendFrameJournal = async (ref: FrameObjectRef, materialization?: AcceptedHeadMaterializationEvidence) => {
-    this.materialization = materialization
-      ? (() => {
-          const validated = validateAcceptedHeadMaterializationEvidence({
-            previous: this.head,
-            ref,
-            evidence: materialization,
-          })
-          if (validated === "rejected") throw new Error("benchmark materialization evidence rejected")
-          return validated
-        })()
-      : undefined
-    return {
-      ref,
-      journalRecordDigest: ordinarySha256(encoder.encode(`journal:${ref.frameDigest}`)),
-    }
-  }
-  compareAndCommitReplicaHead = async (
-    input: Parameters<CollaborationPersistencePort["compareAndCommitReplicaHead"]>[0],
-  ) => {
-    if (!this.frame) throw new Error("benchmark frame missing")
-    const resulting = ordinarySha256(encoder.encode(`head:${this.frame.ref.frameDigest}`))
-    if (this.materialization) {
+  commitAcceptedFrame = async (request: Parameters<CollaborationPersistencePort["commitAcceptedFrame"]>[0]) => {
+    const validated = validateAcceptedHeadMaterializationEvidence({
+      previous: this.head,
+      ref: request.ref,
+      evidence: request.accepted,
+    })
+    if (validated === "rejected") throw new Error("benchmark materialization evidence rejected")
+    const frame = decodeCausalEditFrame(this.authority, new Uint8Array(request.exactFrameBytes))
+    const document = this.createDocument()
+    applyYjsUpdate(document, this.head.fullUpdate, this)
+    applyYjsUpdate(document, frame.sections.yjsUpdate, this)
+    const resulting = ordinarySha256(encoder.encode(`head:${request.ref.frameDigest}`))
+    try {
       this.head = Object.freeze({
-        scope: this.materialization.scope,
+        ...validated.transition,
         headDigest: resulting,
-        frontier: this.materialization.frontier,
-        frontierDigest: this.materialization.frontierDigest,
-        actorHeads: this.materialization.actorHeads,
-        fullUpdate: Uint8Array.from(this.materialization.fullUpdate),
-        stateVector: Uint8Array.from(this.materialization.stateVector) as AcceptedHeadView["stateVector"],
-        canonicalStateDigest: this.materialization.canonicalStateDigest,
-      })
-    } else {
-      const frame = decodeCausalEditFrame(this.authority, this.frame.bytes)
-      const document = this.createDocument()
-      applyYjsUpdate(document, this.head.fullUpdate, this)
-      applyYjsUpdate(document, frame.sections.yjsUpdate, this)
-      const causal = causalHeadRefFromDecodedFrame(frame)
-      const frontier = Object.freeze({ format: "convax.causal-frontier" as const, heads: Object.freeze([causal]) })
-      this.head = Object.freeze({
-        ...this.head,
-        headDigest: resulting,
-        frontier,
-        frontierDigest: causalFrontierDigest(frontier),
-        actorHeads: Object.freeze({
-          format: "convax.replica-actor-head-set" as const,
-          scope: this.head.scope,
-          heads: Object.freeze([causal]),
-        }),
         fullUpdate: encodeFullUpdate(document),
-        stateVector: encodeStateVector(document),
-        canonicalStateDigest: frame.header.core.postCanonicalStateDigest,
       })
+    } finally {
       document.destroy()
     }
-    this.materialization = undefined
+    this.frame = { ref: request.ref, bytes: Uint8Array.from(request.exactFrameBytes) }
     this.acceptedFrames += 1
-    return {
+    const recordDigest = (kind: string) => ordinarySha256(encoder.encode(`${kind}:${request.ref.frameDigest}`))
+    return Object.freeze({
       status: "committed" as const,
-      evidence: {
-        ref: this.frame.ref,
-        journalRecordDigest: input.journal.journalRecordDigest,
-        expectedReplicaHeadRecordDigest: input.expectedReplicaHeadRecordDigest,
+      evidence: Object.freeze({
+        format: "convax.accepted-frame-atomic-commit-evidence" as const,
+        ref: request.ref,
+        frameRecordDigest: recordDigest("frame"),
+        outboxRecordDigest: recordDigest("outbox"),
+        journalRecordDigest: recordDigest("journal"),
+        expectedReplicaHeadRecordDigest: request.expectedHead.headDigest,
         resultingReplicaHeadRecordDigest: resulting,
-        resultingFrontierDigest: input.resultingFrontierDigest,
-      },
-    }
+        resultingFrontierDigest: validated.transition.frontierDigest,
+        resultingMaterializationDigest: validated.transition.materializationDigest,
+        atomicCommitRecordDigest: recordDigest("atomic"),
+      }),
+    })
   }
   isReachableFromAcceptedHead = async (ref: FrameObjectRef) => this.frame?.ref.frameDigest === ref.frameDigest
   lookupOperation = async (): Promise<OperationLookup> => ({ status: "absent" })
@@ -1000,11 +966,7 @@ function summarize(input: {
     canonicalize: ["canonical-state-digest"],
     "state-encode": ["base-state-encode", "delta-encode", "frame-encode"],
     sign: ["sign"],
-    object: ["object"],
-    outbox: ["outbox"],
-    journal: ["journal"],
-    head: ["head"],
-    "post-head-check": ["post-head-check"],
+    "atomic-accepted-frame-commit": ["atomic-accepted-frame-commit"],
     "replica-apply": ["replica-apply"],
     projection: ["projection"],
   }

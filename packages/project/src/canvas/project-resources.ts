@@ -18,6 +18,12 @@ export const projectResourceReferenceKey = "convaxProjectResource"
 export const projectResourceBindingsKey = "convaxProjectResourceBindings"
 export const managedProjectAssetBlobDirectory = ".convax/assets/blobs"
 
+/** Project-owned v1 text editing capability; other text formats stay read-only. */
+export function isEditableProjectTextPath(value: string) {
+  const lower = value.toLowerCase()
+  return lower.endsWith(".md") || lower.endsWith(".txt")
+}
+
 export type ProjectResourceReference =
   | { kind: "project-file"; path: string }
   | { kind: "managed-asset"; sha256: string; name: string; mediaType?: string }
@@ -217,7 +223,9 @@ export function resolveCurrentProjectResource(input: {
   resource: CanvasResourceRef
 }): CurrentProjectResourceResolution {
   assertResourceRef(input.resource)
-  const matches = input.currentResources.filter(({ reference }) => reference.canonicalUri === input.resource.uri)
+  const matches = input.currentResources.filter(({ reference }) =>
+    reference.canonicalUri === input.resource.uri &&
+    projectIndexResourceReferenceDigest(reference) === input.resource.ownerProofDigest)
   if (matches.length !== 1) return { status: "unavailable" }
 
   const current = matches[0]!

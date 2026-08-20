@@ -87,10 +87,78 @@ describe.skipIf(process.platform === "win32")("ProjectIndexFileMaterializer real
     const available = new Map<Digest, Uint8Array>()
     const state = projection(plan([file("later.md", bytes, 1)]))
     const materializer = await ProjectIndexFileMaterializer.open({ projectId, projectRoot, projection: state.port, blobs: blobPort(available) })
+    expect(materializer.needsPublishedBlob(digest(bytes))).toBeFalse()
     expect((await materializer.reconcile()).pendingPaths).toEqual([{ path: "later.md", code: "blob-unavailable" }])
+    expect(materializer.needsPublishedBlob(digest(bytes))).toBeTrue()
+    expect(materializer.needsPublishedBlob(digest(encoder.encode("other")))).toBeFalse()
     available.set(digest(bytes), bytes)
     expect((await materializer.reconcile()).pendingPaths).toEqual([])
+    expect(materializer.needsPublishedBlob(digest(bytes))).toBeFalse()
     expect(await fs.readFile(path.join(projectRoot, "later.md"), "utf8")).toBe("later\n")
+  })
+
+  test("suppresses only exact accepted native coverage and fails open after path tampering", async () => {
+    const bytes = encoder.encode("native first\n")
+    const frameDigest = digest(encoder.encode("accepted frame"))
+    await fs.mkdir(path.join(projectRoot, "Notes"))
+    await fs.writeFile(path.join(projectRoot, "Notes", "native.md"), bytes)
+    const state = projection(plan([
+      directory("Notes", 1),
+      file("Notes/native.md", bytes, 2),
+    ]))
+    const materializer = await ProjectIndexFileMaterializer.open({
+      projectId,
+      projectRoot,
+      projection: state.port,
+      blobs: blobPort(new Map()),
+    })
+
+    materializer.coverAcceptedFrame({
+      frameDigest,
+      entries: [
+        { entryId: directoryId(1), kind: "directory", path: "Notes" },
+        { blobDigest: digest(bytes), entryId: fileId(2), kind: "file", path: "Notes/native.md" },
+      ],
+    })
+    expect(await materializer.consumeAcceptedFrameCoverage(frameDigest)).toBeTrue()
+    expect(await materializer.consumeAcceptedFrameCoverage(frameDigest)).toBeFalse()
+
+    materializer.coverAcceptedFrame({
+      frameDigest,
+      entries: [{ blobDigest: digest(bytes), entryId: fileId(2), kind: "file", path: "Notes/native.md" }],
+    })
+    await fs.writeFile(path.join(projectRoot, "Notes", "native.md"), "external change\n")
+    expect(await materializer.consumeAcceptedFrameCoverage(frameDigest)).toBeFalse()
+
+    materializer.coverAcceptedFrame({
+      frameDigest,
+      entries: [{ blobDigest: digest(bytes), entryId: fileId(2), kind: "file", path: "Notes/native.md" }],
+    })
+    await fs.rm(path.join(projectRoot, "Notes", "native.md"))
+    await fs.symlink(path.join(projectRoot, "Notes"), path.join(projectRoot, "Notes", "native.md"))
+    expect(await materializer.consumeAcceptedFrameCoverage(frameDigest)).toBeFalse()
+  })
+
+  test("retains a verified coverage receipt so a later tombstone can safely remove the native file", async () => {
+    const bytes = encoder.encode("tracked without full plan\n")
+    const frameDigest = digest(encoder.encode("tracked frame"))
+    await fs.writeFile(path.join(projectRoot, "tracked.md"), bytes)
+    const state = projection(plan([file("tracked.md", bytes, 7)]))
+    const materializer = await ProjectIndexFileMaterializer.open({
+      projectId,
+      projectRoot,
+      projection: state.port,
+      blobs: blobPort(new Map()),
+    })
+    materializer.coverAcceptedFrame({
+      frameDigest,
+      entries: [{ blobDigest: digest(bytes), entryId: fileId(7), kind: "file", path: "tracked.md" }],
+    })
+    expect(await materializer.consumeAcceptedFrameCoverage(frameDigest)).toBeTrue()
+
+    state.set(plan([]))
+    expect((await materializer.reconcile()).removedPaths).toEqual(["tracked.md"])
+    expect(await exists(path.join(projectRoot, "tracked.md"))).toBeFalse()
   })
 })
 
@@ -99,6 +167,10 @@ function projection(initial: ProjectIndexFileMaterializationPlan) {
   return {
     port: {
       async queryFileMaterializationPlan() { return current },
+      async queryFileMaterializationEntries(input: { paths: readonly string[] }) {
+        const paths = new Set(input.paths)
+        return plan(current.entries.filter((entry) => paths.has(entry.path)))
+      },
     } satisfies ProjectIndexFileMaterializationProjectionPort,
     set(next: ProjectIndexFileMaterializationPlan) { current = next },
   }

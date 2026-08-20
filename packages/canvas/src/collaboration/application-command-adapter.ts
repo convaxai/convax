@@ -48,20 +48,25 @@ export function adaptCanvasApplicationCommand(input: {
     const caller = callerFromActorKind(input.request.envelope.actor.kind)
     if (caller === "rejected") return "rejected"
     const command = input.request.envelope.command
-    // The common Project resource-publication path has no Canvas relation. It
-    // carries a complete current-owner proof and does not need an existing
-    // Canvas entity lookup, so avoid constructing the full live projection
-    // merely to pass an empty relation through the adapter. Authoritative
-    // construction still binds placement to the full obstacle digest below.
-    if (command.type === "resources.add" && hasNoCreatedResourceRelation(command.relation)) {
-      return adaptResourcesAdd(caller, command, new Map())
+    // The common Project resource-publication path has no Canvas relation and
+    // needs no existing entity lookup. Quick-connect carries only a bounded
+    // anchor set, resolved through the snapshot-bound node-id index; neither
+    // path materializes the live projection arrays.
+    if (command.type === "resources.add") {
+      const nodesById = hasNoCreatedResourceRelation(command.relation)
+        ? new Map<string, never>()
+        : buildCanvasProjectionIndex(input.snapshot).nodesById
+      return adaptResourcesAdd(caller, command, nodesById)
     }
-    if (command.type === "resources.pending.create" && hasNoCreatedResourceRelation(command.relation)) {
-      return adaptPendingResourceCreate(caller, command, new Map())
+    if (command.type === "resources.pending.create") {
+      const nodesById = hasNoCreatedResourceRelation(command.relation)
+        ? new Map<string, never>()
+        : buildCanvasProjectionIndex(input.snapshot).nodesById
+      return adaptPendingResourceCreate(caller, command, nodesById)
     }
     const index = buildCanvasProjectionIndex(input.snapshot)
-    const nodeById = new Map(index.projection.nodes.map((node) => [node.ref.id, node] as const))
-    const edgeById = new Map(index.projection.edges.map((edge) => [edge.ref.id, edge] as const))
+    const nodeById = index.nodesById
+    const edgeById = index.edgesById
 
     switch (command.type) {
       case "elements.remove": {
@@ -403,12 +408,6 @@ export function adaptCanvasApplicationCommand(input: {
             ...(command.gap === undefined ? {} : { gap: command.gap }),
           }),
         )
-      }
-      case "resources.add": {
-        return adaptResourcesAdd(caller, command, nodeById)
-      }
-      case "resources.pending.create": {
-        return adaptPendingResourceCreate(caller, command, nodeById)
       }
       case "resources.pending-generation.create": {
         if (command.placement.parentId !== undefined) return "rejected"

@@ -13,6 +13,10 @@ import {
 
 const mainPath = fileURLToPath(new URL("./index.ts", import.meta.url))
 const mainSource = readFileSync(mainPath, "utf8")
+const migrationCompositionSource = readFileSync(
+  fileURLToPath(new URL("./immediate-predecessor-project-migration.ts", import.meta.url)),
+  "utf8",
+)
 
 interface TestStatus {
   format: "convax.project-team-collaboration-status"
@@ -436,5 +440,47 @@ describe("Desktop Main local-first Team runtime wiring", () => {
     expect(mainSource).not.toContain("v10-r5")
     expect(mainSource).not.toContain("v11-r1")
     expect(mainSource).not.toMatch(/selectedProtocol|activeProtocol|MainProjectProtocolSelection/)
+  })
+
+  test("binds the Project-owned predecessor gate before registration, recovery or IPC can open a Project", () => {
+    const manager = mainSource.indexOf("const projectManager = new NodeProjectManager({")
+    const injectedGate = mainSource.indexOf("collaborationMigration,", manager)
+    const boundGate = mainSource.indexOf(
+      "collaborationMigrationDelegate = createDesktopImmediatePredecessorProjectMigrationComposition({",
+      injectedGate,
+    )
+    const firstRegistration = mainSource.indexOf(
+      "collaborationProjectIndexes = new MainProjectIndexRuntimeRegistry({",
+      boundGate,
+    )
+    const projectIpc = mainSource.indexOf("await registerProjectIpc(projectManager", firstRegistration)
+
+    expect(manager).toBeGreaterThan(0)
+    expect(injectedGate).toBeGreaterThan(manager)
+    expect(boundGate).toBeGreaterThan(injectedGate)
+    expect(firstRegistration).toBeGreaterThan(boundGate)
+    expect(projectIpc).toBeGreaterThan(firstRegistration)
+    expect(mainSource.slice(manager, boundGate)).not.toContain("await projectManager.listProjects(")
+  })
+
+  test("mints the imported Canvas verifier in the same built migration subpath as its builder", () => {
+    expect(migrationCompositionSource).toContain('from "@convax/canvas/collaboration-migration"')
+    expect(migrationCompositionSource).toContain(
+      "installCanvasGenesisProofCarrierVerifierFactory as installImmediatePredecessorCanvasGenesisProofCarrierVerifierFactory",
+    )
+    expect(migrationCompositionSource).toContain("canvasProofVerifier: migrationVerifier.verifier")
+    const factoryStart = migrationCompositionSource.indexOf(
+      "export function createDesktopImmediatePredecessorCurrentStore(",
+    )
+    const factoryBody = migrationCompositionSource.indexOf("): ImmediatePredecessorCurrentStorePort {", factoryStart)
+    expect(factoryStart).toBeGreaterThan(0)
+    expect(factoryBody).toBeGreaterThan(factoryStart)
+    expect(migrationCompositionSource.slice(factoryStart, factoryBody)).not.toContain("canvasProofVerifier")
+
+    const compositionStart = mainSource.indexOf("currentStore: createDesktopImmediatePredecessorCurrentStore({")
+    const compositionEnd = mainSource.indexOf("}),", compositionStart)
+    expect(compositionStart).toBeGreaterThan(0)
+    expect(compositionEnd).toBeGreaterThan(compositionStart)
+    expect(mainSource.slice(compositionStart, compositionEnd)).not.toContain("canvasProofVerifier")
   })
 })

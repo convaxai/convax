@@ -43,6 +43,12 @@ This package owns the durable Project aggregate and native Project adapters.
   process-local ProjectIndex owner-state projection uses one schema-digest-bound
   stable marker and must not depend on a bundle-local constructor identity. That
   marker is never serialized, persisted, or treated as portable authority.
+- ProjectIndex cold validation builds the exact owner state commitment once.
+  Accepted directory/file create applies only its fixed inserted collection-key
+  mutations to that commitment and path-copies the package-private canonical
+  collection index; it never enumerates or copies historical entries. Flat
+  restricted-JCS canonical bytes remain an explicitly accounted audit/export
+  serialization and are never a frame-digest fallback on the mutation path.
 - Canvas document schema/commands remain in `@convax/canvas`; Project composes its
   public validators/resource proofs and native ports rather than duplicating the
   Canvas reducer or editing Canvas through Project-local commands.
@@ -123,17 +129,48 @@ This package owns the durable Project aggregate and native Project adapters.
   ACK, and never a materialization conflict. Windows collaboration mutation remains
   fail-closed until a reviewed native write-through adapter satisfies the frozen
   barriers or a later authority revision defines another equivalent primitive.
-- Structural durable ACKs are exact immutable objects. Project/node journals the
-  verified ACK and advances the sole durable head before retiring the frame outbox;
-  retry must match the accepted exact ACK. Reopen treats an ACK journal with a
-  missing object as store corruption rather than claiming replication.
-- Materialized accepted-head, operation-recovery, reachable-outbox and outbox-usage
-  caches are process-local rebuildable projections only. A materialized head cache
-  is bound to the exact hashed durable-head record, checkpoint base, journal tail
-  and reachable frame set; every use rechecks the durable-head digest and any
-  mismatch/recovery/quarantine/checkpoint transition clears or rebuilds it. An
-  immutable operation sidecar must be fsynced before the all-Project index learns
-  it, and reopen reconstructs every derived index.
+- Every new document precreates `journals/accepted-frames.wal`. A normal accepted
+  frame appends one closed record containing the exact signed frame, the plain
+  validated durable delta, outbox/journal/head logical metadata, prior-record
+  digest and checksum, then performs exactly one sync on that already-created
+  regular file. It never persists issuer-bound evidence, reconstructs or clones a
+  full update, writes the legacy frame/outbox/journal/head stages, or syncs a
+  directory on the hot path. ACK, checkpoint and prune are explicit maintenance
+  records with zero exact-frame/state-vector binary payload in the same logical
+  head chain; an ACK's exact credential-bound bytes remain inside its closed JCS
+  header. Cold scan/recovery rebuilds
+  all derived indexes and exact frame-delta replay state; a reader ignores an
+  incomplete tail and a writer repairs only that tail before append. Complete
+  post-sync response loss for normal accepted-frame and ACK records is an
+  idempotent retry of the same record and evidence. Checkpoint/prune maintenance
+  does not claim that recovery contract.
+  Native opens use no-follow flags and verify the open handle remains the expected
+  linked regular file.
+- Structural durable ACKs retain their exact bytes inside a closed WAL maintenance
+  record. Project/node advances the logical durable head before retiring the frame
+  outbox projection, and an exact retry must match that accepted ACK. Reopen treats
+  a missing, corrupt or mismatched ACK record as store corruption rather than
+  claiming replication.
+- Prune advances the logical checkpoint base and rebuildable reachability indexes;
+  it does not yet physically compact prior accepted-frame bytes from the WAL.
+  Checkpoint-driven WAL rotation/compaction is a separate future maintenance step.
+- Accepted-head, operation-recovery, reachable-outbox and outbox-usage caches are
+  process-local rebuildable projections only. The accepted-head cache binds one
+  exact logical identity to a materialized checkpoint base and a persistent chain
+  of fixed-size accepted frame references. Issuer-bound accepted-head evidence
+  advances that chain without reconstructing, encoding, hashing or cloning a full
+  update and without visiting historical entries; only cold load, recovery and
+  checkpoint/prune may fold it into a new materialized base. Every cache use
+  rechecks the exact hashed durable-head record, checkpoint base, journal tail and
+  reachable frame set; any mismatch/recovery/quarantine transition clears or
+  rebuilds it. The current atomic path installs operation recovery only after the
+  WAL file sync; reopen reconstructs that and every other derived index from the
+  closed WAL records. Immutable operation sidecars remain only for the legacy
+  staged adapter and never add a second accepted-head authority.
+  Writer open is the cold boundary for rebuilding both the operation-recovery
+  index and bounded outbox-usage projection from the same scanned WAL. Project
+  activation completes that work before accepting commands; the first user
+  mutation must not enumerate the retained logical outbox.
 - Replication-cache GC consumes only a complete injected Project root scan, retains
   active transfers, uses a seven-day/two-store-generation delay and a second complete
   scan, and deletes nothing on unreadable ProjectIndex/Canvas state, invalid timing,
@@ -141,9 +178,22 @@ This package owns the durable Project aggregate and native Project adapters.
 - Publishing user-visible `Notes/` or `Generated/` files is file-first and no-clobber.
   If the later Canvas commit fails, retain the file and report partial success. Do not
   add a cross-file WAL or delete a user file to simulate atomicity.
+- A verified internal no-clobber publication may register one bounded, process-local,
+  one-shot coverage token for its exact `{projectId,path}` watcher event. Consumption
+  must remove the token before asynchronously re-verifying the published file
+  identity, size and digest. Mismatch, error, duplicate, unknown-path and external
+  events fail open to invalidation; coverage is never a durable receipt or time
+  window that suppresses another path. A debounce batch emits one uncovered exact
+  path only when that is the batch's sole external path. Multiple uncovered paths,
+  unknown filenames and path-capacity overflow emit one pathless full invalidation;
+  they must not multiply a Canvas-wide scan by the number of watcher events.
 - Project file moves and renames do not rewrite Canvas references in v1. Missing
   references remain visible until the user relinks them.
 - ProjectIndex exposes the sole stable-entry/current-resource materialization plan.
+  Resource publication may additionally request only exact target/ancestor entries
+  from the same live owner snapshot; a directory-only exact query must not enumerate
+  unrelated content families. Immutable path indexes may be weakly cached only by
+  exact validated snapshot identity and never become authority.
   Project/node subscribes to accepted ProjectIndex invalidation and durable blob
   publication, stages/fsyncs exact bytes, and replaces or removes only a prior
   `{entryId,path,digest}` match. Native untracked edits fail closed instead of being
@@ -169,26 +219,29 @@ This package owns the durable Project aggregate and native Project adapters.
   every current live route in the exact `ProjectIndexLiveScopeManifestV2`. Registry
   state is advisory anti-rollback/discovery metadata and never grants, denies, adds,
   removes, or blocks a floor scope.
-- Schema changes include versioned migration tests by default. The current
-  collaboration cutover instead rejects legacy JSON, multi-document promotion stores,
-  centralized edit-sequencing stores, Merkle edit logs, global revision-token bytes,
-  and every retired experimental collaboration tree. Before the exact user-confirmed
-  archive-and-reset operation, preserve them without hydration, rewrite, compaction,
-  migration, deletion, or GC; ordinary Project files and stable `projectId` remain.
-  A completed reset keeps the previous private tree byte-exact at the inert sibling
-  `.convax-archive-<reset-token-suffix>` until the user deletes it, and no migration
-  helper may retain an old decoder in production or treat that archive as authority.
-- ProjectIndex first registration must repeat the portable-cutover inspection before
-  creating owner or collaboration bytes. Recovery may classify an already-published
-  local bootstrap as unteamed only after Project/node proves its exact manifest-bound
-  empty genesis and closed native inventory; any frame, route, unknown path, Team
-  identity, or authority mismatch remains closed and requires rollover authority.
-  An explicit user-confirmed unshared-local reset never decodes unsupported private
-  bytes or requires an empty bootstrap. It requires exact `missing` from the Desktop
-  Team authority store and no Team/control or sharing-handoff namespace in the
-  inventoried Project tree, then stages a fresh epoch whose owner binding becomes
-  current only after the new tree and old-tree archive are both verified. Any Team
-  record, rejected Team state, or Team namespace requires control-plane rollover.
+- Schema changes include migration and rejection tests by default. Project/node owns
+  one sealed pre-open migrator for the code-pinned exact immediate predecessor only.
+  It validates the predecessor's complete signed causal closure, imports semantic
+  ProjectIndex and Canvas state into fresh current owner documents, verifies the
+  staged current store by reopening it, and performs a crash-recoverable same-volume
+  switch before discovery, touch, or first registration can expose the Project.
+  Successful migration removes its transient rollback tree. Unknown identities,
+  legacy JSON, retired experiments, corruption, and unavailable Team authority stay
+  unchanged and closed; no helper guesses a format, creates an empty replacement,
+  retains a selectable predecessor runtime, or falls back to local-owner authority.
+- Project discovery, add/open classification, touch, and ProjectIndex first
+  registration all invoke the same idempotent pre-open migration gate before reading
+  current-only metadata or creating owner/collaboration bytes. Recovery may classify
+  an already-published local bootstrap as unteamed only after Project/node proves its
+  exact manifest-bound genesis and closed native inventory. A predecessor Team
+  Project migrates only with matching predecessor authority and a valid current Team
+  authorization path; missing, rejected, or contradictory Team state leaves the old
+  tree untouched and never becomes a local-owner Project.
+- Explicit Open may first publish only the canonical `projectId`/root registry
+  binding outside the selected Project so the authority adapter can prove the root.
+  That reservation does not create a key, owner binding, manifest, asset directory,
+  or collaboration byte inside the Project; migration remains the first
+  writer-facing action there, and a failed gate leaves a registered recovery entry.
 - Consume only the exact Project, control-plane, kernel, and Canvas artifacts named by
   the one current protocol descriptor. A missing or mismatched artifact or genuine
   owner contradiction stops decode, reset, or mutation rather than selecting an
@@ -203,6 +256,16 @@ This package owns the durable Project aggregate and native Project adapters.
   use the durable local-owner authority. Canvas genesis preflight/staging must be
   available from that same owner; absence of Team state is not a pending enrollment
   condition.
+- One open Project collaboration runtime exposes an opaque process-local identity,
+  a live guard, and an explicit release lifecycle so Main may reuse already-verified
+  static owner material only within that exact runtime. Quiesce, release, reset, or
+  disposal revokes the identity; it is never a durable Project id, a TTL cache key,
+  or permission to bypass the current Team-state gate.
+- Node Project registry lookup keeps one manager-owned id index populated only by an
+  exact durable registry read or successful manager write. Ordinary active-Project
+  root resolution performs an exact id lookup and revalidates the native root; it
+  never rescans unrelated Project bindings. Rename, rebind, forget, and creation
+  replace that index from the newly durable registry state.
 - Local-owner bindings, edit authorizations, genesis evidence, and device-level
   sharing tombstones are durable records of that one protocol. Their presence never
   selects a protocol, downgrades signing authority, or authorizes a downgrade from a

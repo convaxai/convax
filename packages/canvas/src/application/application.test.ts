@@ -256,6 +256,22 @@ describe("canvas application commands", () => {
     }
   })
 
+  test("keeps placement bounded on a large Canvas without pairwise candidate scans", () => {
+    const nodes = Array.from({ length: 8_192 }, (_, index) => ({
+      ...createTextNode({
+        id: `occupied-large-${index}`,
+        metadata: {},
+        position: { x: index * 124, y: 0 },
+        resourceState: { status: "ready" },
+      }),
+      style: { height: 100, width: 100 },
+    }))
+
+    expect(
+      findOpenCanvasPoint(createCanvasDocument({ nodes }), { x: 0, y: 0 }, { height: 100, width: 100 }),
+    ).toEqual({ x: 0, y: 124 })
+  })
+
   test("keeps a viewport-scoped placement inside the visible world bounds", () => {
     const occupied = {
       ...createTextNode({

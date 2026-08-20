@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test"
+import { CURRENT_PROTOCOL_IDENTITIES, currentProtocolDescriptor } from "@convax/collaboration"
 import {
   CONTROL_PROTOCOL_EXPECTED_IDENTITIES,
   CONTROL_PROTOCOL_LIMITS,
@@ -140,16 +141,17 @@ describe("frozen control-plane descriptor", () => {
     }
   })
 
-  test("pins the reviewed identities without reconstructing the kernel bundle", () => {
+  test("tracks the one code-owned current protocol identity and domain registry", () => {
     expect(CONTROL_PROTOCOL_EXPECTED_IDENTITIES).toEqual({
-      protocolDigest: "8295f918e8f7b8297c080db03672fc410542280f639d9b40a8e324e560f07ae9",
-      limitsDigest: "88c018e5289f8b9a359f6ae171aed00885d5fa0913f4a1c36274b35e4cee12f7",
-      channelContractDigest: "0fa34e8d93f26e585e6d9baa0ecf0c09a38494d03247b91843e2bca0e93df242",
+      protocolDigest: CURRENT_PROTOCOL_IDENTITIES.protocolDigest,
+      limitsDigest: CURRENT_PROTOCOL_IDENTITIES.limitsDigest,
+      channelContractDigest: CURRENT_PROTOCOL_IDENTITIES.channelContractDigest,
     })
+    const currentProtocol = currentProtocolDescriptor()
     expect(PROJECT_CONTROL_PROTOCOL_KERNEL_INTEGRATION).toEqual({
       status: "current-contract-selected",
-      requiredProtocolDigest: "8295f918e8f7b8297c080db03672fc410542280f639d9b40a8e324e560f07ae9",
-      requiredDomainCount: 129,
+      requiredProtocolDigest: currentProtocol.protocolDigest,
+      requiredDomainCount: currentProtocol.digestDomains.length,
       fallbackDecoder: false,
       compatibilityPrimitiveAliases: false,
     })

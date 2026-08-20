@@ -257,7 +257,7 @@ const child = Bun.spawn(
     env: {
       ...process.env,
       CONVAX_ALLOW_MULTIPLE_INSTANCES: "1",
-      ...(latencyMode
+      ...(latencyMode && forwardLatencyDiagnostics
         ? {
             CONVAX_CANVAS_RESOURCE_LATENCY_RECORD_ALL: "1",
             CONVAX_COLLABORATION_LATENCY_RECORD_ALL: "1",
@@ -706,7 +706,7 @@ try {
       const nodeElements = () => [...surface.querySelectorAll(".react-flow__node[data-id]")]
         .filter((node) => !node.getAttribute("data-id")?.startsWith("ghost-"))
       const ghostElements = () => surface.querySelectorAll(
-        '.react-flow__node[data-id^="ghost-"], .react-flow__edge[data-id^="ghost-"]',
+        '[data-canvas-optimistic-ghost="node"], [data-canvas-optimistic-ghost="edge"]',
       ).length
       const hasRenderedEntity = (id) => Boolean(id && surface.querySelector('[data-id="' + CSS.escape(id) + '"]'))
       const hasNewRenderedEntity = (visualBefore, kind) => [...surface.querySelectorAll("[data-id]")].some((element) => {

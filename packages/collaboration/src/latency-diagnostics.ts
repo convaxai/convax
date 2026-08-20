@@ -14,11 +14,7 @@ export const collaborationLatencyStages = [
   "sign",
   "frame-encode",
   "frame-decode",
-  "object",
-  "outbox",
-  "journal",
-  "head",
-  "post-head-check",
+  "atomic-accepted-frame-commit",
   "replica-apply",
   "projection",
 ] as const

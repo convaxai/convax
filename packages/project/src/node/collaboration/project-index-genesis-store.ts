@@ -2,13 +2,14 @@ import { createHash, timingSafeEqual } from "node:crypto"
 import fs from "node:fs/promises"
 import path from "node:path"
 import {
-  canonicalStateDigest as computeCanonicalStateDigest,
+  acceptedHeadMaterializedStateDigest,
   causalFrontierDigest,
   applyYjsUpdate,
   decodeRestrictedJcs,
   encodeFullUpdate,
   encodeRestrictedJcs,
   encodeStateVector,
+  installCurrentProtocolAuthority,
   ownerCanonicalizerDescriptorDigest,
   parseActorId,
   parseDigest,
@@ -35,11 +36,12 @@ import {
   type ReplicaId,
 } from "@convax/collaboration"
 import type * as Y from "yjs"
+import { IMMEDIATE_PREDECESSOR_PROTOCOL } from "@convax/collaboration/migration"
 import {
   PROJECT_INDEX_PROTOCOL_SCHEMA_ARTIFACT_DIGEST,
   createProjectIndexReconstructionYDoc,
   createProjectIndexYDoc,
-  encodeProjectCanonicalState,
+  projectIndexCanonicalStateCommitmentDigest,
   projectIndexOwnerCanonicalizerDescriptor,
   validateProjectIndexYDoc,
   type ProjectEntryRecord,
@@ -74,6 +76,22 @@ export interface ProjectNativeStoreManifest {
   readonly schemaDigest: Digest
   readonly uriProtocolDigest: Digest
   readonly initializationAuthorityDigest: Digest
+  readonly projectIndexGenesisKind: "empty" | "immediate-predecessor-import"
+  readonly migrationImportBaseProofDigest: Digest | null
+  readonly projectIndexGenesisCheckpointObjectDigest: Digest
+  readonly projectIndexGenesisFullUpdateDigest: Digest
+  readonly projectIndexGenesisStateVectorDigest: Digest
+  readonly projectIndexGenesisCanonicalStateDigest: Digest
+}
+
+export interface ImmediatePredecessorProjectNativeStoreManifest {
+  readonly format: "convax.project-native-store-manifest"
+  readonly storeIdentity: typeof STORE_IDENTITY
+  readonly projectIndexScope: ProjectIndexDocumentScope
+  readonly protocolDigest: Digest
+  readonly schemaDigest: Digest
+  readonly uriProtocolDigest: Digest
+  readonly initializationAuthorityDigest: Digest
   readonly emptyProjectIndexCheckpointObjectDigest: Digest
   readonly emptyProjectIndexFullUpdateDigest: Digest
   readonly emptyProjectIndexStateVectorDigest: Digest
@@ -86,12 +104,26 @@ export interface ProjectNativeStoreAuthority {
   readonly uriProtocolDigest: Digest
 }
 
-export interface VerifiedEmptyProjectIndexGenesis {
+export interface VerifiedProjectIndexGenesis {
   readonly manifest: ProjectNativeStoreManifest
   readonly manifestLocalRecordDigest: Digest
   readonly checkpointExactBytes: Uint8Array
   readonly acceptedBase: Omit<NodeAcceptedReplicaHead, "headDigest">
 }
+
+export type VerifiedEmptyProjectIndexGenesis = VerifiedProjectIndexGenesis & Readonly<{
+  manifest: ProjectNativeStoreManifest & Readonly<{
+    projectIndexGenesisKind: "empty"
+    migrationImportBaseProofDigest: null
+  }>
+}>
+
+export type VerifiedImmediatePredecessorImportedProjectIndexGenesis = VerifiedProjectIndexGenesis & Readonly<{
+  manifest: ProjectNativeStoreManifest & Readonly<{
+    projectIndexGenesisKind: "immediate-predecessor-import"
+    migrationImportBaseProofDigest: Digest
+  }>
+}>
 
 export interface ProjectIndexGenesisCheckpointVerifier {
   verify(checkpoint: ReplicaCheckpoint): Promise<boolean>
@@ -160,12 +192,16 @@ export function createEmptyProjectIndexGenesisCandidate(input: {
       protocolDigest: parseDigest(input.authority.protocolDigest),
       schemaDigest: parseDigest(input.authority.schemaDigest),
       uriProtocolDigest: parseDigest(input.authority.uriProtocolDigest),
+      migrationImportBaseProofDigest: null,
     }),
     rootEntry,
   )
   const fullUpdate = encodeFullUpdate(document)
   const stateVector = encodeStateVector(document)
-  const canonicalState = encodeProjectCanonicalState(document)
+  const canonicalStateDigest = projectIndexCanonicalStateCommitmentDigest(
+    document,
+    installCurrentProtocolAuthority(),
+  )
   const frontier = Object.freeze({ format: "convax.causal-frontier" as const, heads: Object.freeze([]) })
   const frontierDigest = causalFrontierDigest(frontier)
   const actorHeads = Object.freeze({
@@ -186,7 +222,7 @@ export function createEmptyProjectIndexGenesisCandidate(input: {
     computedFrontierDigest: frontierDigest,
     actorHeadBoundaryDigest: replicaActorHeadSetDigest(actorHeads),
     stateVectorDigest: stateVectorDigest(stateVector),
-    canonicalStateDigest: computeCanonicalStateDigest(input.authority.schemaDigest, canonicalState),
+    canonicalStateDigest,
     fullUpdateDigest: yjsUpdateDigest(fullUpdate),
     fullUpdateByteLength: parseUint64(String(fullUpdate.byteLength)),
     protocolDigest: parseDigest(input.authority.protocolDigest),
@@ -200,6 +236,67 @@ export function createEmptyProjectIndexGenesisCandidate(input: {
   // codec-invalid core and sign it as local-owner authority.
   replicaCheckpointCoreDigest(checkpointCore)
   return Object.freeze({ document, checkpointCore })
+}
+
+/** Builds a current checkpoint core over an already rebuilt non-empty import. */
+export function createImmediatePredecessorImportedProjectIndexCheckpointCandidate(input: {
+  readonly scope: DocumentScope
+  readonly document: Y.Doc
+  readonly actorId: ActorId
+  readonly checkpointId: Id128
+  readonly authorMemberId: MemberId
+  readonly authorReplicaId: ReplicaId
+  readonly authorAuthorizationDigest: Digest
+  readonly validationArtifactSetDigest: Digest
+  readonly authority: ProjectNativeStoreAuthority
+  readonly migrationImportBaseProofDigest: Digest
+}): Readonly<{ document: Y.Doc; checkpointCore: ReplicaCheckpointCore }> {
+  const scope = requireProjectIndexScope(input.scope)
+  const snapshot = validateProjectIndexYDoc(input.document, scope)
+  if (
+    snapshot.identity.protocolDigest !== parseDigest(input.authority.protocolDigest) ||
+    snapshot.identity.schemaDigest !== parseDigest(input.authority.schemaDigest) ||
+    snapshot.identity.uriProtocolDigest !== parseDigest(input.authority.uriProtocolDigest) ||
+    snapshot.identity.migrationImportBaseProofDigest !== parseDigest(input.migrationImportBaseProofDigest)
+  ) throw new TypeError("Imported ProjectIndex document is not current")
+  const fullUpdate = encodeFullUpdate(input.document)
+  const stateVector = encodeStateVector(input.document)
+  const canonicalStateDigest = projectIndexCanonicalStateCommitmentDigest(
+    input.document,
+    installCurrentProtocolAuthority(),
+  )
+  const frontier = Object.freeze({ format: "convax.causal-frontier" as const, heads: Object.freeze([]) })
+  const frontierDigest = causalFrontierDigest(frontier)
+  const actorHeads = Object.freeze({
+    format: "convax.replica-actor-head-set" as const,
+    scope,
+    heads: Object.freeze([]),
+  })
+  const checkpointCore: ReplicaCheckpointCore = Object.freeze({
+    format: "convax.replica-checkpoint-core",
+    scope,
+    checkpointId: parseId128(input.checkpointId),
+    authorMemberId: parseMemberId(input.authorMemberId),
+    authorReplicaId: parseReplicaId(input.authorReplicaId),
+    authorActorId: parseActorId(input.actorId),
+    authorAuthorizationDigest: parseDigest(input.authorAuthorizationDigest),
+    directParentCheckpointDigests: Object.freeze([]),
+    baseFrontierDigest: frontierDigest,
+    computedFrontierDigest: frontierDigest,
+    actorHeadBoundaryDigest: replicaActorHeadSetDigest(actorHeads),
+    stateVectorDigest: stateVectorDigest(stateVector),
+    canonicalStateDigest,
+    fullUpdateDigest: yjsUpdateDigest(fullUpdate),
+    fullUpdateByteLength: parseUint64(String(fullUpdate.byteLength)),
+    protocolDigest: snapshot.identity.protocolDigest,
+    schemaDigest: snapshot.identity.schemaDigest,
+    canonicalizerDigest: ownerCanonicalizerDescriptorDigest(
+      projectIndexOwnerCanonicalizerDescriptor(snapshot.identity.schemaDigest),
+    ),
+    validationArtifactSetDigest: parseDigest(input.validationArtifactSetDigest),
+  })
+  replicaCheckpointCoreDigest(checkpointCore)
+  return Object.freeze({ document: input.document, checkpointCore })
 }
 
 /** Host-private envelope: magic + uint32 JCS length + JCS + ordinary SHA-256 checksum. */
@@ -216,6 +313,45 @@ export function encodeProjectNativeStoreManifest(input: ProjectNativeStoreManife
 }
 
 export function decodeProjectNativeStoreManifest(exactBytes: Readonly<Uint8Array>): ProjectNativeStoreManifest {
+  return decodeProjectNativeStoreManifestForSchema(exactBytes, PROJECT_INDEX_PROTOCOL_SCHEMA_ARTIFACT_DIGEST)
+}
+
+/** Exact manifest decoder available only to the sealed one-shot migrator. */
+export function decodeImmediatePredecessorProjectNativeStoreManifest(
+  exactBytes: Readonly<Uint8Array>,
+): ImmediatePredecessorProjectNativeStoreManifest {
+  const manifest = decodeImmediatePredecessorManifestEnvelope(exactBytes)
+  if (
+    manifest.protocolDigest !== IMMEDIATE_PREDECESSOR_PROTOCOL.protocolDigest ||
+    manifest.uriProtocolDigest !== IMMEDIATE_PREDECESSOR_PROTOCOL.uriProtocolDigest
+  ) throw new TypeError("Project native manifest is not the sealed immediate predecessor")
+  return manifest
+}
+
+function decodeImmediatePredecessorManifestEnvelope(
+  exactBytes: Readonly<Uint8Array>,
+): ImmediatePredecessorProjectNativeStoreManifest {
+  const payload = decodeManifestEnvelopePayload(exactBytes)
+  const manifest = parseImmediatePredecessorProjectNativeStoreManifest(decodeRestrictedJcs(payload))
+  if (!sameBytes(payload, encodeRestrictedJcs(manifest))) {
+    throw new TypeError("Immediate-predecessor Project native manifest JCS bytes are not canonical")
+  }
+  return manifest
+}
+
+function decodeProjectNativeStoreManifestForSchema(
+  exactBytes: Readonly<Uint8Array>,
+  expectedSchemaDigest: Digest,
+): ProjectNativeStoreManifest {
+  const payload = decodeManifestEnvelopePayload(exactBytes)
+  const manifest = parseProjectNativeStoreManifest(decodeRestrictedJcs(payload), expectedSchemaDigest)
+  if (!sameBytes(payload, encodeRestrictedJcs(manifest))) {
+    throw new TypeError("Project native manifest JCS bytes are not canonical")
+  }
+  return manifest
+}
+
+function decodeManifestEnvelopePayload(exactBytes: Readonly<Uint8Array>): Uint8Array {
   if (!(exactBytes instanceof Uint8Array)) throw new TypeError("Project native manifest must be bytes")
   const bytes = Buffer.from(exactBytes)
   if (
@@ -236,11 +372,7 @@ export function decodeProjectNativeStoreManifest(exactBytes: Readonly<Uint8Array
   const checksum = bytes.subarray(MANIFEST_HEADER_BYTES + payloadLength)
   const computed = createHash("sha256").update(payload).digest()
   if (!timingSafeEqual(checksum, computed)) throw new TypeError("Project native manifest checksum mismatches")
-  const manifest = parseProjectNativeStoreManifest(decodeRestrictedJcs(payload))
-  if (!sameBytes(payload, encodeRestrictedJcs(manifest))) {
-    throw new TypeError("Project native manifest JCS bytes are not canonical")
-  }
-  return manifest
+  return Uint8Array.from(payload)
 }
 
 export function projectNativeStoreManifestLocalRecordDigest(input: ProjectNativeStoreManifest): Digest {
@@ -264,6 +396,9 @@ export async function verifyEmptyProjectIndexGenesis(input: {
 }): Promise<VerifiedEmptyProjectIndexGenesis> {
   const scope = requireProjectIndexScope(input.scope)
   const snapshot = validateProjectIndexYDoc(input.document, scope)
+  if (snapshot.identity.migrationImportBaseProofDigest !== null) {
+    throw new TypeError("Empty ProjectIndex genesis cannot carry a migration import proof")
+  }
   if (
     snapshot.entries.size !== 1 ||
     !snapshot.entries.has(snapshot.identity.rootDirectoryId) ||
@@ -277,11 +412,61 @@ export async function verifyEmptyProjectIndexGenesis(input: {
   ) {
     throw new TypeError("ProjectIndex genesis is not the exact empty catalog")
   }
+  return verifyProjectIndexGenesis({
+    ...input,
+    scope,
+    projectIndexGenesisKind: "empty",
+    migrationImportBaseProofDigest: null,
+  }) as Promise<VerifiedEmptyProjectIndexGenesis>
+}
+
+/**
+ * Current non-empty base admitted only after the sealed predecessor reader has
+ * rebuilt and re-signed its semantic snapshot. Ordinary Project creation keeps
+ * using verifyEmptyProjectIndexGenesis and can never select this base kind.
+ */
+export async function verifyImmediatePredecessorImportedProjectIndexGenesis(input: {
+  readonly scope: DocumentScope
+  readonly document: Y.Doc
+  readonly checkpointExactBytes: Readonly<Uint8Array>
+  readonly initializationAuthorityDigest: Digest
+  readonly migrationImportBaseProofDigest: Digest
+  readonly verifier: ProjectIndexGenesisCheckpointVerifier
+}): Promise<VerifiedImmediatePredecessorImportedProjectIndexGenesis> {
+  const scope = requireProjectIndexScope(input.scope)
+  const snapshot = validateProjectIndexYDoc(input.document, scope)
+  if (snapshot.identity.migrationImportBaseProofDigest !== parseDigest(input.migrationImportBaseProofDigest)) {
+    throw new TypeError("Imported ProjectIndex owner state does not bind the requested import proof")
+  }
+  return verifyProjectIndexGenesis({
+    ...input,
+    scope,
+    projectIndexGenesisKind: "immediate-predecessor-import",
+    migrationImportBaseProofDigest: parseDigest(input.migrationImportBaseProofDigest),
+  }) as Promise<VerifiedImmediatePredecessorImportedProjectIndexGenesis>
+}
+
+async function verifyProjectIndexGenesis(input: {
+  readonly scope: ProjectIndexDocumentScope
+  readonly document: Y.Doc
+  readonly checkpointExactBytes: Readonly<Uint8Array>
+  readonly initializationAuthorityDigest: Digest
+  readonly projectIndexGenesisKind: ProjectNativeStoreManifest["projectIndexGenesisKind"]
+  readonly migrationImportBaseProofDigest: Digest | null
+  readonly verifier: ProjectIndexGenesisCheckpointVerifier
+}): Promise<VerifiedProjectIndexGenesis> {
+  const scope = input.scope
+  const snapshot = validateProjectIndexYDoc(input.document, scope)
+  if (snapshot.identity.migrationImportBaseProofDigest !== input.migrationImportBaseProofDigest) {
+    throw new TypeError("ProjectIndex genesis manifest proof differs from signed owner state")
+  }
   const checkpoint = decodeExactCheckpoint(input.checkpointExactBytes)
   const fullUpdate = encodeFullUpdate(input.document)
   const stateVector = encodeStateVector(input.document)
-  const canonicalState = encodeProjectCanonicalState(input.document)
-  const canonicalStateDigest = computeCanonicalStateDigest(snapshot.identity.schemaDigest, canonicalState)
+  const canonicalStateDigest = projectIndexCanonicalStateCommitmentDigest(
+    input.document,
+    installCurrentProtocolAuthority(),
+  )
   const frontier = Object.freeze({ format: "convax.causal-frontier" as const, heads: Object.freeze([]) })
   const frontierDigest = causalFrontierDigest(frontier)
   const actorHeads = Object.freeze({
@@ -307,11 +492,24 @@ export async function verifyEmptyProjectIndexGenesis(input: {
     core.schemaDigest !== snapshot.identity.schemaDigest ||
     core.canonicalizerDigest !== canonicalizerDigest
   ) {
-    throw new TypeError("ProjectIndex genesis checkpoint does not bind the exact empty candidate")
+    throw new TypeError("ProjectIndex genesis checkpoint does not bind the exact current candidate")
   }
   if (!(await input.verifier.verify(checkpoint)))
     throw new TypeError("ProjectIndex genesis checkpoint authority is rejected")
   const checkpointObjectDigest = replicaCheckpointObjectDigest(checkpoint)
+  const materializationDigest = acceptedHeadMaterializedStateDigest({
+    scope,
+    headDigest: checkpointObjectDigest,
+    frontier,
+    frontierDigest,
+    actorHeads,
+    fullUpdate,
+    stateVector,
+    canonicalStateDigest,
+    // The base digest is computed from the exact materialized state and does not
+    // consume this field; bind a valid digest so the complete view stays typed.
+    materializationDigest: checkpointObjectDigest,
+  })
   const manifest = parseProjectNativeStoreManifest({
     format: "convax.project-native-store-manifest",
     storeIdentity: STORE_IDENTITY,
@@ -320,10 +518,12 @@ export async function verifyEmptyProjectIndexGenesis(input: {
     schemaDigest: snapshot.identity.schemaDigest,
     uriProtocolDigest: snapshot.identity.uriProtocolDigest,
     initializationAuthorityDigest: parseDigest(input.initializationAuthorityDigest),
-    emptyProjectIndexCheckpointObjectDigest: checkpointObjectDigest,
-    emptyProjectIndexFullUpdateDigest: yjsUpdateDigest(fullUpdate),
-    emptyProjectIndexStateVectorDigest: stateVectorDigest(stateVector),
-    emptyProjectIndexCanonicalStateDigest: canonicalStateDigest,
+    projectIndexGenesisKind: input.projectIndexGenesisKind,
+    migrationImportBaseProofDigest: input.migrationImportBaseProofDigest,
+    projectIndexGenesisCheckpointObjectDigest: checkpointObjectDigest,
+    projectIndexGenesisFullUpdateDigest: yjsUpdateDigest(fullUpdate),
+    projectIndexGenesisStateVectorDigest: stateVectorDigest(stateVector),
+    projectIndexGenesisCanonicalStateDigest: canonicalStateDigest,
   })
   return Object.freeze({
     manifest,
@@ -337,6 +537,7 @@ export async function verifyEmptyProjectIndexGenesis(input: {
       fullUpdate,
       stateVector,
       canonicalStateDigest,
+      materializationDigest,
     }),
   })
 }
@@ -349,7 +550,7 @@ export async function initializeUnteamedProjectIndexNativeStore(input: {
   readonly collaborationDirectory: string
   readonly localActorId: ActorId
   readonly materializer: NodeReplicaHeadMaterializer
-  readonly genesis: VerifiedEmptyProjectIndexGenesis
+  readonly genesis: VerifiedProjectIndexGenesis
   readonly persistenceHooks?: NodeCollaborationPersistenceFaultHooks
   readonly faults?: ProjectIndexNativeStoreInitializationFaults
 }): Promise<NodeAcceptedReplicaHead> {
@@ -396,6 +597,42 @@ export async function initializeUnteamedProjectIndexNativeStore(input: {
 }
 
 /**
+ * Initializes an imported ProjectIndex inside the cutover-owned empty stage.
+ * Ordinary Project creation cannot call this path with an empty genesis, and
+ * this function never publishes or renames the stage itself.
+ */
+export async function initializeImmediatePredecessorImportedProjectIndexNativeStoreInPlace(input: {
+  readonly collaborationDirectory: string
+  readonly localActorId: ActorId
+  readonly materializer: NodeReplicaHeadMaterializer
+  readonly genesis: VerifiedImmediatePredecessorImportedProjectIndexGenesis
+  readonly persistenceHooks?: NodeCollaborationPersistenceFaultHooks
+  readonly faults?: Pick<ProjectIndexNativeStoreInitializationFaults, "afterManifestFsync" | "afterGenesisFsync">
+}): Promise<NodeAcceptedReplicaHead> {
+  if (!path.isAbsolute(input.collaborationDirectory)) throw new TypeError("Collaboration directory must be absolute")
+  const target = path.resolve(input.collaborationDirectory)
+  if (target !== input.collaborationDirectory) throw new TypeError("Collaboration directory must be canonical")
+  if (
+    input.genesis.manifest.projectIndexGenesisKind !== "immediate-predecessor-import" ||
+    input.genesis.manifest.migrationImportBaseProofDigest === null
+  ) throw new TypeError("Migration stage requires an immediate-predecessor imported ProjectIndex genesis")
+  await requirePlainDirectory(path.dirname(target), "Project private directory")
+  await requirePlainDirectory(target, "Project collaboration migration stage")
+  const expectedManifestBytes = encodeProjectNativeStoreManifest(input.genesis.manifest)
+  const entries = await fs.readdir(target)
+  if (entries.length === 0) {
+    await writeNewManifest(path.join(target, "manifest-v2.bin"), expectedManifestBytes)
+    await input.faults?.afterManifestFsync?.()
+  } else {
+    await requireExactManifest(target, expectedManifestBytes)
+  }
+  const head = await initializeOrVerifyStagedStore(target, input)
+  await input.faults?.afterGenesisFsync?.()
+  await fsyncProjectDirectory(target)
+  return head
+}
+
+/**
  * Recognizes only the exact empty local-owner genesis emitted by
  * initializeUnteamedProjectIndexNativeStore. This is a narrow recovery probe for
  * a Project whose bootstrap was published before the resolver guard ran; it is
@@ -415,6 +652,9 @@ export async function verifyPristineUnteamedProjectIndexNativeStore(input: {
     throw new TypeError("Collaboration directory must be canonical and absolute")
   }
   const manifest = parseProjectNativeStoreManifest(input.manifest)
+  if (manifest.projectIndexGenesisKind !== "empty" || manifest.migrationImportBaseProofDigest !== null) {
+    throw new TypeError("Pristine ProjectIndex probe requires an empty genesis")
+  }
   await requireExactManifest(input.collaborationDirectory, encodeProjectNativeStoreManifest(manifest))
   const store = await NodeCollaborationPersistence.openReadOnly({
     collaborationDirectory: input.collaborationDirectory,
@@ -437,7 +677,7 @@ export async function verifyPristineUnteamedProjectIndexNativeStore(input: {
       }),
     )
     const documentKey = deriveDocumentNativeKey(manifest.projectIndexScope)
-    const checkpointKey = deriveObjectNativeKey("checkpoint", manifest.emptyProjectIndexCheckpointObjectDigest)
+    const checkpointKey = deriveObjectNativeKey("checkpoint", manifest.projectIndexGenesisCheckpointObjectDigest)
     const checkpointExactBytes = await readPlainBoundedFile(
       path.join(
         input.collaborationDirectory,
@@ -494,6 +734,18 @@ export async function readProjectNativeStoreManifest(
   return manifest
 }
 
+export async function readImmediatePredecessorProjectNativeStoreManifest(
+  collaborationDirectory: string,
+): Promise<ImmediatePredecessorProjectNativeStoreManifest> {
+  if (!path.isAbsolute(collaborationDirectory) || path.resolve(collaborationDirectory) !== collaborationDirectory) {
+    throw new TypeError("Collaboration directory must be canonical and absolute")
+  }
+  await requirePlainDirectory(collaborationDirectory, "Collaboration store")
+  return decodeImmediatePredecessorProjectNativeStoreManifest(
+    await readPlainBoundedFile(path.join(collaborationDirectory, "manifest-v2.bin")),
+  )
+}
+
 export async function describeProjectIndexInstalledBase(input: {
   readonly persistence: Pick<NodeCollaborationPersistence, "loadInstalledBase">
   readonly scope: DocumentScope
@@ -504,7 +756,10 @@ export async function describeProjectIndexInstalledBase(input: {
   return installed
 }
 
-function parseProjectNativeStoreManifest(value: unknown): ProjectNativeStoreManifest {
+function parseProjectNativeStoreManifest(
+  value: unknown,
+  expectedSchemaDigest: Digest = PROJECT_INDEX_PROTOCOL_SCHEMA_ARTIFACT_DIGEST,
+): ProjectNativeStoreManifest {
   const keys = [
     "format",
     "storeIdentity",
@@ -513,10 +768,12 @@ function parseProjectNativeStoreManifest(value: unknown): ProjectNativeStoreMani
     "schemaDigest",
     "uriProtocolDigest",
     "initializationAuthorityDigest",
-    "emptyProjectIndexCheckpointObjectDigest",
-    "emptyProjectIndexFullUpdateDigest",
-    "emptyProjectIndexStateVectorDigest",
-    "emptyProjectIndexCanonicalStateDigest",
+    "projectIndexGenesisKind",
+    "migrationImportBaseProofDigest",
+    "projectIndexGenesisCheckpointObjectDigest",
+    "projectIndexGenesisFullUpdateDigest",
+    "projectIndexGenesisStateVectorDigest",
+    "projectIndexGenesisCanonicalStateDigest",
   ] as const
   if (
     !isPlainObject(value) ||
@@ -528,13 +785,55 @@ function parseProjectNativeStoreManifest(value: unknown): ProjectNativeStoreMani
   }
   const scope = requireProjectIndexScope(value.projectIndexScope)
   const schemaDigest = parseDigest(value.schemaDigest)
-  if (schemaDigest !== PROJECT_INDEX_PROTOCOL_SCHEMA_ARTIFACT_DIGEST) {
+  if (schemaDigest !== parseDigest(expectedSchemaDigest)) {
     throw new TypeError("Project native manifest schema is unsupported")
   }
+  const projectIndexGenesisKind = parseProjectIndexGenesisKind(value.projectIndexGenesisKind)
+  const migrationImportBaseProofDigest = value.migrationImportBaseProofDigest === null
+    ? null
+    : parseDigest(value.migrationImportBaseProofDigest)
+  if (
+    (projectIndexGenesisKind === "empty" && migrationImportBaseProofDigest !== null) ||
+    (projectIndexGenesisKind === "immediate-predecessor-import" && migrationImportBaseProofDigest === null)
+  ) throw new TypeError("Project native manifest genesis kind and migration proof disagree")
   return Object.freeze({
     format: value.format,
     storeIdentity: value.storeIdentity,
     projectIndexScope: scope,
+    protocolDigest: parseDigest(value.protocolDigest),
+    schemaDigest,
+    uriProtocolDigest: parseDigest(value.uriProtocolDigest),
+    initializationAuthorityDigest: parseDigest(value.initializationAuthorityDigest),
+    projectIndexGenesisKind,
+    migrationImportBaseProofDigest,
+    projectIndexGenesisCheckpointObjectDigest: parseDigest(value.projectIndexGenesisCheckpointObjectDigest),
+    projectIndexGenesisFullUpdateDigest: parseDigest(value.projectIndexGenesisFullUpdateDigest),
+    projectIndexGenesisStateVectorDigest: parseDigest(value.projectIndexGenesisStateVectorDigest),
+    projectIndexGenesisCanonicalStateDigest: parseDigest(value.projectIndexGenesisCanonicalStateDigest),
+  })
+}
+
+function parseImmediatePredecessorProjectNativeStoreManifest(
+  value: unknown,
+): ImmediatePredecessorProjectNativeStoreManifest {
+  const keys = [
+    "format", "storeIdentity", "projectIndexScope", "protocolDigest", "schemaDigest",
+    "uriProtocolDigest", "initializationAuthorityDigest",
+    "emptyProjectIndexCheckpointObjectDigest", "emptyProjectIndexFullUpdateDigest",
+    "emptyProjectIndexStateVectorDigest", "emptyProjectIndexCanonicalStateDigest",
+  ] as const
+  if (
+    !isPlainObject(value) || !hasExactKeys(value, keys) ||
+    value.format !== "convax.project-native-store-manifest" || value.storeIdentity !== STORE_IDENTITY
+  ) throw new TypeError("Immediate-predecessor Project native manifest schema is invalid")
+  const schemaDigest = parseDigest(value.schemaDigest)
+  if (schemaDigest !== IMMEDIATE_PREDECESSOR_PROTOCOL.projectPersistenceSchemaDigest) {
+    throw new TypeError("Immediate-predecessor Project native manifest schema is unsupported")
+  }
+  return Object.freeze({
+    format: value.format,
+    storeIdentity: value.storeIdentity,
+    projectIndexScope: requireProjectIndexScope(value.projectIndexScope),
     protocolDigest: parseDigest(value.protocolDigest),
     schemaDigest,
     uriProtocolDigest: parseDigest(value.uriProtocolDigest),
@@ -544,6 +843,15 @@ function parseProjectNativeStoreManifest(value: unknown): ProjectNativeStoreMani
     emptyProjectIndexStateVectorDigest: parseDigest(value.emptyProjectIndexStateVectorDigest),
     emptyProjectIndexCanonicalStateDigest: parseDigest(value.emptyProjectIndexCanonicalStateDigest),
   })
+}
+
+function parseProjectIndexGenesisKind(
+  value: unknown,
+): ProjectNativeStoreManifest["projectIndexGenesisKind"] {
+  if (value !== "empty" && value !== "immediate-predecessor-import") {
+    throw new TypeError("Project native manifest genesis kind is invalid")
+  }
+  return value
 }
 
 function requireProjectIndexScope(value: unknown): ProjectIndexDocumentScope {
@@ -583,7 +891,7 @@ async function initializeOrVerifyStagedStore(
     }
     return await store.initializeShard({
       scope: input.genesis.manifest.projectIndexScope,
-      checkpointObjectDigest: input.genesis.manifest.emptyProjectIndexCheckpointObjectDigest,
+      checkpointObjectDigest: input.genesis.manifest.projectIndexGenesisCheckpointObjectDigest,
       checkpointExactBytes: input.genesis.checkpointExactBytes,
       acceptedBase: input.genesis.acceptedBase,
     })
@@ -651,7 +959,11 @@ async function requirePristineBootstrapInventory(
     "blob-replication/cache/sha256",
     "blob-replication/transfers",
   ])
-  const exactFiles = new Set(["manifest-v2.bin", `${documentRoot}/heads/durable-head.bin`])
+  const exactFiles = new Set([
+    "manifest-v2.bin",
+    `${documentRoot}/heads/durable-head.bin`,
+    `${documentRoot}/journals/accepted-frames.wal`,
+  ])
   const singletonFamilies = new Map<string, RegExp>([
     ["checkpoint", new RegExp(`^${escapeRegExp(documentRoot)}/objects/checkpoints/[0-9a-f]{64}\\.bin$`, "u")],
     ["checkpoint-set", new RegExp(`^${escapeRegExp(documentRoot)}/snapshots/sets/[0-9a-f]{64}\\.bin$`, "u")],
@@ -729,7 +1041,7 @@ function escapeRegExp(value: string): string {
 
 function assertInstalledMatchesGenesis(
   installed: NodeAcceptedReplicaHead,
-  genesis: VerifiedEmptyProjectIndexGenesis,
+  genesis: VerifiedProjectIndexGenesis,
 ): void {
   const expected = genesis.acceptedBase
   if (

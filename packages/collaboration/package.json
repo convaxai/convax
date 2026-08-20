@@ -14,11 +14,16 @@
       "types": "./dist/index.d.ts",
       "import": "./dist/index.js",
       "default": "./dist/index.js"
+    },
+    "./migration": {
+      "types": "./dist/migration.d.ts",
+      "import": "./dist/migration.js",
+      "default": "./dist/migration.js"
     }
   },
   "scripts": {
     "clean": "rm -rf dist",
-    "build:js": "bun build --production --keep-names --target=browser --format=esm --packages=external --sourcemap=linked --root=src --outdir=dist src/index.ts",
+    "build:js": "bun build --production --keep-names --target=browser --format=esm --packages=external --sourcemap=linked --root=src --outdir=dist src/index.ts src/migration.ts",
     "build:types": "tsc -p tsconfig.build.json",
     "build": "bun run typecheck && bun run clean && bun run build:js && bun run build:types",
     "pack:check": "bun run build && bun scripts/pack-check.ts",

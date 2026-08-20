@@ -1,5 +1,5 @@
 import { createHash, randomUUID } from "node:crypto"
-import { watch as watchFileSystem, type FSWatcher } from "node:fs"
+import { watch as watchFileSystem } from "node:fs"
 import fs from "node:fs/promises"
 import path from "node:path"
 import { parseDigest, type Digest } from "@convax/collaboration"
@@ -71,15 +71,55 @@ import {
 } from "./project-private-storage"
 import { readStableProjectFile, readStableProjectUtf8File, sameProjectFileSnapshot } from "./stable-project-file"
 import { resolvePortableProjectData, PortableProjectResetError } from "./collaboration/portable-cutover"
+import type { ProjectFilesystemEventCoverage } from "./project-filesystem-event-coverage"
+
+const maximumPendingProjectFilesystemPaths = 1_024
+
+export interface NodeProjectFilesystemWatchFilenameBytes {
+  toString(encoding: "utf8"): string
+}
+
+export type NodeProjectFilesystemWatchFilename =
+  | string
+  | NodeProjectFilesystemWatchFilenameBytes
+  | null
+
+export interface NodeProjectFilesystemWatcher {
+  close(): void
+  once(event: "error", listener: (error: unknown) => void): NodeProjectFilesystemWatcher
+}
+
+export interface NodeProjectFilesystemWatchPort {
+  (
+    rootPath: string,
+    options: { persistent: boolean; recursive?: boolean },
+    listener: (eventType: string, filename: NodeProjectFilesystemWatchFilename) => void,
+  ): NodeProjectFilesystemWatcher
+}
+
+/**
+ * Project-owned open gate for the one sealed immediate-predecessor migration.
+ * Implementations are idempotent and single-flight for the exact Project/root;
+ * the manager calls the gate before it classifies collaboration recovery state.
+ */
+export interface ImmediatePredecessorProjectMigrationPort {
+  ensureCurrent(input: {
+    readonly projectId: string
+    readonly projectRoot: string
+  }): Promise<Readonly<{ status: "current" | "migrated" }>>
+}
 
 export interface NodeProjectManagerOptions {
   caseInsensitivePaths?: boolean
+  collaborationMigration?: ImmediatePredecessorProjectMigrationPort
+  filesystemEventCoverage?: ProjectFilesystemEventCoverage
   maxReadableFileBytes?: number
   maxTextFileBytes?: number
   now?: () => number
   registryFile: string
   trash?: (targetPath: string) => Promise<void>
   watchDebounceMs?: number
+  watchFileSystem?: NodeProjectFilesystemWatchPort
 }
 
 export interface RegisteredProjectPrivateStorageRecoveryPort {
@@ -124,6 +164,7 @@ export class NodeProjectManager
   private projectCreationQueue: Promise<void> = Promise.resolve()
   private readonly projectPrivateStorageQueues = new Map<string, Promise<void>>()
   private registryQueue: Promise<unknown> = Promise.resolve()
+  private projectLookup: Promise<ReadonlyMap<string, ProjectRegistryRecord>> | null = null
   private readonly projectMutationQueues = new Map<string, Promise<void>>()
   private readonly textWriteQueues = new Map<string, Promise<void>>()
 
@@ -258,7 +299,7 @@ export class NodeProjectManager
         return {
           ...toProjectRecord(project),
           missing: !safe,
-          ...(safe ? await projectRecoveryProjection(project.rootPath) : {}),
+          ...(safe ? await this.ensureCurrentThenProjectRecoveryProjection(project.id, project.rootPath) : {}),
         }
       }),
     ).then((records) => records.sort(compareProjects))
@@ -272,6 +313,7 @@ export class NodeProjectManager
         throw new Error(`Project folder is unavailable: ${current.rootPath}`)
       }
       await this.queueProjectPrivateStorage(current.id, async () => {
+        await this.ensureCurrentCollaboration(current.id, current.rootPath)
         await assertPortableProjectOpenable(current.rootPath)
         await this.ensureProjectManifest(current.rootPath, current.id, projects)
       })
@@ -295,6 +337,7 @@ export class NodeProjectManager
       throw new Error(`Project root differs from its durable registry binding: ${input.projectId}`)
     }
     return this.queueProjectPrivateStorage(input.projectId, async () => {
+      await this.ensureCurrentCollaboration(input.projectId, realRoot)
       await assertPortableProjectOpenable(realRoot)
       await this.ensureProjectManifest(realRoot, project.id, [project])
     })
@@ -306,12 +349,12 @@ export class NodeProjectManager
     if (!stat.isDirectory()) throw new Error(`Project root is not a directory: ${rootPath}`)
     const registeredProjects = await this.readStableRegistry()
     const existingByRoot = registeredProjects.find((project) => sameNativePath(project.rootPath, realRoot))
-    const recovery = await projectRecoveryProjection(realRoot)
-    const preferredProjectId = existingByRoot?.id ?? projectIdForPath(realRoot)
-    const manifest = await this.queueProjectPrivateStorage(preferredProjectId, () =>
-      this.ensureProjectManifest(realRoot, preferredProjectId, registeredProjects),
-    )
-    const id = manifest.projectId
+    const existingManifest = await this.readProjectManifestIfPresent(realRoot)
+    if (existingByRoot && existingManifest && existingManifest.projectId !== existingByRoot.id) {
+      throw new Error(`Project manifest belongs to a different project: ${existingManifest.projectId}`)
+    }
+    const preferredProjectId = existingByRoot?.id ?? existingManifest?.projectId ?? projectIdForPath(realRoot)
+    const id = requireProjectId(preferredProjectId)
     const existingById = registeredProjects.find((project) => project.id === id)
     let rebindFromRoot: string | undefined
     if (existingById && !sameNativePath(existingById.rootPath, realRoot)) {
@@ -358,6 +401,23 @@ export class NodeProjectManager
         value: toProjectRecord(project),
       }
     })
+    // The durable registry binding is authority metadata, not a write into the
+    // selected Project. Publish it before migration so the local-owner/Team
+    // authority resolver can prove that this exact canonical root is registered.
+    // Unsupported data remains byte-for-byte untouched and is retained as a
+    // registered recovery Project.
+    const recovery = await this.ensureCurrentThenProjectRecoveryProjection(id, realRoot)
+    if (!("recovery" in recovery)) {
+      // Migration is the first writer-facing action inside the Project. Only a
+      // proven current/migrated store may create `.convax/assets` or a missing
+      // current Project manifest.
+      const manifest = await this.queueProjectPrivateStorage(id, () =>
+        this.ensureProjectManifest(realRoot, id, registeredProjects),
+      )
+      if (manifest.projectId !== id) {
+        throw new Error(`Project manifest belongs to a different project: ${manifest.projectId}`)
+      }
+    }
     return { ...registered, ...recovery }
   }
 
@@ -909,22 +969,63 @@ export class NodeProjectManager
     const rootPath = await fs.realpath(project.rootPath)
     let timer: ReturnType<typeof setTimeout> | undefined
     let restartTimer: ReturnType<typeof setTimeout> | undefined
-    let latestPath: string | undefined
+    const pendingPaths = new Map<string, string>()
+    let pendingUnknownPath = false
     let restartAttempts = 0
     let stopped = false
-    let watcher: FSWatcher | undefined
+    let watcher: NodeProjectFilesystemWatcher | undefined
+    let flushChain = Promise.resolve()
     const notify = () => {
       if (timer) clearTimeout(timer)
       timer = setTimeout(() => {
         timer = undefined
-        listener({ kind: "filesystem", path: latestPath, projectId })
+        const eventPaths = [...pendingPaths.values()]
+        const unknownPath = pendingUnknownPath
+        pendingPaths.clear()
+        pendingUnknownPath = false
+        const flush = async () => {
+          if (stopped) return
+          const uncoveredPaths: string[] = []
+          for (const eventPath of eventPaths) {
+            if (stopped) return
+            if (!(await this.options.filesystemEventCoverage?.consume({ path: eventPath, projectId }))) {
+              uncoveredPaths.push(eventPath)
+            }
+          }
+          if (stopped || (!unknownPath && uncoveredPaths.length === 0)) return
+          if (unknownPath || uncoveredPaths.length > 1) {
+            listener({ kind: "filesystem", projectId })
+            return
+          }
+          listener({ kind: "filesystem", path: uncoveredPaths[0], projectId })
+        }
+        flushChain = flushChain.then(flush, flush)
+        void flushChain.catch(() => undefined)
       }, this.options.watchDebounceMs ?? 120)
     }
-    const onChange = (_eventType: string, filename: string | Buffer | null) => {
+    const onChange = (_eventType: string, filename: NodeProjectFilesystemWatchFilename) => {
       restartAttempts = 0
-      const relativePath = filename ? String(filename).replaceAll("\\", "/").replace(/^\/+/, "") : undefined
+      let relativePath: string | undefined
+      if (filename) {
+        try {
+          const rawFilename = typeof filename === "string" ? filename : filename.toString("utf8")
+          const rawPath = rawFilename.replaceAll("\\", "/").replace(/^\/+/, "")
+          relativePath = normalizeRelativePath(rawPath).normalize("NFC") || undefined
+        } catch {
+          relativePath = undefined
+        }
+      }
       if (relativePath && isIgnoredName(relativePath.split("/")[0] ?? "")) return
-      latestPath = relativePath
+      if (relativePath && !pendingUnknownPath) {
+        pendingPaths.delete(relativePath)
+        pendingPaths.set(relativePath, relativePath)
+        if (pendingPaths.size > maximumPendingProjectFilesystemPaths) {
+          pendingPaths.clear()
+          pendingUnknownPath = true
+        }
+      } else {
+        pendingUnknownPath = true
+      }
       notify()
     }
     const scheduleRestart = () => {
@@ -939,21 +1040,25 @@ export class NodeProjectManager
     const startWatcher = () => {
       if (stopped) return
       try {
+        const openWatcher = this.options.watchFileSystem ?? ((watchRootPath, options, listener) =>
+          watchFileSystem(watchRootPath, options, listener))
         try {
-          watcher = watchFileSystem(rootPath, { persistent: false, recursive: true }, onChange)
+          watcher = openWatcher(rootPath, { persistent: false, recursive: true }, onChange)
         } catch {
-          watcher = watchFileSystem(rootPath, { persistent: false }, onChange)
+          watcher = openWatcher(rootPath, { persistent: false }, onChange)
         }
         watcher.once("error", () => {
           watcher?.close()
           watcher = undefined
-          latestPath = undefined
+          pendingPaths.clear()
+          pendingUnknownPath = true
           notify()
           scheduleRestart()
         })
       } catch {
         watcher = undefined
-        latestPath = undefined
+        pendingPaths.clear()
+        pendingUnknownPath = true
         notify()
         scheduleRestart()
       }
@@ -968,7 +1073,8 @@ export class NodeProjectManager
   }
 
   private async getProject(projectId: string) {
-    const project = (await this.readStableRegistry()).find((candidate) => candidate.id === projectId)
+    await this.registryQueue
+    const project = (await this.projectLookupMap()).get(projectId)
     if (!project) throw new Error(`Project was not found: ${projectId}`)
     if (!(await isSafeProjectRoot(project.rootPath)))
       throw new Error(`Project folder is unavailable: ${project.rootPath}`)
@@ -1012,6 +1118,37 @@ export class NodeProjectManager
     await ensureSafeDirectory(path.join(privateRoot, "assets"), "Project asset storage")
     if (manifestChanged) await this.writeProjectManifest(rootPath, manifest)
     return manifest
+  }
+
+  private async readProjectManifestIfPresent(rootPath: string): Promise<ProjectManifest | null> {
+    const manifestFile = path.join(rootPath, ...projectManifestPath.split("/"))
+    await assertNoSymlinkSegments(rootPath, projectManifestPath)
+    try {
+      return parseProjectManifest(JSON.parse(await fs.readFile(manifestFile, "utf8")))
+    } catch (error) {
+      if (isNodeError(error) && error.code === "ENOENT") return null
+      throw error
+    }
+  }
+
+  private async ensureCurrentCollaboration(projectId: string, projectRoot: string): Promise<void> {
+    await this.options.collaborationMigration?.ensureCurrent({ projectId, projectRoot })
+  }
+
+  private async ensureCurrentThenProjectRecoveryProjection(projectId: string, projectRoot: string) {
+    let migrationError: unknown
+    try {
+      await this.ensureCurrentCollaboration(projectId, projectRoot)
+    } catch (error) {
+      migrationError = error
+    }
+    const projection = await projectRecoveryProjection(projectRoot)
+    // Unsupported/corrupt data and an incomplete cutover stay visible as a
+    // recovery Project instead of making the complete Project list fail. If
+    // the Project is already current, an unexpected migration error is real
+    // and must not be hidden by an empty recovery projection.
+    if (migrationError !== undefined && !("recovery" in projection)) throw migrationError
+    return projection
   }
 
   private async writeProjectManifest(rootPath: string, manifest: ProjectManifest) {
@@ -1160,7 +1297,25 @@ export class NodeProjectManager
       this.options.registryFile,
       `${JSON.stringify({ projects, version: 1 } satisfies ProjectRegistryFile, null, 2)}\n`,
     )
+    this.projectLookup = Promise.resolve(projectLookupFrom(projects))
   }
+
+  private projectLookupMap(): Promise<ReadonlyMap<string, ProjectRegistryRecord>> {
+    if (this.projectLookup !== null) return this.projectLookup
+    const pending = this.readRegistry().then(
+      (projects) => projectLookupFrom(projects),
+      (error) => {
+        if (this.projectLookup === pending) this.projectLookup = null
+        throw error
+      },
+    )
+    this.projectLookup = pending
+    return pending
+  }
+}
+
+function projectLookupFrom(projects: readonly ProjectRegistryRecord[]): ReadonlyMap<string, ProjectRegistryRecord> {
+  return new Map(projects.map((project) => [project.id, project] as const))
 }
 
 async function assertPortableProjectOpenable(projectRoot: string) {

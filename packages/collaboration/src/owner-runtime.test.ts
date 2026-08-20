@@ -11,6 +11,7 @@ import {
   assertOwnerExternalFactPort,
   createSelectedDocumentOwnerArtifactFactory,
   consumeOwnerCanonicalJcsEvidence,
+  consumeOwnerStateCommitmentDigest,
   installOwnerValidatedPostCache,
   issueAcceptedReplicaApplyEvidence,
 } from "./owner-runtime"
@@ -26,6 +27,15 @@ const descriptor = Object.freeze({
   canonicalStateCodec: "restricted-jcs-utf8" as const,
   exactBytePolicy: "parse-reencode-byte-equal" as const,
   unknownStatePolicy: "reject" as const,
+  stateCommitment: Object.freeze({
+    format: "convax.owner-state-commitment-descriptor" as const,
+    commitmentCodec: "sha256-merkle-patricia-v1" as const,
+    canonicalKeyPathPolicy: "nfc-utf8-no-nul-bounded-v1" as const,
+    maxCanonicalNameUtf8Bytes: "128" as const,
+    maxCanonicalKeyUtf8Bytes: "1024" as const,
+    scalarNames: Object.freeze(["format"]),
+    collectionNames: Object.freeze([]),
+  }),
 })
 const canonicalizerDigest = ownerCanonicalizerDescriptorDigest(descriptor)
 
@@ -45,9 +55,25 @@ function definition(
           canonicalizerDescriptor: descriptor,
           canonicalizerDigest,
           decodeIntent: () => ({ kind: "noop" }),
-          validateBase: () => process.wrapValidatedState(null),
+          validateBase(document) {
+            const state = process.wrapValidatedState(null)
+            const commitment = process.stateCommitment.build({
+              descriptor: descriptor.stateCommitment,
+              scalars: [{ name: "format", value: descriptor.canonicalStateFormat }],
+              collections: [],
+            })
+            return process.bindStateCommitment(document, state, commitment)
+          },
           applyIntent: () => process.wrapApplyResult(null),
-          validatePost: () => process.wrapValidatedState(null),
+          validatePost(_base, document) {
+            const state = process.wrapValidatedState(null)
+            const commitment = process.stateCommitment.build({
+              descriptor: descriptor.stateCommitment,
+              scalars: [{ name: "format", value: descriptor.canonicalStateFormat }],
+              collections: [],
+            })
+            return process.bindStateCommitment(document, state, commitment)
+          },
           canonicalStateBytes: () => encodeRestrictedJcs({ format: descriptor.canonicalStateFormat }),
           deriveActualWriteEvidence: () => {
             throw new Error("not used")
@@ -64,6 +90,22 @@ function definition(
 }
 
 describe("Current document-owner runtime", () => {
+  test("publishes the one live commitment consumer through the package root", async () => {
+    const authority = await loadVerifiedTestAuthority()
+    const runtime = createSelectedDocumentOwnerArtifactFactory(authority, "canvas").createRuntime(definition())
+    if ("status" in runtime) throw new Error(runtime.code)
+    const document = new Y.Doc()
+    try {
+      const state = runtime.protocolPort.validateBase(document)
+      if (typeof state === "string") throw new Error("base unavailable")
+      expect(publicSurface.consumeOwnerStateCommitmentDigest).toBe(consumeOwnerStateCommitmentDigest)
+      expect(consumeOwnerStateCommitmentDigest(runtime, document, state)).toMatch(/^[0-9a-f]{64}$/)
+      expect(consumeOwnerStateCommitmentDigest(runtime, document, state)).toBeNull()
+    } finally {
+      document.destroy()
+    }
+  })
+
   test("binds canonical evidence to one runtime, document generation, and consumption", async () => {
     const authority = await loadVerifiedTestAuthority()
     let values: OwnerProcessValueFactory<"canvas"> | undefined
@@ -112,7 +154,7 @@ describe("Current document-owner runtime", () => {
     if ("status" in second) throw new Error(second.code)
     const document = new Y.Doc()
     try {
-      expect(() => second.protocolPort.validateBase(document)).toThrow("another runtime")
+      expect(() => second.protocolPort.validateBase(document)).toThrow("exact active validated state")
     } finally {
       document.destroy()
     }
@@ -156,8 +198,8 @@ describe("Current document-owner runtime", () => {
       const own = first.protocolPort.validateBase(source)
       const stale = second.protocolPort.validateBase(source)
       if (typeof own === "string" || typeof stale === "string") throw new Error("base unavailable")
-      const applyEvidence = issueAcceptedReplicaApplyEvidence(first, { scopeDigest: SCHEMA, target, state: own, canonicalStateDigest: SCHEMA, fullUpdateDigest: SCHEMA, postStateVectorDigest: SCHEMA, yjsUpdateDigest: SCHEMA, generation: 1 })
-      const acceleration = { applyEvidence, scopeDigest: SCHEMA, fullUpdateDigest: SCHEMA, postStateVectorDigest: SCHEMA, yjsUpdateDigest: SCHEMA }
+      const applyEvidence = issueAcceptedReplicaApplyEvidence(first, { scopeDigest: SCHEMA, target, state: own, canonicalStateDigest: SCHEMA, materializationDigest: SCHEMA, postStateVectorDigest: SCHEMA, yjsUpdateDigest: SCHEMA, generation: 1 })
+      const acceleration = { applyEvidence, scopeDigest: SCHEMA, materializationDigest: SCHEMA, postStateVectorDigest: SCHEMA, yjsUpdateDigest: SCHEMA }
       installOwnerValidatedPostCache(first, { scope: {} as never, source, target, state: own, canonicalStateDigest: SCHEMA, durableHeadDigest: SCHEMA, ...acceleration })
       expect(installs).toBe(1)
       expect(() => installOwnerValidatedPostCache(first, { scope: {} as never, source, target, state: stale, canonicalStateDigest: SCHEMA, durableHeadDigest: SCHEMA, ...acceleration })).toThrow(

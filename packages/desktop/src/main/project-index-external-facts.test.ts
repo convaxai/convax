@@ -189,6 +189,7 @@ function productionFixture(options: {
     fullUpdate: new Uint8Array([1, 2, 3]),
     stateVector: new Uint8Array([4, 5]) as StateVector,
     canonicalStateDigest: digest("canonical"),
+    materializationDigest: digest("materialization"),
   })
   const checkpointBytes = new Uint8Array([6, 7])
   const carrierBytes = new TextEncoder().encode("CVXCGP03-test")
@@ -235,7 +236,10 @@ function productionFixture(options: {
         checkpointObjectDigest,
         scope: canvasScope,
         identity: Object.freeze({
-          projectIndexRouteDependencyFrameDigest: options.proofFrameDigest ?? stageFrameDigest,
+          projectIndexRouteDependency: Object.freeze({
+            kind: "frame" as const,
+            digest: options.proofFrameDigest ?? stageFrameDigest,
+          }),
         }),
         authorActorId: parseActorId(Buffer.alloc(32, 3).toString("base64url")),
         authorAuthorityDigest: digest("authority"),
@@ -283,7 +287,7 @@ function productionFixture(options: {
     intentDigest: digest("activation-intent"),
     canvasScope,
     stageRecordDigest: digest("stage-record"),
-    routeDependencyFrameDigest: stageFrameDigest,
+    routeDependency: Object.freeze({ kind: "frame" as const, digest: stageFrameDigest }),
     genesisCheckpointObjectDigest: checkpointObjectDigest,
     stagedProjectIndexFrontierDigest: stageFrontierDigest,
   })

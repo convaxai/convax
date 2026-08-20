@@ -33,32 +33,41 @@ authority and lifecycle coordination, not reusable domain semantics.
 - Main's Canvas application service/repository is the sole authoritative document
   writer. Use revision/CAS commands and transactions; never ask Renderer to flush,
   lock, approve, or arbitrate a Main read or mutation.
-- Publish committed frame-digest invalidations after domain success. Session-local
-  responses return the complete projection and accepted frame digest so Renderer
-  can suppress the matching query while retaining a trailing remote refresh. Renderer reload,
-  selection, reveal, or reconciliation is fallible projection work and cannot undo
-  or misreport a durable mutation.
+- Publish committed frame-digest invalidations after domain success. Generic
+  session-local responses return the complete projection and accepted frame digest.
+  Resource append uses the Canvas owner's explicit document-free certified result:
+  read its patch from the exact result snapshot and receipt before any whole
+  projection getter, then bind it to the live ref, session, accepted frame, and
+  history flags. Renderer suppresses the matching query while retaining a trailing
+  remote refresh. Reload, selection, reveal, or reconciliation is fallible
+  projection work and cannot undo or misreport a durable mutation.
 - Compose Project's stable resource reader with Main's bounded media-header
   inspector before a Canvas image/video-create command. Inspect only the admitted
   Project file or verified managed blob, never synchronously decode or decompress
   the whole media, fail closed to the Canvas default size, and never use
   renderer-supplied intrinsic dimensions as authority.
 - When a Main-prepared Canvas resource result is delivered to its mounted renderer,
-  merge only its transient `resourceState` into the fresh session projection and
-  only after the durable receipt entity/incarnation and complete persisted node
-  content match. Never accept result geometry, identity, metadata, or edges as
-  session authority.
+  forward the Canvas-certified patch byte-for-byte and keep transient
+  `resourceState` in a sibling sidecar. Bind sidecar ids to the exact certified
+  created entities; a mismatch drops the sidecar without changing durable success
+  or rewriting the owner patch. Never accept prepared geometry, identity, metadata,
+  or edges as session authority, and never build a full document for normal append
+  delivery.
+- Decorate renderer projections at the Project collaboration composition, where the
+  live ProjectIndex and Canvas session ports meet. ProjectIndex resolves each exact
+  canonical resource proof to its current materialized portable path; cold resets
+  carry a complete hierarchy snapshot and certified append delivery queries only
+  the patch's k resource nodes. A classification failure never reverses a durable
+  Canvas commit or mutates the owner patch; it produces an unavailable/invalidated
+  disposable hierarchy index for the Renderer.
 - A targeted resource-hydration IPC request carries the exact mounted Canvas
-  `ref`, current session id, and only bounded unique Canvas node ids. Main derives
-  the renderer actor from the trusted sender and synchronously requires that exact
-  live owner lease before the authoritative query, immediately before hydration,
-  and after hydration. It never asks the invoking Renderer to resolve Workbench
-  scope from inside that request. Main passes the optional ids with the current
-  authoritative projection to Project's hydrator; it never reinterprets legacy or
-  canonical resource identity itself. Project alone validates existing targets,
-  resolves canonical references, and hydrates only the exact stale subset.
-  Already-ready or concurrently deleted targets are idempotent; absence of the
-  optional list is the explicit full-refresh compatibility path.
+  `ref`, current session id, and a bounded unique set of exact node incarnations.
+  Main derives the renderer actor from the trusted sender and requires that exact
+  live owner lease before and after each asynchronous owner step. It never asks the
+  invoking Renderer to resolve Workbench scope and never queries the whole Canvas.
+  The Canvas owner clones only those live targets; Project alone resolves their
+  current ProjectIndex proofs and hydrates that exact stale subset. A widened,
+  reincarnated, concurrently changed, or invalid target fails closed.
 - Forward the closed resource anchor-origin marker with the prepared resource so
   Canvas can normalize a pointer center from the Main-authoritative final size.
   Main never computes viewport coordinates or accepts Renderer sizing authority.
@@ -79,6 +88,14 @@ authority and lifecycle coordination, not reusable domain semantics.
   background commits invalidate mounted projections but never mutate renderer undo
   stacks. Resource commit delivery verifies the operation receipt against the live
   owner and returns `unavailable` for a stale lease without reversing the commit.
+- Resource-add delivery carries one bounded Canvas-certified base/result patch plus
+  optional prepared runtime for the exact returned created-node ids after durable
+  acceptance. Stale-resource hydration validates one
+  bounded exact `{nodeId, incarnation}` target set against the originating live
+  session, clones only those nodes from the accepted-snapshot projection, and
+  rechecks targets plus Workbench scope after hydration before returning runtime
+  patches. It never runs a full Canvas query or turns runtime presentation into
+  authority.
 - Keep native paths and private storage behind typed scoped capabilities. Renderer,
   Preload, Agent tools, sandboxed frames, and companions never receive paths merely
   because Main resolved them.
@@ -327,17 +344,14 @@ For any matching change, read the full routed reference before planning or editi
 
 ## Validation
 
-- Before local ProjectIndex first registration, repeat the Project-owned portable
-  cutover guard. A legacy recovery adapter may resolve only an exact pristine
-  local-owner bootstrap through the Project/node verifier; path presence alone is
-  neither Team evidence nor permission to reset current collaboration state.
-- The explicit user-confirmed unshared-local reset branch requires no
-  sharing-handoff or Team/control namespace and exact `missing` from the durable
-  Team authority store. It never decodes unsupported bytes or requires an empty
-  bootstrap. Prepare a fresh owner binding, keep it inert through genesis publication
-  and byte-exact `.convax-archive-*` verification, then activate it; interruption
-  keeps the old binding or recovery state fail-closed. Any active or rejected Team
-  state requires control-plane rollover.
+- Main composes but does not implement the Project-owned immediate-predecessor gate.
+  Discovery/open/touch and direct ProjectIndex first registration invoke that same
+  idempotent port before any current-only resolver, owner mint, or collaboration
+  write. The port accepts only the exact code-pinned predecessor, verifies its
+  historical authority, rebuilds a current store, and removes its transient rollback
+  only after current reopen succeeds. Unknown/corrupt data and unavailable or
+  contradictory Team authority keep the original tree unchanged and closed; Main
+  never retries them as local-owner or fabricates an empty replacement.
 - Opening a Project with no durable Team binding must not bootstrap, join, or open
   Team control-plane state. This keeps the shell local-first; mutation authority
   comes from the exact durable local-owner binding under the validated current
@@ -355,6 +369,12 @@ For any matching change, read the full routed reference before planning or editi
 - Compose one local-first authority source: durable Team state selects Team signing;
   only an exact `missing` Team state permits local-owner signing. Rejected or
   ambiguous Team state fails closed, and UI adapters never synthesize authorization.
+- Cache verified manifest, local-owner binding, actor and signer material only under
+  one live opaque Project runtime identity. Every authority resolve still rereads
+  durable Team state and checks the exact runtime/Project/root/actor binding. Team
+  transition or rejection, owner rotation/reset, Project quiesce, final release, or
+  disposal sticky-revokes the old identity; never use a Project-global or TTL cache,
+  reseed a revoked entry, or fall back to cached material after a contradiction.
 - When an editable Project has no live Canvas, Desktop coordination may invoke the
   Project-owned typed Canvas-create command and open its committed result. It must
   not fabricate a route or document projection. Register the exact Canvas owner

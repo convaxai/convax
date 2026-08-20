@@ -3,6 +3,7 @@ import {
   encodeBase64url,
   encodeRestrictedJcs,
   canonicalStateDigest,
+  installCurrentProtocolAuthority,
   parseMemberId,
   parseReplicaId,
   parseSignature,
@@ -12,6 +13,8 @@ import {
   type DecodedCausalEditFrame,
   type Id128,
   type OwnerIntentValidationContext,
+  type OwnerStateCommitment,
+  type OwnerStateCommitmentIssuer,
   type OwnerValidatedState,
   type PortableStamp,
   type Uint32,
@@ -33,6 +36,7 @@ import {
   constructProjectCanvasRouteStageIntent,
   constructProjectCanvasRouteTombstoneIntent,
   createProjectIndexYDoc,
+  createProjectIndexDocumentOwnerRuntime,
   deriveProjectIdentity,
   encodeProjectCanonicalState,
   materializeProjectIndexIntentGuards,
@@ -40,6 +44,9 @@ import {
   projectCanvasRouteProjection,
   projectIndexIntentDigest,
   projectIndexCurrentBlobReferences,
+  projectIndexCurrentBlobReferencesForFamiliesFromValidatedOwnerState,
+  projectIndexCanonicalStructuralCounts,
+  projectIndexEntryAtPortablePathFromValidatedOwnerState,
   projectIndexSnapshotFromValidatedOwnerState,
   parseProjectIndexResourceReference,
   projectIndexRecordDigest,
@@ -119,6 +126,27 @@ describe("ProjectIndex owner schema", () => {
     expect(applyProjectIndexCandidateIntent(document, activation.context, activation.intent, facts)).not.toBe(
       "rejected",
     )
+    if (activation.intent.kind !== "project.canvas.route.activate") {
+      throw new Error("activation constructor returned the wrong intent kind")
+    }
+    const forgedImportedBaseActivation = Object.freeze({
+      ...activation.intent,
+      body: Object.freeze({
+        activation: Object.freeze({
+          ...activation.intent.body.activation,
+          projectIndexRouteDependency: Object.freeze({
+            kind: "migration-import-base" as const,
+            digest: digest("forged-import-base"),
+          }),
+        }),
+      }),
+    }) as ProjectIndexIntent
+    expect(applyProjectIndexCandidateIntent(
+      cloneProjectIndexYDoc(document),
+      activation.context,
+      forgedImportedBaseActivation,
+      facts,
+    )).toBe("rejected")
 
     const renameContext = draftContext(actor(2), id128(44), "4")
     const renameIntent = constructProjectCanvasRouteRenameIntent({
@@ -163,6 +191,34 @@ describe("ProjectIndex owner schema", () => {
     expect(new TextDecoder().decode(encodeProjectCanonicalState(doc))).toContain(
       '"format":"convax.project-index-canonical-state"',
     )
+  })
+
+  test("binds the exact ProjectIndex state commitment through the selected runtime", () => {
+    const runtime = createProjectIndexDocumentOwnerRuntime(installCurrentProtocolAuthority())
+    const source = genesis()
+    const base = runtime.protocolPort.validateBase(source)
+    if (typeof base === "string") throw new Error("selected ProjectIndex base rejected")
+    const draft = draftContext(actor(26), id128(260), "1")
+    const built = constructProjectDirectoryCreateIntent({
+      snapshot: validateProjectIndexYDoc(source),
+      context: draft,
+      parentDirectoryId: rootDirectoryId,
+      basename: "Commitment",
+    })
+    if (built === "rejected") throw new Error("selected ProjectIndex create rejected")
+    const exact = withDigest(draft, built.intent)
+    const candidate = rawCloneProjectIndexYDoc(source)
+    selectedProjectIndexDocumentOwnerArtifactDefinition.armCandidateTransactionCapture?.({
+      base,
+      candidate,
+      context: exact.context,
+    })
+    let result: ReturnType<typeof runtime.protocolPort.applyIntent> = "rejected"
+    candidate.transact(() => {
+      result = runtime.protocolPort.applyIntent(base, candidate, exact.context, exact.intent, emptyOwnerFacts())
+    })
+    if (typeof result === "string") throw new Error("selected ProjectIndex apply rejected")
+    expect(runtime.protocolPort.validatePost(base, candidate, result)).not.toBe("rejected")
   })
 
   test("does not expose the selected definition or its acceleration hooks from the package root", () => {
@@ -214,6 +270,7 @@ describe("ProjectIndex owner schema", () => {
     if (typeof state === "string") throw new Error("source validation rejected")
     const canonical = protocol.canonicalStateBytes(source)
     if (typeof canonical === "string") throw new Error("source canonicalization rejected")
+    const commitmentDigest = testProjectIndexCommitmentDigest(state)
     const targetValidationCalls = countFullProjectIndexValidations(target)
 
     selectedProjectIndexDocumentOwnerArtifactDefinition.installValidatedPostCache?.({
@@ -227,7 +284,7 @@ describe("ProjectIndex owner schema", () => {
       source,
       target,
       state,
-      canonicalStateDigest: canonicalStateDigest(PROJECT_INDEX_PROTOCOL_SCHEMA_ARTIFACT_DIGEST, canonical),
+      canonicalStateDigest: commitmentDigest,
       durableHeadDigest: digest("certified-head"),
     })
     canonical[0] ^= 0xff
@@ -241,13 +298,13 @@ describe("ProjectIndex owner schema", () => {
       scope: { projectId: "project-a" as never, projectEpoch, docKind: "project-index", docId: "project-index", shardEpoch },
       document: target,
       durableHeadDigest: digest("certified-head"),
-      expectedCanonicalStateDigest: canonicalStateDigest(PROJECT_INDEX_PROTOCOL_SCHEMA_ARTIFACT_DIGEST, encodeProjectCanonicalState(target)),
+      expectedCanonicalStateDigest: commitmentDigest,
     })).not.toBeNull()
     expect(readCertified?.({
       scope: { projectId: "project-a" as never, projectEpoch, docKind: "project-index", docId: "project-index", shardEpoch },
       document: target,
       durableHeadDigest: digest("wrong-head"),
-      expectedCanonicalStateDigest: canonicalStateDigest(PROJECT_INDEX_PROTOCOL_SCHEMA_ARTIFACT_DIGEST, encodeProjectCanonicalState(target)),
+      expectedCanonicalStateDigest: commitmentDigest,
     })).toBeNull()
 
     const reopened = new Y.Doc()
@@ -258,7 +315,7 @@ describe("ProjectIndex owner schema", () => {
       scope: { projectId: "project-a" as never, projectEpoch, docKind: "project-index", docId: "project-index", shardEpoch },
       document: reopened,
       durableHeadDigest: digest("certified-head"),
-      expectedCanonicalStateDigest: canonicalStateDigest(PROJECT_INDEX_PROTOCOL_SCHEMA_ARTIFACT_DIGEST, encodeProjectCanonicalState(reopened)),
+      expectedCanonicalStateDigest: commitmentDigest,
     })).toBeNull()
     expect(typeof protocol.validateBase(reopened)).not.toBe("string")
     expect(reopenedValidationCalls()).toBeGreaterThan(0)
@@ -272,14 +329,14 @@ describe("ProjectIndex owner schema", () => {
     if (typeof state === "string") throw new Error("source validation rejected")
     const canonical = counted.protocol.canonicalStateBytes(source)
     if (typeof canonical === "string") throw new Error("source canonicalization rejected")
-    const canonicalDigest = canonicalStateDigest(PROJECT_INDEX_PROTOCOL_SCHEMA_ARTIFACT_DIGEST, canonical)
+    const commitmentDigest = testProjectIndexCommitmentDigest(state)
     const durableHeadDigest = digest("warm-certified-head")
     selectedProjectIndexDocumentOwnerArtifactDefinition.installValidatedPostCache?.({
       scope: { projectId: "project-a" as never, projectEpoch, docKind: "project-index", docId: "project-index", shardEpoch },
       source,
       target,
       state,
-      canonicalStateDigest: canonicalDigest,
+      canonicalStateDigest: commitmentDigest,
       durableHeadDigest,
     })
 
@@ -288,8 +345,8 @@ describe("ProjectIndex owner schema", () => {
       scope: { projectId: "project-a" as never, projectEpoch, docKind: "project-index", docId: "project-index", shardEpoch },
       document: target,
       durableHeadDigest,
-      expectedCanonicalStateDigest: canonicalDigest,
-    })).toBe(canonicalDigest)
+      expectedCanonicalStateDigest: commitmentDigest,
+    })).toBe(commitmentDigest)
     expect(counted.calls()).toBe(0)
     expect(counted.protocol.canonicalStateBytes(target)).not.toBe("rejected")
     expect(counted.calls()).toBe(1)
@@ -299,7 +356,7 @@ describe("ProjectIndex owner schema", () => {
       scope: { projectId: "project-a" as never, projectEpoch, docKind: "project-index", docId: "project-index", shardEpoch },
       document: target,
       durableHeadDigest: digest("wrong-head"),
-      expectedCanonicalStateDigest: canonicalDigest,
+      expectedCanonicalStateDigest: commitmentDigest,
     })).toBeNull()
     counted.protocol.canonicalStateBytes(target)
     counted.protocol.canonicalStateBytes(target)
@@ -311,7 +368,7 @@ describe("ProjectIndex owner schema", () => {
       scope: { projectId: "project-a" as never, projectEpoch, docKind: "project-index", docId: "project-index", shardEpoch },
       document: target,
       durableHeadDigest,
-      expectedCanonicalStateDigest: canonicalDigest,
+      expectedCanonicalStateDigest: commitmentDigest,
     })).toBeNull()
     counted.protocol.canonicalStateBytes(target)
     counted.protocol.canonicalStateBytes(target)
@@ -340,7 +397,7 @@ describe("ProjectIndex owner schema", () => {
       source,
       target,
       state,
-      canonicalStateDigest: canonicalStateDigest(PROJECT_INDEX_PROTOCOL_SCHEMA_ARTIFACT_DIGEST, protocol.canonicalStateBytes(source) as Uint8Array),
+      canonicalStateDigest: testProjectIndexCommitmentDigest(state),
       durableHeadDigest: digest("mismatch-head"),
     })
 
@@ -528,6 +585,165 @@ describe("ProjectIndex owner schema", () => {
     expect(calls()).toBe(1)
   })
 
+  test("keeps 256 consecutive file-create heads incremental with exact non-enumerating lookups", () => {
+    const protocol = ownerProtocol()
+    const candidate = genesis()
+    const initialSymbols = Object.getOwnPropertySymbols(validateProjectIndexYDoc(candidate))
+    const initialState = protocol.validateBase(candidate)
+    if (typeof initialState === "string") throw new Error("initial ProjectIndex validation rejected")
+    let state: OwnerValidatedState<"project-index"> = initialState
+    const fullTraversals = countFullProjectIndexValidations(candidate)
+    let lastFileId: `pf_${string}` | undefined
+    let lastPath = ""
+    const ownerFacts = {
+      resolveFact(requirement: { kind: string; factDigest: string; request: { sha256: string } }) {
+        return {
+          status: "resolved",
+          requirement,
+          value: {
+            format: "convax.project-index-external-fact-result",
+            kind: requirement.kind,
+            requestSha256: requirement.request.sha256,
+            factDigest: requirement.factDigest,
+            decision: "verified",
+          },
+        }
+      },
+    } as never
+
+    for (let index = 0; index < 256; index += 1) {
+      const snapshot = projectIndexSnapshotFromValidatedOwnerState(state)
+      if (snapshot === null) throw new Error("incremental ProjectIndex state lost its snapshot")
+      const draft = draftContext(actor(24), id128(index), String(index + 1))
+      lastPath = `notes-${index}.md`
+      const built = constructProjectFileCreateIntent({
+        snapshot,
+        context: draft,
+        parentDirectoryId: rootDirectoryId,
+        basename: lastPath,
+        blob: blobRef(`consecutive-${index}`),
+        contentPolicy: "immutable",
+        storageClass: "project-file",
+        provenance: "user",
+      })
+      if (built === "rejected") throw new Error(`file create ${index} rejected`)
+      lastFileId = built.fileId
+      const exact = withDigest(draft, built.intent)
+      selectedProjectIndexDocumentOwnerArtifactDefinition.armCandidateTransactionCapture?.({
+        base: state,
+        candidate,
+        context: exact.context,
+      })
+      let result: ReturnType<typeof protocol.applyIntent> = "rejected"
+      candidate.transact(() => {
+        result = protocol.applyIntent(state, candidate, exact.context, exact.intent, ownerFacts)
+      })
+      if (typeof result === "string") throw new Error(`file apply ${index} rejected`)
+      const validated = protocol.validatePost(state, candidate, result)
+      if (typeof validated === "string") throw new Error(`file post ${index} rejected`)
+      state = validated
+      expect(projectIndexCurrentBlobReferencesForFamiliesFromValidatedOwnerState(state, [built.fileId]))
+        .toHaveLength(1)
+      expect(projectIndexEntryAtPortablePathFromValidatedOwnerState(state, lastPath))
+        .toEqual({ entryId: built.fileId, kind: "file" })
+    }
+
+    expect(fullTraversals()).toBe(0)
+    const finalSnapshot = projectIndexSnapshotFromValidatedOwnerState(state)
+    if (finalSnapshot === null || lastFileId === undefined) throw new Error("final incremental snapshot is absent")
+    const finalSymbols = Object.getOwnPropertySymbols(finalSnapshot)
+    expect(finalSymbols).toEqual(initialSymbols)
+    expect(finalSymbols.map((symbol) => Reflect.get(finalSnapshot, symbol))).toEqual([true])
+    for (const collection of snapshotCollections(finalSnapshot)) {
+      expect(Object.getOwnPropertyNames(collection)).toEqual([])
+      expect(Object.getOwnPropertySymbols(collection)).toEqual([])
+      expect(typeof (collection as { set?: unknown }).set).toBe("undefined")
+      expect(typeof (collection as { delete?: unknown }).delete).toBe("undefined")
+      expect(typeof (collection as { clear?: unknown }).clear).toBe("undefined")
+    }
+    withRejectedProjectIndexSnapshotIteration(finalSnapshot, () => {
+      expect(projectIndexCurrentBlobReferencesForFamiliesFromValidatedOwnerState(state, [lastFileId!]))
+        .toHaveLength(1)
+      expect(projectIndexEntryAtPortablePathFromValidatedOwnerState(state, lastPath))
+        .toEqual({ entryId: lastFileId, kind: "file" })
+    })
+  })
+
+  test("keeps fixed-k file create structurally logarithmic at 256, 1024 and 4096 resources", () => {
+    for (const resourceCount of [256, 1024, 4096] as const) {
+      const source = createProjectIndexBenchmarkFixture(resourceCount).document
+      const protocol = ownerProtocol()
+      const base = protocol.validateBase(source)
+      if (typeof base === "string") throw new Error(`source ${resourceCount} rejected`)
+      const snapshot = projectIndexSnapshotFromValidatedOwnerState(base)
+      if (snapshot === null) throw new Error(`source ${resourceCount} snapshot rejected`)
+      const draft = {
+        ...draftContext(actor(25), id128(resourceCount + 10), "2"),
+        scope: {
+          projectId: snapshot.identity.projectId,
+          projectEpoch: snapshot.identity.projectEpoch,
+          docKind: "project-index" as const,
+          docId: "project-index" as const,
+          shardEpoch: snapshot.identity.shardEpoch,
+        },
+      }
+      const built = constructProjectFileCreateIntent({
+        snapshot,
+        context: draft,
+        parentDirectoryId: snapshot.identity.rootDirectoryId,
+        basename: `structural-${resourceCount}.md`,
+        blob: blobRef(`structural-${resourceCount}`),
+        contentPolicy: "immutable",
+        storageClass: "project-file",
+        provenance: "user",
+      })
+      if (built === "rejected") throw new Error(`file ${resourceCount} construction rejected`)
+      const exact = withDigest(draft, built.intent)
+      const candidate = rawCloneProjectIndexYDoc(source)
+      selectedProjectIndexDocumentOwnerArtifactDefinition.armCandidateTransactionCapture?.({
+        base,
+        candidate,
+        context: exact.context,
+      })
+      const before = projectIndexCanonicalStructuralCounts()
+      let result: ReturnType<typeof protocol.applyIntent> = "rejected"
+      candidate.transact(() => {
+        result = protocol.applyIntent(base, candidate, exact.context, exact.intent, verifiedOwnerFacts())
+      })
+      if (typeof result === "string") throw new Error(`file ${resourceCount} apply rejected`)
+      const state = protocol.validatePost(base, candidate, result)
+      if (typeof state === "string") throw new Error(`file ${resourceCount} post rejected`)
+      const after = projectIndexCanonicalStructuralCounts()
+      const delta = structuralCountDelta(before, after)
+      const logarithmicHeight = Math.ceil(Math.log2(resourceCount + 2))
+
+      expect(delta.fullBuilds, `${resourceCount} canonical full builds`).toBe(0)
+      expect(delta.fullBuildEntryVisits, `${resourceCount} canonical full visits`).toBe(0)
+      expect(delta.fullBuildComparisons, `${resourceCount} canonical full comparisons`).toBe(0)
+      expect(delta.historicalEntryVisits, `${resourceCount} canonical history visits`).toBe(0)
+      expect(delta.historicalEntryCopies, `${resourceCount} canonical history copies`).toBe(0)
+      expect(delta.flattenEntryVisits, `${resourceCount} audit flatten visits`).toBe(0)
+      expect(delta.evidenceEntryVisits, `${resourceCount} legacy evidence visits`).toBe(0)
+      expect(delta.incrementalInsertions, `${resourceCount} canonical insertions`).toBe(4)
+      expect(delta.insertionComparisons, `${resourceCount} canonical path comparisons`)
+        .toBeLessThanOrEqual(12 * logarithmicHeight + 32)
+      expect(delta.persistentNodeCopies, `${resourceCount} canonical path copies`)
+        .toBeLessThanOrEqual(24 * logarithmicHeight + 64)
+      expect(delta.commitmentColdBuilds, `${resourceCount} commitment cold builds`).toBe(0)
+      expect(delta.commitmentColdEntryVisits, `${resourceCount} commitment cold visits`).toBe(0)
+      expect(delta.commitmentApplyCalls, `${resourceCount} commitment applies`).toBe(1)
+      expect(delta.commitmentMutationCount, `${resourceCount} commitment mutations`).toBe(4)
+      expect(delta.commitmentHistoricalEntryVisits, `${resourceCount} commitment history visits`).toBe(0)
+      expect(delta.trieInsertCodeUnits, `${resourceCount} lookup-trie inserted key bytes`).toBeLessThanOrEqual(2_048)
+      expect(delta.trieNodeCopies, `${resourceCount} lookup-trie path copies`).toBeLessThanOrEqual(2_048)
+      expect(delta.trieEdgeCopies, `${resourceCount} lookup-trie bounded edge copies`).toBeLessThanOrEqual(65_536)
+
+      // Full canonical bytes are a window-external audit oracle, never part of
+      // the measured owner-frame commitment path above.
+      expect(protocol.canonicalStateBytes(candidate)).toEqual(encodeProjectCanonicalState(candidate))
+    }
+  }, 30_000)
+
   test("derives byte-identical 512 and 2k create canonical state from certified collection fragments", () => {
     for (const resourceCount of [512, 2048] as const) {
       const source = createProjectIndexBenchmarkFixture(resourceCount).document
@@ -537,7 +753,7 @@ describe("ProjectIndex owner schema", () => {
       if (typeof sourceState === "string") throw new Error("source rejected")
       const sourceBytes = protocol.canonicalStateBytes(source)
       if (typeof sourceBytes === "string") throw new Error("source canonical rejected")
-      const sourceDigest = canonicalStateDigest(PROJECT_INDEX_PROTOCOL_SCHEMA_ARTIFACT_DIGEST, sourceBytes)
+      const sourceDigest = testProjectIndexCommitmentDigest(sourceState)
       const durableHeadDigest = digest(`fragment-head-${resourceCount}`)
       const target = rawCloneProjectIndexYDoc(source)
       selectedProjectIndexDocumentOwnerArtifactDefinition.installValidatedPostCache?.({
@@ -600,7 +816,7 @@ describe("ProjectIndex owner schema", () => {
       expect(incremental).not.toBe("rejected")
       expect(fullTraversals(), `${resourceCount} incremental traversals`).toBe(0)
       expect(collectionVisits.calls(), `${resourceCount} changed collection visits`).toBe(0)
-      expect(snapshotCloneVisits.calls(), `${resourceCount} snapshot clone visits`).toBe(4)
+      expect(snapshotCloneVisits.calls(), `${resourceCount} snapshot clone visits`).toBe(0)
       expect(incremental).toEqual(encodeProjectCanonicalState(candidate))
       expect(fullTraversals(), `${resourceCount} differential full traversal`).toBe(1)
 
@@ -658,7 +874,7 @@ describe("ProjectIndex owner schema", () => {
       expect(fileFullTraversals(), `${resourceCount} file differential full traversal`).toBe(1)
       fileCandidate.transact(() => undefined)
     }
-  })
+  }, 30_000)
 
   test("rejects a tampered canonical proof and falls back to full canonicalization", () => {
     const source = createProjectIndexBenchmarkFixture(512).document
@@ -668,7 +884,7 @@ describe("ProjectIndex owner schema", () => {
     if (typeof sourceState === "string") throw new Error("base rejected")
     const sourceBytes = protocol.canonicalStateBytes(source)
     if (typeof sourceBytes === "string") throw new Error("canonical rejected")
-    const sourceDigest = canonicalStateDigest(PROJECT_INDEX_PROTOCOL_SCHEMA_ARTIFACT_DIGEST, sourceBytes)
+    const sourceDigest = testProjectIndexCommitmentDigest(sourceState)
     const target = rawCloneProjectIndexYDoc(source)
     selectedProjectIndexDocumentOwnerArtifactDefinition.installValidatedPostCache?.({
       scope: { projectId: snapshot.identity.projectId, projectEpoch: snapshot.identity.projectEpoch, docKind: "project-index", docId: "project-index", shardEpoch: snapshot.identity.shardEpoch },
@@ -1479,6 +1695,7 @@ function genesis(): Y.Doc {
     format: "convax.project-index-identity", schema: "convax.project-index.v2", projectId: "project-a" as never,
     projectEpoch, shardEpoch, rootDirectoryId, protocolDigest,
     schemaDigest: PROJECT_INDEX_PROTOCOL_SCHEMA_ARTIFACT_DIGEST, uriProtocolDigest,
+    migrationImportBaseProofDigest: null,
   }, rootEntry)
 }
 
@@ -1547,18 +1764,12 @@ function withDigest<T extends ProjectIndexIntent>(context: OwnerIntentValidation
 }
 
 function ownerProtocol() {
-  return selectedProjectIndexDocumentOwnerArtifactDefinition.createDefinitions({
-    wrapValidatedState: (value: unknown) => Object.freeze({ owner: "project-index", value }),
-    wrapApplyResult: (value: unknown) => Object.freeze({ owner: "project-index", value }),
-  } as never).protocol
+  return selectedProjectIndexDocumentOwnerArtifactDefinition.createDefinitions(testOwnerProcessValues()).protocol
 }
 
 function countingOwnerProtocol() {
   let canonicalCalls = 0
-  const definitions = selectedProjectIndexDocumentOwnerArtifactDefinition.createDefinitions({
-    wrapValidatedState: (value: unknown) => Object.freeze({ owner: "project-index", value }),
-    wrapApplyResult: (value: unknown) => Object.freeze({ owner: "project-index", value }),
-  } as never)
+  const definitions = selectedProjectIndexDocumentOwnerArtifactDefinition.createDefinitions(testOwnerProcessValues())
   return {
     protocol: {
       ...definitions.protocol,
@@ -1572,10 +1783,86 @@ function countingOwnerProtocol() {
   }
 }
 
+const testProjectIndexCommitmentDigestsByState = new WeakMap<object, Digest>()
+let testProjectIndexCommitmentSequence = 0
+
+function testOwnerProcessValues() {
+  const commitments = new WeakMap<object, Digest>()
+  const issue = (): OwnerStateCommitment => {
+    const commitment = Object.freeze({}) as OwnerStateCommitment
+    testProjectIndexCommitmentSequence += 1
+    commitments.set(
+      commitment as object,
+      structuredDigest("convax.project-index-test-state-commitment", {
+        format: "convax.project-index-test-state-commitment",
+        sequence: String(testProjectIndexCommitmentSequence),
+      }),
+    )
+    return commitment
+  }
+  const stateCommitment = Object.freeze({
+    build: () => issue(),
+    apply(base: OwnerStateCommitment) {
+      if (!commitments.has(base as object)) throw new TypeError("Unknown test ProjectIndex commitment")
+      return issue()
+    },
+    digest(commitment: OwnerStateCommitment) {
+      const value = commitments.get(commitment as object)
+      if (value === undefined) throw new TypeError("Unknown test ProjectIndex commitment")
+      return value
+    },
+  }) satisfies OwnerStateCommitmentIssuer
+  return {
+    wrapValidatedState: (value: unknown) => Object.freeze({ owner: "project-index", value }),
+    wrapApplyResult: (value: unknown) => Object.freeze({ owner: "project-index", value }),
+    stateCommitment,
+    bindStateCommitment(_document: Y.Doc, state: OwnerValidatedState<"project-index">, commitment: OwnerStateCommitment) {
+      testProjectIndexCommitmentDigestsByState.set(state as object, stateCommitment.digest(commitment))
+      return state
+    },
+  } as never
+}
+
+function testProjectIndexCommitmentDigest(state: OwnerValidatedState<"project-index">): Digest {
+  const digest = testProjectIndexCommitmentDigestsByState.get(state as object)
+  if (digest === undefined) throw new TypeError("Test ProjectIndex state has no bound commitment")
+  return digest
+}
+
 function emptyOwnerFacts() {
   return {
     resolveFact() { throw new Error("unexpected ProjectIndex external fact") },
   } as never
+}
+
+function verifiedOwnerFacts() {
+  return {
+    resolveFact(requirement: { kind: string; factDigest: string; request: { sha256: string } }) {
+      return {
+        status: "resolved",
+        requirement,
+        value: {
+          format: "convax.project-index-external-fact-result",
+          kind: requirement.kind,
+          requestSha256: requirement.request.sha256,
+          factDigest: requirement.factDigest,
+          decision: "verified",
+        },
+      }
+    },
+  } as never
+}
+
+function structuralCountDelta(
+  before: ReturnType<typeof projectIndexCanonicalStructuralCounts>,
+  after: ReturnType<typeof projectIndexCanonicalStructuralCounts>,
+): ReturnType<typeof projectIndexCanonicalStructuralCounts> {
+  return Object.fromEntries(
+    Object.entries(before).map(([key, value]) => [
+      key,
+      after[key as keyof typeof after] - value,
+    ]),
+  ) as ReturnType<typeof projectIndexCanonicalStructuralCounts>
 }
 
 function projectIndexChildMap(document: Y.Doc, key: string): Y.Map<unknown> {
@@ -1622,6 +1909,43 @@ function countLargeMapIteratorVisits(minimumSize: number): { calls(): number; re
     calls: () => calls,
     restore() { Map.prototype[Symbol.iterator] = original },
   }
+}
+
+function withRejectedProjectIndexSnapshotIteration(snapshot: ReturnType<typeof validateProjectIndexYDoc>, run: () => void): void {
+  const prototypes = new Set(snapshotCollections(snapshot).map((collection) => Object.getPrototypeOf(collection) as object))
+  const keys: readonly PropertyKey[] = ["entries", "keys", "values", "forEach", Symbol.iterator]
+  const descriptors: Array<readonly [object, PropertyKey, PropertyDescriptor]> = []
+  for (const prototype of prototypes) {
+    for (const key of keys) {
+      const descriptor = Object.getOwnPropertyDescriptor(prototype, key)
+      if (descriptor === undefined) continue
+      descriptors.push([prototype, key, descriptor])
+      Object.defineProperty(prototype, key, {
+        configurable: true,
+        value() { throw new Error("exact ProjectIndex lookup enumerated historical snapshot data") },
+      })
+    }
+  }
+  try {
+    run()
+  } finally {
+    for (const [prototype, key, descriptor] of descriptors) {
+      Object.defineProperty(prototype, key, descriptor)
+    }
+  }
+}
+
+function snapshotCollections(snapshot: ReturnType<typeof validateProjectIndexYDoc>): ReadonlyMap<string, unknown>[] {
+  return [
+    snapshot.entries,
+    snapshot.entryLocations,
+    snapshot.entryTombstones,
+    snapshot.contentFamilies,
+    snapshot.contentConflictCopies,
+    snapshot.pathReservations,
+    snapshot.canvasRoutes,
+    snapshot.operations,
+  ]
 }
 
 function rawCloneProjectIndexYDoc(document: Y.Doc): Y.Doc {

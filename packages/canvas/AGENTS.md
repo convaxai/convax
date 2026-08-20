@@ -75,6 +75,35 @@ Canvas owns document and editor semantics independently of Project and Agent.
   late ghost after authority has arrived. Concurrent create-and-focus operations
   are latest-wins for selection and camera effects even when durable results return
   out of order.
+- A mounted editable Canvas owns one persistent keyed canonical projection and a
+  persistent 2D placement/viewport index. Certified append patches path-copy only
+  their exact changed entries; ordinary selection, focus, runtime and command
+  lookups read that current keyed projection. Whole-document materialization is
+  reserved for explicit bulk operations such as search, export, select-all, fit,
+  clipboard and whole-scope layout. React Flow receives at most 256 authoritative
+  viewport/pinned nodes and 512 edges, while optimistic ghosts render only through
+  `ViewportPortal` and never enter those arrays. A truncated working set must not
+  be presented as a complete MiniMap. Pinned ancestry stops at the focused Group
+  scope and shares the same 256-node query budget. Cold/reset projection builds every parent
+  placement scope; the first focused-Group create cannot scan historical nodes.
+  Quick-connect fixed-size creation resolves its bounded anchor set through the
+  persistent node-id index and never materializes historical projection arrays.
+  Generation begins, effective lifecycle and winning output claims use a
+  snapshot-bound persistent exact index: lifecycle writes path-copy only their
+  affected generation/node paths, and unrelated resource creation never scans
+  historical generation runs.
+- Current-genesis resource placement is the deterministic conservative positive-X
+  high-watermark lane. For the candidate's bounded Y rows, authority and optimistic
+  presentation jump once past the furthest indexed obstacle plus the fixed gap;
+  they never walk a collision chain. Accepted appends path-copy the row/index path.
+  This rule is protocol semantics: changing it requires rotating the Canvas schema
+  artifact and the single current collaboration protocol identity.
+- Prepared and hydrated resource runtime state is another bounded transient overlay,
+  never a typed-intent or Y.Doc field. Install prepared state only after the accepted
+  projection proves the returned created id and exact live incarnation, canonical
+  resource identity and renderer identity. Exact-target hydration may merge only a
+  still-stale, metadata-identical live node; Host adapters must not query or
+  transport the whole Canvas or replace its authoritative projection.
 - Visual undo/redo history retains at most a bounded number of immutable accepted
   session projection endpoints with exact node/edge incarnation guards. It derives
   presentation deltas lazily rather than copying complete documents. Every local
@@ -231,6 +260,10 @@ Canvas owns document and editor semantics independently of Project and Agent.
   can affect authority only through the exact final replica-signed frame after the
   durable head barrier. `initialDocument` and renderer state are immutable/read-only
   projections, never editable or persistent fallbacks.
+- Missing incremental owner evidence may fall back to full validation, but a sealed
+  Canvas candidate whose exact transaction evidence is widened or followed by any
+  transaction is stale and must be rejected. Full validation also requires every
+  receipt result entity to retain its node/edge record.
 - Undo/redo is session-only selection in the collaboration-owned session undo
   coordinator; Canvas materializes a fresh closed semantic
   inverse/forward intent against the latest `replicaDoc`. Remote/bootstrap/recovery
@@ -262,6 +295,49 @@ Canvas owns document and editor semantics independently of Project and Agent.
   cross-artifact runtime fails closed as unsupported data; archived authority
   releases, drafts, and live implementation bytes never provide fallback semantics,
   and Canvas never selects a second schema, codec, or reducer.
+- Derived projection and placement indexes may be weakly cached only by one
+  exact immutable validated `CanvasSnapshot` identity. A newly accepted state must
+  receive a new snapshot identity; cache presence or eviction cannot change reducer
+  output, frame bytes, protocol digest or wire behavior.
+- Causal resource placement is derived from the kernel-supplied exact base through
+  that snapshot-bound persistent index. Placement intents carry only the bounded
+  anchor and fixed gap; renderer indexes and ghosts are disposable presentation
+  caches and never become mutation, authorization, or persistence evidence.
+- A successful sealed resource-append validation may expose one closed certified
+  projection patch bound to the exact base/result snapshot identities, Canvas id,
+  owner schema digest, state-commitment roots, operation receipt and changed entity
+  set. Issuance and keyed projection caches stay package-private and weakly bound;
+  a missing exact-snapshot record or keyed index returns no patch and requires a
+  full owner projection. Renderer application uses a Canvas-owned disposable
+  indexed cursor, rejects a mismatched base or invalid incarnation/endpoint/cardinality,
+  and path-copies only the bounded changed entities. This patch is presentation
+  acceleration only: it is never an intent, frame, persistence carrier,
+  authorization proof, canonical-state evidence or second document authority.
+  The ordinary application submit/execute/resource APIs remain full-projection
+  defaults for Agent and Plugin callers. Only the explicit certified resource
+  append methods on the separately injected certified extension port may omit the
+  document; generic full-document ports do not implement that extension.
+  Unavailable evidence triggers a cold
+  query. Prepared runtime state travels as a sibling transient sidecar, never by
+  modifying owner-issued patch nodes, and is installed only after the exact patch
+  node identity applies successfully.
+- A mounted Renderer may pair that projection with one Canvas-owned transient
+  resource-hierarchy index. A complete reset must classify every canonical resource
+  entity exactly once as a portable `leaf`/`subtree` path or `not-path-backed`, and a
+  certified append must classify every changed resource entity exactly once. Missing,
+  duplicate, illegal, extra, or projection-identity-mismatched evidence makes the
+  hierarchy sticky-unavailable until the next complete reset without rejecting an
+  already-durable patch. Exact path invalidation queries descendant resources plus
+  proper-ancestor subtree resources in `O(depth log N + k)`, hydrates and writes only
+  those k exact live incarnations through keyed projection/runtime maps, and never
+  materializes the full document. An available empty result is a no-op. Unavailable
+  pathful evidence must fall back exactly once to the same bulk refresh as the
+  explicit pathless compatibility operation so an external watcher event is not lost.
+- Resource-append visual history likewise stages an opaque root without a full
+  authority and binds only a Canvas-issued patch event, deriving bounded exact
+  hide guards for undo and bounded ghosts for redo. Cache loss/tamper rejects that
+  acceleration and falls back to an authoritative query; it never weakens Main's
+  semantic-history authority.
 - Application and resource requests may carry `AbortSignal`. Check it after every
   awaited preparation/load/conflict step and immediately before persistence; caller
   cancellation must never become a late durable write.

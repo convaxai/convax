@@ -1,6 +1,12 @@
 import { createContext, type ReactNode, useContext, useSyncExternalStore } from "react"
 import type { ToolInputField, ToolInputValue } from "@convax/ui"
-import type { CanvasGenerationTargetGuard, CanvasResourceAnchorOrigin, CanvasResourceSource } from "./application"
+import type {
+  CanvasGenerationTargetGuard,
+  CanvasPreparedResourceRuntime,
+  CanvasResourceAnchorOrigin,
+  CanvasResourceSource,
+} from "./application"
+import type { CanvasEntityRef } from "./collaboration"
 import type { CanvasDocument, CanvasNode, CanvasPoint, CanvasSize } from "./types"
 
 export { CanvasTextResourceConflictError } from "./application/errors"
@@ -50,6 +56,8 @@ export interface CanvasResourceMutationService {
     /** The host already installed the same-frame authoritative projection. */
     authoritativeProjectionDelivered?: boolean
     createdNodeIds: readonly string[]
+    /** Prepared presentation state for the exact accepted resource nodes. Transient only. */
+    preparedResources?: readonly CanvasAcceptedPreparedResourceRuntime[]
     warnings: readonly string[]
   }>
   /** Results align with the request's files followed by resolved sources. */
@@ -70,13 +78,20 @@ export interface CanvasResourceMutationService {
   }>
 }
 
-export interface CanvasResourceHydrationService {
-  markStale(document: CanvasDocument, shouldInvalidate?: CanvasResourceInvalidationPredicate): CanvasDocument
-  hydrateStale(input: { document: CanvasDocument; signal: AbortSignal }): Promise<CanvasDocument>
+/** Prepared state bound to the exact accepted Canvas entity and resource. */
+export interface CanvasAcceptedPreparedResourceRuntime extends CanvasPreparedResourceRuntime {
+  readonly entity: CanvasEntityRef & { readonly kind: "node" }
+  readonly resourceIdentity: string
 }
 
-/** Host-supplied narrowing for a resource change whose affected Canvas nodes are known. */
-export type CanvasResourceInvalidationPredicate = (node: CanvasDocument["nodes"][number]) => boolean
+export interface CanvasResourceHydrationService {
+  markStale(document: CanvasDocument, nodeIds?: readonly string[]): CanvasDocument
+  hydrateStale(input: {
+    document: CanvasDocument
+    nodeIds?: readonly string[]
+    signal: AbortSignal
+  }): Promise<CanvasDocument>
+}
 
 export interface CanvasFolderBrowseEntry {
   /** Host-opaque identifier that is valid only for the owning folder node. */

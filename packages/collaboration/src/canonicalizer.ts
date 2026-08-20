@@ -6,6 +6,7 @@ import type { DocumentOwnerProtocolPort, OwnerCanonicalizerDescriptor } from "./
 import { structuredDigest } from "./digest"
 import { failCodec } from "./errors"
 import { assertExactKeys, assertNfcScalarString, decodeRestrictedJcs, encodeRestrictedJcs, isPlainDataObject, utf8ByteLength } from "./jcs"
+import { parseOwnerStateCommitmentDescriptor } from "./owner-state-commitment"
 
 const CANONICAL_STATE_FORMAT = /^convax\.[a-z0-9][a-z0-9.-]*$/u
 
@@ -19,6 +20,7 @@ export function parseOwnerCanonicalizerDescriptor(value: unknown): OwnerCanonica
     "canonicalStateCodec",
     "exactBytePolicy",
     "unknownStatePolicy",
+    "stateCommitment",
   ], "OwnerCanonicalizerDescriptor")
   if (normalized.format !== "convax.owner-canonicalizer-descriptor") failCodec("Owner canonicalizer descriptor format is invalid")
   if (normalized.owner !== "canvas" && normalized.owner !== "project-index") failCodec("Owner canonicalizer descriptor owner is invalid")
@@ -37,6 +39,7 @@ export function parseOwnerCanonicalizerDescriptor(value: unknown): OwnerCanonica
     canonicalStateCodec: normalized.canonicalStateCodec,
     exactBytePolicy: normalized.exactBytePolicy,
     unknownStatePolicy: normalized.unknownStatePolicy,
+    stateCommitment: parseOwnerStateCommitmentDescriptor(normalized.stateCommitment),
   })
 }
 

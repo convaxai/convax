@@ -5,6 +5,7 @@ import {
   CAUSAL_EDIT_MAGIC,
   CAUSAL_EDIT_PREFIX_BYTES,
   COLLABORATION_PROTOCOL_MAJOR,
+  CURRENT_PROTOCOL_IDENTITIES,
   KERNEL_DIGEST_DOMAINS,
   KERNEL_LIMITS,
 } from "./constants"
@@ -27,7 +28,9 @@ import {
   parseActualWriteEvidence,
   parseCausalContext,
   parseCausalEditCore,
+  parseCausalEditCoreForProtocol,
   parseCausalEditFrameHeader,
+  parseCausalEditFrameHeaderForProtocol,
   causalSignerAuthorityDigest,
 } from "./parse"
 import { assertCurrentProtocolAuthority, type CurrentProtocolAuthority } from "./authority"
@@ -51,6 +54,11 @@ export interface EncodeCausalEditFrameInput {
 
 export function causalEditCoreDigest(core: CausalEditCore): Digest {
   return structuredDigest(KERNEL_DIGEST_DOMAINS.causalEditCore, parseCausalEditCore(core))
+}
+
+/** @internal Immediate-predecessor migration only. */
+export function causalEditCoreDigestForProtocol(core: CausalEditCore, expectedProtocolDigest: string): Digest {
+  return structuredDigest(KERNEL_DIGEST_DOMAINS.causalEditCore, parseCausalEditCoreForProtocol(core, expectedProtocolDigest))
 }
 
 export function causalContextDigest(context: CausalContext): Digest {
@@ -114,6 +122,17 @@ export function decodeCausalEditFrame(
   value: Uint8Array,
 ): DecodedCausalEditFrame {
   assertCurrentProtocolAuthority(authority)
+  return decodeCausalEditFrameForProtocol(value, CURRENT_PROTOCOL_IDENTITIES.protocolDigest)
+}
+
+/**
+ * Internal decoder used only by the sealed immediate-predecessor migration
+ * entrypoint. Production current open never receives this seam.
+ */
+export function decodeCausalEditFrameForProtocol(
+  value: Uint8Array,
+  expectedProtocolDigest: string,
+): DecodedCausalEditFrame {
   assertUint8Array(value, "Causal edit envelope")
   if (value.byteLength < CAUSAL_EDIT_PREFIX_BYTES || value.byteLength > KERNEL_LIMITS.causalEnvelopeBytes) {
     failFrame("Causal edit envelope length is invalid")
@@ -137,11 +156,11 @@ export function decodeCausalEditFrame(
   if (!sameBytes(hexToBytes(ordinarySha256(headerJcs)), value.subarray(24, 56)) || !sameBytes(hexToBytes(ordinarySha256(payload)), value.subarray(56, 88))) {
     failFrame("Causal edit ordinary header or payload SHA-256 mismatches")
   }
-  const header = parseCausalEditFrameHeader(decodeRestrictedJcs(headerJcs))
+  const header = parseCausalEditFrameHeaderForProtocol(decodeRestrictedJcs(headerJcs), expectedProtocolDigest)
   const sections = decodeCausalPayload(payload)
   const context = parseCausalContext(decodeRestrictedJcs(sections.causalContextJcs))
   const evidence = parseActualWriteEvidence(decodeRestrictedJcs(sections.actualWriteEvidenceJcs))
-  validateFrameClosure(header, sections, context, evidence)
+  validateFrameClosure(header, sections, context, evidence, expectedProtocolDigest)
   const bytes = cloneBytes(value)
   return Object.freeze({
     bytes,
@@ -212,9 +231,10 @@ function validateFrameClosure(
   sections: CausalEditFrameSections,
   context: CausalContext,
   evidence: ActualWriteEvidence,
+  expectedProtocolDigest: string = CURRENT_PROTOCOL_IDENTITIES.protocolDigest,
 ): void {
   const core = header.core
-  if (causalEditCoreDigest(core) !== header.coreDigest) failFrame("Causal core digest mismatches the exact core")
+  if (causalEditCoreDigestForProtocol(core, expectedProtocolDigest) !== header.coreDigest) failFrame("Causal core digest mismatches the exact core")
   assertCoreSectionLengths(core, [
     sections.typedIntentJcs.byteLength,
     sections.causalContextJcs.byteLength,

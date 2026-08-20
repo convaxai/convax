@@ -8,6 +8,10 @@ import {
 import type { CanvasGhostNode, CanvasOptimisticOverlayItem, CanvasOptimisticOperationToken } from "./optimistic-overlay"
 import type { CanvasDocument, CanvasNode } from "./types"
 import type { CanvasRendererCommand } from "./collaboration/session"
+import type {
+  CanvasCertifiedRendererProjectionStore,
+  CanvasRendererProjectionPatchChange,
+} from "./collaboration/renderer-projection-store"
 
 export interface CanvasVisualHistoryAuthority {
   readonly document: CanvasDocument
@@ -32,6 +36,8 @@ interface CanvasVisualHistoryEntry {
   provisional: boolean
   before: CanvasVisualHistoryAuthority | null
   after: CanvasVisualHistoryAuthority | null
+  undoOverlay: readonly CanvasOptimisticOverlayItem[] | null
+  redoOverlay: readonly CanvasOptimisticOverlayItem[] | null
 }
 
 export interface CanvasVisualHistoryPrediction {
@@ -65,6 +71,8 @@ export class CanvasVisualHistoryCoordinator {
       provisional: false,
       before: retainAuthority(before),
       after: retainAuthority(after),
+      undoOverlay: null,
+      redoOverlay: null,
     })
     while (this.#entries.length > this.#maximumEntries) this.#entries.shift()
     this.#cursor = this.#entries.length
@@ -97,6 +105,38 @@ export class CanvasVisualHistoryCoordinator {
     return this.#stageAuthority(commandId, before, null)
   }
 
+  /**
+   * Reserves a resource-append history root without reading a full authority.
+   * Only an exact Canvas-issued certified patch may later bind this entry.
+   */
+  stageCertifiedResourceAppendRoot(commandId: string): string | null {
+    if (!commandId) return null
+    return this.#stageAuthority(commandId, null, null)
+  }
+
+  /** Binds one bounded append root and derives exact undo/redo presentation deltas. */
+  bindStagedCertifiedResourceAppend(
+    entryKey: string,
+    change: CanvasRendererProjectionPatchChange,
+    owner: Pick<CanvasCertifiedRendererProjectionStore, "ownsProjectionChange">,
+  ): boolean {
+    const entry = this.#entries.find((candidate) => candidate.entryKey === entryKey)
+    if (
+      !entry ||
+      !entry.provisional ||
+      !owner.ownsProjectionChange(change) ||
+      !change.receipt.semanticRoot
+    ) return false
+    const overlays = createCertifiedAppendPresentationDeltas(change)
+    if (!overlays) return false
+    entry.rootOperationId = change.receipt.operationId
+    entry.provisional = false
+    entry.undoOverlay = overlays.undo
+    entry.redoOverlay = overlays.redo
+    this.#refreshPendingPredictions(entry)
+    return true
+  }
+
   bindStagedRoot(
     entryKey: string,
     rootOperationId: string,
@@ -109,6 +149,8 @@ export class CanvasVisualHistoryCoordinator {
     entry.provisional = false
     entry.before = retainAuthority(actualBefore)
     entry.after = actualAfter ? retainAuthority(actualAfter) : null
+    entry.undoOverlay = null
+    entry.redoOverlay = null
     this.#refreshPendingPredictions(entry)
     return true
   }
@@ -140,9 +182,7 @@ export class CanvasVisualHistoryCoordinator {
     const index = direction === "undo" ? this.#cursor - 1 : this.#cursor
     const entry = this.#entries[index]
     if (!entry) return null
-    const target = direction === "undo" ? entry.before : entry.after
-    const source = direction === "undo" ? entry.after : entry.before
-    const overlay = source && target ? createPresentationDelta(source, target) : []
+    const overlay = this.#entryOverlay(entry, direction)
     const operation = this.overlay.begin(scopeKey, overlay)
     const prediction = Object.freeze({
       direction,
@@ -212,6 +252,8 @@ export class CanvasVisualHistoryCoordinator {
       provisional: true,
       before: before ? retainAuthority(before) : null,
       after: after ? retainAuthority(after) : null,
+      undoOverlay: null,
+      redoOverlay: null,
     })
     while (this.#entries.length > this.#maximumEntries) this.#entries.shift()
     this.#cursor = this.#entries.length
@@ -219,14 +261,65 @@ export class CanvasVisualHistoryCoordinator {
   }
 
   #refreshPendingPredictions(entry: CanvasVisualHistoryEntry): void {
-    if (!entry.before || !entry.after) return
     for (const prediction of this.#pending) {
       if (prediction.entryKey !== entry.entryKey) continue
-      const source = prediction.direction === "undo" ? entry.after : entry.before
-      const target = prediction.direction === "undo" ? entry.before : entry.after
-      this.overlay.replace(prediction.token, createPresentationDelta(source, target))
+      this.overlay.replace(prediction.token, this.#entryOverlay(entry, prediction.direction))
     }
   }
+
+  #entryOverlay(
+    entry: CanvasVisualHistoryEntry,
+    direction: "undo" | "redo",
+  ): readonly CanvasOptimisticOverlayItem[] {
+    const certified = direction === "undo" ? entry.undoOverlay : entry.redoOverlay
+    if (certified) return certified
+    const source = direction === "undo" ? entry.after : entry.before
+    const target = direction === "undo" ? entry.before : entry.after
+    return source && target ? createPresentationDelta(source, target) : []
+  }
+}
+
+function createCertifiedAppendPresentationDeltas(
+  change: CanvasRendererProjectionPatchChange,
+): Readonly<{
+  undo: readonly CanvasOptimisticOverlayItem[]
+  redo: readonly CanvasOptimisticOverlayItem[]
+}> | null {
+  const nodeEntities = new Map(change.changes.nodeEntities.map((entry) => [entry.nodeId, entry.entity]))
+  const edgeEntities = new Map(change.changes.edgeEntities.map((entry) => [entry.edgeId, entry.entity]))
+  if (
+    nodeEntities.size !== change.changes.nodes.length ||
+    edgeEntities.size !== change.changes.edges.length
+  ) return null
+  const ghostKeys = new Map<string, string>()
+  const undo: CanvasOptimisticOverlayItem[] = []
+  const redo: CanvasOptimisticOverlayItem[] = []
+  for (const node of change.changes.nodes) {
+    const entity = nodeEntities.get(node.id)
+    if (!entity || entity.id !== node.id) return null
+    const ghostKey = `ghost-history-node:${globalThis.crypto.randomUUID()}`
+    ghostKeys.set(node.id, ghostKey)
+    undo.push(createCanvasHideEntityOverlay({ entityId: node.id, incarnation: entity.incarnation, kind: "node" }))
+  }
+  for (const edge of change.changes.edges) {
+    const entity = edgeEntities.get(edge.id)
+    if (!entity || entity.id !== edge.id) return null
+    undo.push(createCanvasHideEntityOverlay({ entityId: edge.id, incarnation: entity.incarnation, kind: "edge" }))
+  }
+  for (const node of change.changes.nodes) {
+    redo.push(canvasNodeGhost(node, ghostKeys.get(node.id)!, ghostKeys))
+  }
+  for (const edge of change.changes.edges) {
+    const ghost = createCanvasConnectionGhost(
+      ghostKeys.get(edge.source) ?? edge.source,
+      ghostKeys.get(edge.target) ?? edge.target,
+    )
+    redo.push(Object.freeze({
+      ...ghost,
+      ...(typeof edge.data?.label === "string" ? { label: edge.data.label } : {}),
+    }))
+  }
+  return Object.freeze({ undo: Object.freeze(undo), redo: Object.freeze(redo) })
 }
 
 function createPresentationDelta(

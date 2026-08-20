@@ -1,17 +1,31 @@
 import { describe, expect, test } from "bun:test"
-import { comparePortableStamps, compareUtf8, parseUint32, parseUint64 } from "@convax/collaboration"
+import {
+  comparePortableStamps,
+  compareUtf8,
+  installCurrentProtocolAuthority,
+  parseUint32,
+  parseUint64,
+} from "@convax/collaboration"
+import * as Y from "yjs"
 import {
   buildCanvasProjectionIndex,
+  canvasProjectionBuildCounts,
   effectiveDataDigest,
   effectivePluginDigest,
   generationLifecycleCore,
   generationLifecycleDigest,
   geometryDigest,
-  obstacleProjectionDigest,
   projectedGenerationDigestV2,
+  projectCanvas,
   projectionDigest,
 } from "./projection"
-import { applyCanvasCandidateIntent, materializeCanvasSemanticHistoryIntent } from "./reducer"
+import {
+  applyCanvasCandidateIntent,
+  applyCanvasOwnerCandidateIntent,
+  armCanvasDuplicateCandidateCapture,
+  consumeCanvasDuplicateValidatedPost,
+  materializeCanvasSemanticHistoryIntent,
+} from "./reducer"
 import { constructCanvasHistoryIntent } from "./command-construction"
 import { discoverCanvasValueDependencies } from "./external-facts"
 import type {
@@ -33,7 +47,20 @@ import {
   derivedNodeRef,
   makeStamp,
 } from "./validation"
-import { encodeCanvasCanonicalState, validateCanvasYDoc } from "./ydoc"
+import {
+  encodeCanvasCanonicalState,
+  encodeValidatedCanvasCanonicalState,
+  canvasYDocValidationCounts,
+  getCanvasChildMap,
+  validateCanvasYDoc,
+} from "./ydoc"
+import { canvasPersistentAppendMapCounts } from "./persistent-append-map"
+import { readCanvasCertifiedProjectionPatch } from "./projection-patch"
+import {
+  canvasOperationReceipt,
+  canvasSnapshotFromValidatedOwnerState,
+  createCanvasDocumentOwnerRuntime,
+} from "./session"
 import {
   applyOk,
   context,
@@ -74,6 +101,225 @@ describe("Canvas v2 reducer and merge invariants", () => {
     })
   })
 
+  test("validates consecutive resource appends without copying historical snapshot entries", () => {
+    const candidate = newCanvas()
+    for (let batch = 0; batch < 12; batch += 1) {
+      const operationContext = context(300 + batch, 400 + batch, batch + 1)
+      applyOk(candidate, operationContext, resourceCreateIntent(candidate, operationContext, 85, batch))
+    }
+    expect(validateCanvasYDoc(candidate).nodes.size).toBe(1_020)
+
+    let base = validateCanvasYDoc(candidate)
+    expect(() => (base.nodes as Map<string, unknown>).set("poison", {})).toThrow()
+    expect(() => (base.operations as Map<string, unknown>).clear()).toThrow()
+    const countsBefore = canvasPersistentAppendMapCounts()
+    for (let index = 0; index < 4; index += 1) {
+      const operationContext = context(500 + index, 600 + index, 20 + index)
+      const intent = resourceCreateIntent(candidate, operationContext, 1, 20 + index)
+      buildCanvasProjectionIndex(base)
+      const projectionCountsBefore = canvasProjectionBuildCounts()
+      armCanvasDuplicateCandidateCapture(candidate, base, operationContext)
+      const result = applyCanvasOwnerCandidateIntent(candidate, base, operationContext, intent, VALID_FACTS)
+      if (result === "pending" || result === "rejected") throw new Error(`resource append unexpectedly ${result}`)
+      const fast = consumeCanvasDuplicateValidatedPost(candidate, base, result)
+      expect(fast.status).toBe("accepted")
+      if (fast.status !== "accepted") throw new Error("resource append did not produce an incremental validated post")
+      const projectionCountsAfter = canvasProjectionBuildCounts()
+      expect(projectionCountsAfter.fullBuilds - projectionCountsBefore.fullBuilds).toBe(0)
+      expect(projectionCountsAfter.fullNodeTraversals - projectionCountsBefore.fullNodeTraversals).toBe(0)
+      // One constant-size history-input projection plus one final projection.
+      expect(projectionCountsAfter.resourceAppendBuilds - projectionCountsBefore.resourceAppendBuilds).toBe(2)
+      expect(projectionCountsAfter.obstacleQueryVisits - projectionCountsBefore.obstacleQueryVisits).toBeLessThan(200)
+
+      const fullyValidated = validateCanvasYDoc(candidate)
+      expect(encodeValidatedCanvasCanonicalState(fast.snapshot)).toEqual(encodeValidatedCanvasCanonicalState(fullyValidated))
+      expect(projectCanvas(fast.snapshot)).toEqual(projectCanvas(fullyValidated))
+      expect(projectionDigest(fast.snapshot)).toBe(projectionDigest(fullyValidated))
+      expect(() => (fast.snapshot.nodes as Map<string, unknown>).set("poison", {})).toThrow()
+      expect(() => (fast.snapshot.operations as Map<string, unknown>).delete("poison")).toThrow()
+      expect(() => (fast.snapshot.semanticHistory as Map<string, unknown>).clear()).toThrow()
+      base = fast.snapshot
+    }
+    const countsAfter = canvasPersistentAppendMapCounts()
+    expect(countsAfter.historicalEntryCopies - countsBefore.historicalEntryCopies).toBe(0)
+    // Each operation builds one constant-size history input (node) and one
+    // constant-size final post (node + history + receipt), never old entries.
+    expect(countsAfter.ownerSnapshotAppendedEntries - countsBefore.ownerSnapshotAppendedEntries).toBe(16)
+    // Each projected node path-copies the entity-key index, exact node-id
+    // index, and placement-obstacle index: three k=1 entries per append.
+    expect(countsAfter.derivedProjectionAppendedEntries - countsBefore.derivedProjectionAppendedEntries).toBe(24)
+  }, 30_000)
+
+  test("drops an incremental post after any later candidate transaction", () => {
+    const candidate = newCanvas()
+    const base = validateCanvasYDoc(candidate)
+    const operationContext = context(540, 640, 1)
+    const intent = resourceCreateIntent(candidate, operationContext, 1, 40)
+    armCanvasDuplicateCandidateCapture(candidate, base, operationContext)
+    const result = applyCanvasOwnerCandidateIntent(candidate, base, operationContext, intent, VALID_FACTS)
+    if (result === "pending" || result === "rejected") throw new Error(`resource append unexpectedly ${result}`)
+    const createdKey = canvasEntityKey(result.receipt.resultEntities[0]!)
+    candidate.transact(() => {
+      getCanvasChildMap(candidate, "nodes").delete(createdKey)
+    }, "late-candidate-tamper")
+
+    expect(consumeCanvasDuplicateValidatedPost(candidate, base, result)).toEqual({ status: "stale-candidate" })
+  })
+
+  test("owner runtime rejects a valid transaction appended after a sealed resource create", async () => {
+    const runtime = createCanvasDocumentOwnerRuntime(await installCurrentProtocolAuthority())
+    const protocol = runtime.protocolPort
+    const baseDocument = newCanvas()
+    const baseState = protocol.validateBase(baseDocument)
+    if (typeof baseState === "string") throw new Error(`base unexpectedly ${baseState}`)
+    const base = canvasSnapshotFromValidatedOwnerState(baseState)
+    if (base === null) throw new Error("runtime base did not expose its sealed Canvas snapshot")
+    const candidate = fork(baseDocument)
+    const operationContext = context(548, 648, 1)
+    const intent = resourceCreateIntent(candidate, operationContext, 1, 43)
+    const dependencies = runtime.closurePort.discoverDependencies({ context: operationContext, intent })
+    if (typeof dependencies === "string") throw new Error(`dependencies unexpectedly ${dependencies}`)
+    const attempt = runtime.externalFactPortFactory.createAttemptPort({
+      declared: dependencies,
+      resolver: {
+        owner: "canvas",
+        resolveArtifact: () => ({ status: "rejected", code: "artifact-not-declared" }),
+        resolveFact: (requirement) => ({
+          status: "resolved",
+          requirement,
+          value: {
+            format: "convax.canvas-external-fact-result",
+            kind: requirement.kind,
+            requestSha256: requirement.request.sha256,
+            factDigest: requirement.factDigest,
+            decision: "verified",
+          },
+        }),
+      },
+    })
+    if (attempt.status !== "created") throw new Error(`fact attempt unexpectedly ${attempt.code}`)
+
+    armCanvasDuplicateCandidateCapture(candidate, base, operationContext)
+    let result: ReturnType<typeof protocol.applyIntent> = "rejected"
+    candidate.transact(() => {
+      result = protocol.applyIntent(baseState, candidate, operationContext, intent, attempt.port)
+    }, "kernel-owned-resource-create")
+    if (typeof result === "string") throw new Error(`owner apply unexpectedly ${result}`)
+
+    const laterContext = context(549, 649, 2)
+    applyOk(candidate, laterContext, nodeCreate(laterContext, "valid-late-owner-mutation"))
+    expect(() => validateCanvasYDoc(candidate)).not.toThrow()
+    expect(protocol.validatePost(baseState, candidate, result)).toBe("rejected")
+    const lateSnapshot = validateCanvasYDoc(candidate)
+    const receipt = canvasOperationReceipt(lateSnapshot, operationContext.actorId, operationContext.operationId)
+    expect(receipt).not.toBeNull()
+    expect(readCanvasCertifiedProjectionPatch(lateSnapshot, receipt!)).toBeNull()
+  })
+
+  test("rejects a sealed resource append widened with a new-entity tombstone", () => {
+    const candidate = newCanvas()
+    const base = validateCanvasYDoc(candidate)
+    const operationContext = context(541, 641, 1)
+    const intent = resourceCreateIntent(candidate, operationContext, 1, 41)
+    armCanvasDuplicateCandidateCapture(candidate, base, operationContext)
+    let result: ReturnType<typeof applyCanvasOwnerCandidateIntent> = "rejected"
+    candidate.transact(() => {
+      result = applyCanvasOwnerCandidateIntent(candidate, base, operationContext, intent, VALID_FACTS)
+      if (result === "pending" || result === "rejected") throw new Error(`resource append unexpectedly ${result}`)
+      const created = result.receipt.resultEntities[0]!
+      const record = getCanvasChildMap(candidate, "nodes").get(canvasEntityKey(created))
+      if (!(record instanceof Y.Map)) throw new Error("created node record is missing")
+      const tombstones = record.get("tombstones")
+      if (!(tombstones instanceof Y.Map)) throw new Error("created node tombstones are missing")
+      const tamperContext = context(542, 642, 2)
+      tombstones.set(tamperContext.actorId, {
+        format: "convax.canvas-tombstone",
+        entity: created,
+        stamp: makeStamp(tamperContext, U0),
+      })
+    }, "resource-append-with-new-node-tombstone")
+    if (result === "pending" || result === "rejected") throw new Error(`resource append unexpectedly ${result}`)
+    expect(() => validateCanvasYDoc(candidate)).not.toThrow()
+    expect(consumeCanvasDuplicateValidatedPost(candidate, base, result)).toEqual({ status: "stale-candidate" })
+  })
+
+  test("rejects a sealed resource append widened to a dead existing endpoint", () => {
+    const candidate = newCanvas()
+    const deadContext = context(544, 644, 1)
+    const dead = derivedNodeRef(deadContext, U0)
+    applyOk(candidate, deadContext, nodeCreate(deadContext, "dead-endpoint"))
+    applyOk(candidate, context(545, 645, 2), removeNode(candidate, dead))
+    const liveContext = context(546, 646, 3)
+    const live = derivedNodeRef(liveContext, U0)
+    applyOk(candidate, liveContext, nodeCreate(liveContext, "live-endpoint"))
+
+    const base = validateCanvasYDoc(candidate)
+    const operationContext = context(547, 647, 4)
+    const intent = resourceCreateWithExistingEndpointIntent(candidate, operationContext, live, 42)
+    armCanvasDuplicateCandidateCapture(candidate, base, operationContext)
+    let result: ReturnType<typeof applyCanvasOwnerCandidateIntent> = "rejected"
+    candidate.transact(() => {
+      result = applyCanvasOwnerCandidateIntent(candidate, base, operationContext, intent, VALID_FACTS)
+      if (result === "pending" || result === "rejected") throw new Error(`resource append unexpectedly ${result}`)
+      const createdEdge = result.receipt.resultEntities.find((entity) => entity.kind === "edge")
+      if (!createdEdge) throw new Error("resource append did not create its edge")
+      const record = getCanvasChildMap(candidate, "edges").get(canvasEntityKey(createdEdge))
+      if (!(record instanceof Y.Map)) throw new Error("created edge record is missing")
+      const identity = record.get("identity")
+      if (typeof identity !== "object" || identity === null) throw new Error("created edge identity is missing")
+      record.set("identity", { ...identity, source: dead })
+    }, "resource-append-with-dead-endpoint")
+    if (result === "pending" || result === "rejected") throw new Error(`resource append unexpectedly ${result}`)
+
+    // General CRDT validation retains edges incident to tombstoned nodes; the
+    // owner postcondition must still reject widening this create transaction.
+    expect(() => validateCanvasYDoc(candidate)).not.toThrow()
+    expect(consumeCanvasDuplicateValidatedPost(candidate, base, result)).toEqual({ status: "stale-candidate" })
+  })
+
+  test("full validation rejects a receipt and semantic history orphaned by physical entity removal", () => {
+    const candidate = newCanvas()
+    const operationContext = context(543, 643, 1)
+    const result = applyOk(candidate, operationContext, nodeCreate(operationContext, "orphan"))
+    const createdKey = canvasEntityKey(result.receipt.resultEntities[0]!)
+    getCanvasChildMap(candidate, "nodes").delete(createdKey)
+
+    expect(() => validateCanvasYDoc(candidate)).toThrow("names an absent node")
+  })
+
+  test("indexes operation ids once for large semantic-history validation", () => {
+    const candidate = newCanvas()
+    for (let index = 0; index < 64; index += 1) {
+      const operationContext = context(600 + index, 700 + index, index + 1)
+      applyOk(candidate, operationContext, nodeCreate(operationContext, `indexed-history-${index}`))
+    }
+    const before = canvasYDocValidationCounts()
+    expect(validateCanvasYDoc(candidate).operations.size).toBe(64)
+    const after = canvasYDocValidationCounts()
+    expect(after.operationIndexEntries - before.operationIndexEntries).toBe(64)
+    expect(after.semanticHistoryReceiptLookups - before.semanticHistoryReceiptLookups).toBe(64)
+    expect(after.creationGroupReceiptLookups - before.creationGroupReceiptLookups).toBe(0)
+  })
+
+  test("rejects one operation id claimed by receipts from different actors", () => {
+    const candidate = newCanvas()
+    const firstContext = context(670, 770, 1)
+    const secondContext = context(671, 771, 2)
+    applyOk(candidate, firstContext, nodeCreate(firstContext, "first-operation"))
+    applyOk(candidate, secondContext, nodeCreate(secondContext, "second-operation"))
+    const operations = getCanvasChildMap(candidate, "operations")
+    const secondKey = `operation/${secondContext.actorId}/${secondContext.operationId}`
+    const second = operations.get(secondKey)
+    if (typeof second !== "object" || second === null) throw new Error("second receipt is missing")
+    operations.delete(secondKey)
+    operations.set(`operation/${secondContext.actorId}/${firstContext.operationId}`, {
+      ...second,
+      operationId: firstContext.operationId,
+    })
+
+    expect(() => validateCanvasYDoc(candidate)).toThrow("claimed by multiple actor receipts")
+  })
+
   test("emits an exact sorted eight-write ledger for node create", () => {
     const document = newCanvas()
     const operationContext = context(1, 1, 1)
@@ -89,6 +335,77 @@ describe("Canvas v2 reducer and merge invariants", () => {
     )
     expect(result.receipt.semanticRoot).toBeTrue()
     expect(result.receipt.historyMaterialDigest).toBe(result.semanticHistoryRoot!.materialDigest)
+  })
+
+  test("causal placement preserves collision closure and reuses one immutable snapshot index", () => {
+    const document = newCanvas()
+    const obstacles = [
+      { x: -500, y: 0, width: 100, height: 120 },
+      { x: 0, y: 0, width: 240, height: 120 },
+      { x: 264, y: 0, width: 80, height: 120 },
+      { x: 368, y: 400, width: 900, height: 120 },
+      { x: 372, y: 10, width: 500, height: 80 },
+      { x: 896, y: -20, width: 120, height: 200 },
+      { x: 1040, y: -1_000, width: 1_000, height: 120 },
+    ] as const
+    for (const [index, obstacle] of obstacles.entries()) {
+      const operationContext = context(100 + index, 150 + index, index + 1)
+      applyOk(document, operationContext, nodeCreate(operationContext, `obstacle-${index}`, obstacle))
+    }
+
+    const base = validateCanvasYDoc(document)
+    const projectionIndex = buildCanvasProjectionIndex(base)
+    expect(buildCanvasProjectionIndex(base)).toBe(projectionIndex)
+    expect(() => (projectionIndex.nodesByKey as Map<string, unknown>).clear()).toThrow()
+    expect(() => (projectionIndex.edgesByKey as Map<string, unknown>).set("poison", {})).toThrow()
+    expect(() => (projectionIndex.selectedContainments as Map<string, unknown>).delete("poison")).toThrow()
+    expect(buildCanvasProjectionIndex(base).projection.nodes).toHaveLength(obstacles.length)
+
+    const operationContext = context(220, 230, 20)
+    const sizes = [
+      { width: 240, height: 120 },
+      { width: 96, height: 64 },
+      { width: 320, height: 160 },
+    ] as const
+    const specs = sizes.map((size, index) => ({ ordinal: parseUint32(String(index)), size }))
+    const expected = legacyCreatedNodePlacement(
+      projectionIndex.projection.nodes
+        .filter((node) => node.parent === null)
+        .map((node) => ({ ...node.position, ...node.size })),
+      { x: 0, y: 0 },
+      specs,
+    )
+    const nodes = specs.map((spec, index) => {
+      const node = derivedNodeRef(operationContext, spec.ordinal)
+      return {
+        guard: { ordinal: spec.ordinal, node, expectedAbsent: true as const },
+        node: {
+          ordinal: spec.ordinal,
+          nodeId: node.id,
+          incarnation: node.incarnation,
+          size: spec.size,
+          title: `created-${index}`,
+          expectedClass: "image" as const,
+        },
+      }
+    })
+    applyOk(document, operationContext, {
+      format: "convax.typed-intent",
+      kind: "canvas.resources.pending.create",
+      guard: { existingEndpoints: [], derivedNodes: nodes.map((entry) => entry.guard), derivedEdges: [] },
+      body: {
+        placement: {
+          anchor: { x: 0, y: 0 },
+          gap: 24,
+        },
+        nodes: nodes.map((entry) => entry.node),
+        edges: [],
+      },
+    })
+    const post = validateCanvasYDoc(document)
+    const postIndex = buildCanvasProjectionIndex(post)
+    expect(postIndex).not.toBe(projectionIndex)
+    expect(nodes.map((entry) => postIndex.nodesByKey.get(canvasEntityKey(entry.guard.node))!.position)).toEqual(expected)
   })
 
   test("semantic inverse and forward use latest-state guards and recreate under a new incarnation", () => {
@@ -433,7 +750,7 @@ describe("Canvas v2 reducer and merge invariants", () => {
           resourceProofs: [{ createdNodeOrdinal: U0, proof: { format: "convax.canvas-resource-proof-ref", mode: "current-owner-state", resource, ownerProofDigest: resource.ownerProofDigest, requireCurrentLiveVersion: true } }],
         },
         body: {
-          placement: { anchor: { x: 0, y: 0 }, gap: 24, obstacleProjectionDigest: obstacleProjectionDigest(validateCanvasYDoc(document)) },
+          placement: { anchor: { x: 0, y: 0 }, gap: 24 },
           nodes: [{ ordinal: U0, nodeId: node.id, incarnation: node.incarnation, size: { width: 240, height: 120 }, title: "resource-history", resource }],
           edges: [],
         },
@@ -536,7 +853,7 @@ describe("Canvas v2 reducer and merge invariants", () => {
       kind: "canvas.resources.pending-generation.create",
       guard: { existingEndpoints: [], derivedNode: { ordinal: U0, node, expectedAbsent: true }, derivedEdges: [] },
       body: {
-        placement: { anchor: { x: 0, y: 0 }, gap: 24, obstacleProjectionDigest: obstacleProjectionDigest(validateCanvasYDoc(document)) },
+        placement: { anchor: { x: 0, y: 0 }, gap: 24 },
         node: { ordinal: U0, nodeId: node.id, incarnation: node.incarnation, size: { width: 240, height: 120 }, title: pendingData.title, expectedClass: pendingData.expectedClass },
         edges: [],
         begin,
@@ -1096,6 +1413,12 @@ function semanticRedoIntent(
 function nodeCreate(
   operationContext: ReturnType<typeof context>,
   title: string,
+  geometry: { readonly x: number; readonly y: number; readonly width: number; readonly height: number } = {
+    x: 0,
+    y: 0,
+    width: 240,
+    height: 120,
+  },
 ): Extract<CanvasTypedIntentUnion, { kind: "canvas.agent.create" }> {
   const node = derivedNodeRef(operationContext, U0)
   return {
@@ -1108,13 +1431,39 @@ function nodeCreate(
         nodeId: node.id,
         incarnation: node.incarnation,
         role: "agent",
-        position: { x: 0, y: 0 },
-        size: { width: 240, height: 120 },
+        position: { x: geometry.x, y: geometry.y },
+        size: { width: geometry.width, height: geometry.height },
         data: { format: "convax.canvas-node-data", kind: "agent", title, instructions: null },
         plugin: null,
       },
     },
   }
+}
+
+function legacyCreatedNodePlacement(
+  initialObstacles: readonly { x: number; y: number; width: number; height: number }[],
+  anchor: { x: number; y: number },
+  specs: readonly { ordinal: ReturnType<typeof parseUint32>; size: { width: number; height: number } }[],
+): { x: number; y: number }[] {
+  const obstacles = initialObstacles.map((obstacle) => ({ ...obstacle }))
+  const result = new Map<string, { x: number; y: number }>()
+  for (const spec of [...specs].sort((left, right) => Number(left.ordinal) - Number(right.ordinal))) {
+    let position = { ...anchor }
+    while (true) {
+      const collisions = obstacles.filter(
+        (obstacle) =>
+          position.x < obstacle.x + obstacle.width + 24 &&
+          position.x + spec.size.width + 24 > obstacle.x &&
+          position.y < obstacle.y + obstacle.height + 24 &&
+          position.y + spec.size.height + 24 > obstacle.y,
+      )
+      if (collisions.length === 0) break
+      position = { x: Math.max(...collisions.map((obstacle) => obstacle.x + obstacle.width + 24)), y: position.y }
+    }
+    obstacles.push({ ...position, ...spec.size })
+    result.set(spec.ordinal, position)
+  }
+  return specs.map((spec) => result.get(spec.ordinal)!)
 }
 
 function removeNode(
@@ -1153,6 +1502,108 @@ function projectResource(
   }
 }
 
+function resourceCreateIntent(
+  document: ReturnType<typeof newCanvas>,
+  operationContext: ReturnType<typeof context>,
+  count: number,
+  salt: number,
+): Extract<CanvasTypedIntentUnion, { kind: "canvas.resources.add" }> {
+  const nodes = Array.from({ length: count }, (_, index) => {
+    const ordinal = parseUint32(String(index))
+    const node = derivedNodeRef(operationContext, ordinal)
+    const character = ((salt * 85 + index) % 16).toString(16)
+    const resource = projectResource(character, digest(700 + salt * 2), digest(701 + salt * 2))
+    return { node, ordinal, resource }
+  })
+  return {
+    format: "convax.typed-intent",
+    kind: "canvas.resources.add",
+    guard: {
+      existingEndpoints: [],
+      derivedNodes: nodes.map(({ node, ordinal }) => ({ ordinal, node, expectedAbsent: true })),
+      derivedEdges: [],
+      resourceProofs: nodes.map(({ ordinal, resource }) => ({
+        createdNodeOrdinal: ordinal,
+        proof: {
+          format: "convax.canvas-resource-proof-ref",
+          mode: "current-owner-state",
+          resource,
+          ownerProofDigest: resource.ownerProofDigest,
+          requireCurrentLiveVersion: true,
+        },
+      })),
+    },
+    body: {
+      placement: {
+        anchor: { x: 0, y: salt * 160 },
+        gap: 24,
+      },
+      nodes: nodes.map(({ node, ordinal, resource }, index) => ({
+        ordinal,
+        nodeId: node.id,
+        incarnation: node.incarnation,
+        size: { width: 240, height: 120 },
+        title: `resource-${salt}-${index}`,
+        resource,
+      })),
+      edges: [],
+    },
+  }
+}
+
+function resourceCreateWithExistingEndpointIntent(
+  document: ReturnType<typeof newCanvas>,
+  operationContext: ReturnType<typeof context>,
+  existingEndpoint: ReturnType<typeof derivedNodeRef>,
+  salt: number,
+): Extract<CanvasTypedIntentUnion, { kind: "canvas.resources.add" }> {
+  const node = derivedNodeRef(operationContext, U0)
+  const edge = derivedEdgeRef(operationContext, U1)
+  const character = (salt % 16).toString(16)
+  const resource = projectResource(character, digest(700 + salt * 2), digest(701 + salt * 2))
+  return {
+    format: "convax.typed-intent",
+    kind: "canvas.resources.add",
+    guard: {
+      existingEndpoints: [{ ...nodeLiveGuard(document, existingEndpoint), expectedConnectable: true }],
+      derivedNodes: [{ ordinal: U0, node, expectedAbsent: true }],
+      derivedEdges: [{ ordinal: U1, edge, expectedAbsent: true }],
+      resourceProofs: [{
+        createdNodeOrdinal: U0,
+        proof: {
+          format: "convax.canvas-resource-proof-ref",
+          mode: "current-owner-state",
+          resource,
+          ownerProofDigest: resource.ownerProofDigest,
+          requireCurrentLiveVersion: true,
+        },
+      }],
+    },
+    body: {
+      placement: {
+        anchor: { x: 0, y: salt * 160 },
+        gap: 24,
+      },
+      nodes: [{
+        ordinal: U0,
+        nodeId: node.id,
+        incarnation: node.incarnation,
+        size: { width: 240, height: 120 },
+        title: `resource-${salt}`,
+        resource,
+      }],
+      edges: [{
+        ordinal: U1,
+        edgeId: edge.id,
+        incarnation: edge.incarnation,
+        source: existingEndpoint,
+        target: { createdNodeOrdinal: U0 },
+        data: { format: "convax.canvas-edge-data", kind: "business", label: null },
+      }],
+    },
+  }
+}
+
 function createResourceNode(
   document: ReturnType<typeof newCanvas>,
   operationContext: ReturnType<typeof context>,
@@ -1170,7 +1621,7 @@ function createResourceNode(
       resourceProofs: [{ createdNodeOrdinal: U0, proof: { format: "convax.canvas-resource-proof-ref", mode: "current-owner-state", resource, ownerProofDigest: resource.ownerProofDigest, requireCurrentLiveVersion: true } }],
     },
     body: {
-      placement: { anchor: { x: 0, y: 0 }, gap: 24, obstacleProjectionDigest: obstacleProjectionDigest(validateCanvasYDoc(document)) },
+      placement: { anchor: { x: 0, y: 0 }, gap: 24 },
       nodes: [{ ordinal: U0, nodeId: node.id, incarnation: node.incarnation, size: { width: 240, height: 120 }, title, resource }],
       edges: [],
     },
