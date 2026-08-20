@@ -17,8 +17,8 @@ describe("Marketplace product policy configuration", () => {
     expect(new TextDecoder().decode(result.stderr)).toContain("--revision=<positive integer>")
   })
 
-  test("creates the approved v15 source and one package policy per exact multi-purpose closure", () => {
-    expect(CURRENT_MARKETPLACE_PRODUCT_POLICY_REVISION).toBe(15)
+  test("creates the approved v16 source and one package policy per exact multi-purpose closure", () => {
+    expect(CURRENT_MARKETPLACE_PRODUCT_POLICY_REVISION).toBe(16)
     expect(configureMarketplaceProductPolicy(CURRENT_MARKETPLACE_PRODUCT_POLICY_REVISION)).toEqual({
       builtin: { marketplaceId: "convax-builtin", repository: "convaxai/convax-plugins" },
       official: {
@@ -82,7 +82,7 @@ describe("Marketplace product policy configuration", () => {
             version: "0.3.14",
           },
           targets: ["darwin-arm64"],
-          version: "1.0.7",
+          version: "1.0.8",
         },
         ...[
           "ad-idea",
@@ -157,7 +157,7 @@ describe("Marketplace product policy configuration", () => {
           version: "0.2.2",
         },
       ],
-      revision: 15,
+      revision: 16,
     })
   })
 

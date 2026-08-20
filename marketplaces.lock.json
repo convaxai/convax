@@ -108,7 +108,7 @@
         "targets": [
           "darwin-arm64"
         ],
-        "version": "1.0.7"
+        "version": "1.0.8"
       },
       {
         "id": "ad-idea",
@@ -261,7 +261,7 @@
         "version": "0.2.2"
       }
     ],
-    "revision": 15
+    "revision": 16
   },
   "resolved": {
     "builtinBundle": {
@@ -281,20 +281,20 @@
         "name": "marketplace.json",
         "sha256": "371a7ca2fc29a492a599878d53ca62a36ac98ca160d6d3b880aec8d72c48f001",
         "size": 563,
-        "url": "https://github.com/convaxai/convax-plugins/releases/download/registry-v2-46964c1e0141775c08564a7d493cd859de6ca6739198be9be86bae421926c3a3/marketplace.json"
+        "url": "https://github.com/convaxai/convax-plugins/releases/download/registry-v2-a338a6656a04241b8e70f75393e507e2cb4304a2f86559756380129f62bf5350/marketplace.json"
       },
       "registry": {
         "name": "registry-v2.json",
-        "sha256": "10c50e825ab4f3d192fa93038c2a6517ed79853bb79817968e0a03f22fb5c9c1",
+        "sha256": "dcbfe0258839526cb2d52a093fe7462ec897e8501b167c9d5052d236def46303",
         "size": 43751,
-        "url": "https://github.com/convaxai/convax-plugins/releases/download/registry-v2-46964c1e0141775c08564a7d493cd859de6ca6739198be9be86bae421926c3a3/registry-v2.json"
+        "url": "https://github.com/convaxai/convax-plugins/releases/download/registry-v2-a338a6656a04241b8e70f75393e507e2cb4304a2f86559756380129f62bf5350/registry-v2.json"
       },
-      "revision": "46964c1e0141775c08564a7d493cd859de6ca6739198be9be86bae421926c3a3",
+      "revision": "a338a6656a04241b8e70f75393e507e2cb4304a2f86559756380129f62bf5350",
       "showcase": {
         "name": "showcase-v2.json",
-        "sha256": "c3141578189e68b8710070b937c32dc0089f7937c6ba3bc8c009ae66a86e1fc4",
+        "sha256": "c8b8f86df89e1149a0df1fce51f327ba4e2fe1dbf4998ad676d24a44daf3c7eb",
         "size": 15031,
-        "url": "https://github.com/convaxai/convax-plugins/releases/download/registry-v2-46964c1e0141775c08564a7d493cd859de6ca6739198be9be86bae421926c3a3/showcase-v2.json"
+        "url": "https://github.com/convaxai/convax-plugins/releases/download/registry-v2-a338a6656a04241b8e70f75393e507e2cb4304a2f86559756380129f62bf5350/showcase-v2.json"
       }
     },
     "packages": [
@@ -498,17 +498,17 @@
       },
       {
         "artifact": {
-          "name": "plugin-nexus-service-1.0.7.zip",
-          "sha256": "afb442ea3850f9a47d264719b87ad09268879d402fc0fe96e59cdb262ac2e6ad",
+          "name": "plugin-nexus-service-1.0.8.zip",
+          "sha256": "40884d4a23784aba055ae2cf9bfacfa7255826240f05788619dce12016aa76e2",
           "size": 3369,
-          "url": "https://github.com/convaxai/convax-plugins/releases/download/plugin-nexus-service-v1.0.7/plugin-nexus-service-1.0.7.zip"
+          "url": "https://github.com/convaxai/convax-plugins/releases/download/plugin-nexus-service-v1.0.8/plugin-nexus-service-1.0.8.zip"
         },
         "companions": [
           {
-            "name": "nexus-service-1.0.7-darwin-arm64-convax-nexus-mcp",
-            "sha256": "328c3401ddfff08ba532cf5148b84914a21ee9a0834c1e599128b2110db7c37c",
-            "size": 63546848,
-            "url": "https://github.com/convaxai/convax-plugins/releases/download/plugin-nexus-service-v1.0.7/nexus-service-1.0.7-darwin-arm64-convax-nexus-mcp",
+            "name": "nexus-service-1.0.8-darwin-arm64-convax-nexus-mcp",
+            "sha256": "1d0d63531fa248d2b0339c1b4517e9fc2d315cdd611e6a3a4238dbd10e193ac8",
+            "size": 63528674,
+            "url": "https://github.com/convaxai/convax-plugins/releases/download/plugin-nexus-service-v1.0.8/nexus-service-1.0.8-darwin-arm64-convax-nexus-mcp",
             "arch": "arm64",
             "platform": "darwin"
           }
@@ -534,7 +534,7 @@
         "targets": [
           "darwin-arm64"
         ],
-        "version": "1.0.7"
+        "version": "1.0.8"
       },
       {
         "artifact": {
@@ -795,7 +795,7 @@
         "version": "0.2.2"
       }
     ],
-    "policyDigest": "fa798d3657e65cb0e3f0439b379e4f6fef88a85117c5368441dbe2ec527556c3"
+    "policyDigest": "abaf7dc93c258c870260e4baaec7a185ee1563956a1c8e8e067d23524240ca1e"
   },
   "schema": "convax.marketplace-product-lock/3"
 }
