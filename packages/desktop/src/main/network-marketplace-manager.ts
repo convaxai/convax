@@ -27,6 +27,11 @@ interface PersistedNetworkSource {
   sourceOrder: number
 }
 
+export interface InstallationMarketplaceSource {
+  descriptor: MarketplaceDescriptor
+  descriptorUrl: string
+}
+
 interface SourceGraph {
   nextSourceOrder: number
   revision: number
@@ -158,6 +163,25 @@ function catalog(registry: RegistryV2): AcceptedMarketplaceCatalog {
   }
 }
 
+function bindDescriptor(descriptorUrl: string, value: unknown) {
+  const descriptor = parseMarketplaceDescriptor(value)
+  const repository = marketplaceRepositoryFromDescriptorUrl(descriptorUrl)
+  if (
+    descriptor.repository.owner.toLowerCase() !== repository.owner ||
+    descriptor.repository.name !== repository.repository
+  ) {
+    throw new Error("Marketplace descriptor repository does not match its URL")
+  }
+  const sourceKey = computeSourceKey({
+    deliveryPolicy: "github-pages-releases",
+    descriptorUrl,
+    kind: "network",
+    marketplaceId: descriptor.id,
+    repository: { name: descriptor.repository.name, owner: descriptor.repository.owner },
+  })
+  return { descriptor, descriptorUrl, sourceKey }
+}
+
 async function atomicGraph(file: string, value: SourceGraph) {
   const bytes = `${canonicalJson(value)}\n`
   if (Buffer.byteLength(bytes) > maxGraphBytes) throw new Error("Network Marketplace graph exceeds its byte limit")
@@ -192,20 +216,66 @@ export class NetworkMarketplaceManager {
   readonly #root: string
   readonly #previews = new Map<string, Preview>()
   readonly #listeners = new Set<() => void>()
+  readonly #installationSources: readonly Omit<PersistedNetworkSource, "sourceOrder">[]
   readonly #reservedMarketplaceIds: ReadonlySet<string>
   #tail = Promise.resolve()
 
-  constructor(options: { fetcher: PinnedHttpsFetcher; reservedMarketplaceIds?: ReadonlySet<string>; root: string }) {
+  constructor(options: {
+    fetcher: PinnedHttpsFetcher
+    installationSources?: readonly InstallationMarketplaceSource[]
+    reservedMarketplaceIds?: ReadonlySet<string>
+    root: string
+  }) {
     this.#fetcher = options.fetcher
     this.#root = path.resolve(options.root)
     this.#file = path.join(this.#root, "sources-v1.json")
-    this.#reservedMarketplaceIds =
-      options.reservedMarketplaceIds ?? new Set(["convax-builtin", "convax-local", "convax-official"])
+    this.#installationSources = (options.installationSources ?? []).map((source) =>
+      bindDescriptor(source.descriptorUrl, source.descriptor),
+    )
+    const installationIds = this.#installationSources.map(({ descriptor }) => descriptor.id)
+    if (new Set(installationIds).size !== installationIds.length) {
+      throw new Error("Installation Marketplace identities must be unique")
+    }
+    this.#reservedMarketplaceIds = new Set([
+      ...(options.reservedMarketplaceIds ?? ["convax-builtin", "convax-local", "convax-official"]),
+      ...installationIds,
+    ])
   }
 
   subscribe(listener: () => void) {
     this.#listeners.add(listener)
     return () => this.#listeners.delete(listener)
+  }
+
+  initializeInstallationSources(): Promise<void> {
+    return this.#serialize(async () => {
+      if (this.#installationSources.length === 0) return
+      const graph = await this.#readGraph()
+      let changed = false
+      for (const installation of this.#installationSources) {
+        const existing = graph.sources.find(({ descriptor }) => descriptor.id === installation.descriptor.id)
+        if (existing) {
+          if (existing.descriptorUrl !== installation.descriptorUrl || existing.sourceKey !== installation.sourceKey) {
+            throw new Error("Installation Marketplace identity is bound to another source")
+          }
+          continue
+        }
+        if (graph.sources.length >= maxSources) throw new Error("Network Marketplace source limit was reached")
+        graph.sources.push({ ...structuredClone(installation), sourceOrder: graph.nextSourceOrder })
+        graph.nextSourceOrder += 1
+        graph.revision += 1
+        changed = true
+      }
+      if (!changed) return
+      await atomicGraph(this.#file, graph)
+      this.#emit()
+    })
+  }
+
+  async refreshInstallationSources(signal?: AbortSignal): Promise<void> {
+    for (const source of this.#installationSources) {
+      await this.refresh(source.descriptor.id, signal)
+    }
   }
 
   async preview(descriptorUrl: string, senderId: string, signal?: AbortSignal) {
@@ -215,42 +285,7 @@ export class NetworkMarketplaceManager {
       if (preview.expiresAt <= now) this.#previews.delete(token)
     }
     if (this.#previews.size >= maxPreviews) throw new Error("Marketplace preview limit was reached")
-    const expectedRepository = marketplaceRepositoryFromDescriptorUrl(descriptorUrl)
-    const descriptor = parseMarketplaceDescriptor(
-      parseJson(
-        await this.#fetcher.fetch(descriptorUrl, "descriptor", { maxBytes: 1024 * 1024, signal }),
-        "Marketplace descriptor",
-      ),
-    )
-    if (this.#reservedMarketplaceIds.has(descriptor.id)) {
-      throw new Error("Marketplace identity is reserved by the product")
-    }
-    if (
-      descriptor.repository.owner.toLowerCase() !== expectedRepository.owner ||
-      descriptor.repository.name !== expectedRepository.repository
-    ) {
-      throw new Error("Marketplace descriptor repository does not match its URL")
-    }
-    const repository = { owner: descriptor.repository.owner, repository: descriptor.repository.name }
-    const registry = parseRegistryV2(
-      parseJson(
-        await this.#fetcher.fetch(descriptor.registry.v2.url, "registry", {
-          declaredUrl: descriptor.registry.v2.url,
-          maxBytes: 8 * 1024 * 1024,
-          repository,
-          signal,
-        }),
-        "Marketplace Registry",
-      ),
-    )
-    if (registry.marketplaceId !== descriptor.id) throw new Error("Marketplace Registry identity does not match")
-    const sourceKey = computeSourceKey({
-      deliveryPolicy: "github-pages-releases",
-      descriptorUrl,
-      kind: "network",
-      marketplaceId: descriptor.id,
-      repository: { name: descriptor.repository.name, owner: descriptor.repository.owner },
-    })
+    const { descriptor, registry, sourceKey } = await this.#readRemoteSource(descriptorUrl, signal)
     const previewToken = randomBytes(32).toString("base64url")
     this.#previews.set(previewToken, {
       descriptor,
@@ -301,11 +336,12 @@ export class NetworkMarketplaceManager {
       const graph = await this.#readGraph()
       const source = graph.sources.find(({ descriptor }) => descriptor.id === marketplaceId)
       if (!source) throw new Error("Marketplace source was not found")
-      const preview = await this.preview(source.descriptorUrl, `refresh:${marketplaceId}`, signal)
-      if (preview.sourceKey !== source.sourceKey) throw new Error("Marketplace source identity changed")
-      const retained = this.#previews.get(preview.previewToken)
-      if (!retained) throw new Error("Marketplace refresh preview was lost")
-      this.#previews.delete(preview.previewToken)
+      const retained = await this.#readRemoteSource(
+        source.descriptorUrl,
+        signal,
+        this.#isInstallationSource(source) ? source.descriptor.id : undefined,
+      )
+      if (retained.sourceKey !== source.sourceKey) throw new Error("Marketplace source identity changed")
       if (signal?.aborted) throw signal.reason
       await this.#sourceStore(source.sourceKey).accept(catalog(retained.registry))
       source.descriptor = retained.descriptor
@@ -318,6 +354,10 @@ export class NetworkMarketplaceManager {
   remove(marketplaceId: string): Promise<void> {
     return this.#serialize(async () => {
       const graph = await this.#readGraph()
+      const source = graph.sources.find(({ descriptor }) => descriptor.id === marketplaceId)
+      if (source && this.#isInstallationSource(source)) {
+        throw new Error("Installation Marketplace source cannot be removed")
+      }
       const retained = graph.sources.filter(({ descriptor }) => descriptor.id !== marketplaceId)
       if (retained.length === graph.sources.length) return
       await atomicGraph(this.#file, { ...graph, revision: graph.revision + 1, sources: retained })
@@ -326,7 +366,10 @@ export class NetworkMarketplaceManager {
   }
 
   async listSources() {
-    return (await this.#readGraph()).sources.map((source) => structuredClone(source))
+    return (await this.#readGraph()).sources.map((source) => ({
+      ...structuredClone(source),
+      installation: this.#isInstallationSource(source),
+    }))
   }
 
   async listSourceStatuses() {
@@ -369,7 +412,7 @@ export class NetworkMarketplaceManager {
           id: item.id,
           kind: item.kind,
           marketplaceId: source.descriptor.id,
-          official: false,
+          official: this.#isInstallationSource(source),
           ...(item.ownerPluginId === undefined ? {} : { ownerPluginId: item.ownerPluginId }),
           presentation: item.presentation,
           ...(runtimeProjection.pluginCategories.length === 0
@@ -440,6 +483,47 @@ export class NetworkMarketplaceManager {
 
   #sourceStore(sourceKey: SourceKey) {
     return new FileMarketplaceSourceStore({ root: this.#root, sourceKey })
+  }
+
+  #isInstallationSource(source: Pick<PersistedNetworkSource, "descriptor" | "descriptorUrl" | "sourceKey">) {
+    return this.#installationSources.some(
+      (installation) =>
+        installation.descriptor.id === source.descriptor.id &&
+        installation.descriptorUrl === source.descriptorUrl &&
+        installation.sourceKey === source.sourceKey,
+    )
+  }
+
+  async #readRemoteSource(descriptorUrl: string, signal?: AbortSignal, allowedReservedId?: string) {
+    const bound = bindDescriptor(
+      descriptorUrl,
+      parseJson(
+        await this.#fetcher.fetch(descriptorUrl, "descriptor", { maxBytes: 1024 * 1024, signal }),
+        "Marketplace descriptor",
+      ),
+    )
+    if (this.#reservedMarketplaceIds.has(bound.descriptor.id) && bound.descriptor.id !== allowedReservedId) {
+      throw new Error("Marketplace identity is reserved by the product")
+    }
+    const repository = {
+      owner: bound.descriptor.repository.owner,
+      repository: bound.descriptor.repository.name,
+    }
+    const registry = parseRegistryV2(
+      parseJson(
+        await this.#fetcher.fetch(bound.descriptor.registry.v2.url, "registry", {
+          declaredUrl: bound.descriptor.registry.v2.url,
+          maxBytes: 8 * 1024 * 1024,
+          repository,
+          signal,
+        }),
+        "Marketplace Registry",
+      ),
+    )
+    if (registry.marketplaceId !== bound.descriptor.id) {
+      throw new Error("Marketplace Registry identity does not match")
+    }
+    return { ...bound, registry }
   }
 
   async #readGraph(): Promise<SourceGraph> {

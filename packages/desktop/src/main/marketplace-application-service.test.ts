@@ -96,6 +96,17 @@ function harness(options: {
   networkCandidates?: SourceQualifiedItem[]
   networkFetch?: ConstructorParameters<typeof MarketplaceApplicationService>[0]["networkFetch"]
   networkRefresh?: (id: string) => Promise<void>
+  networkSourceStatuses?: Array<{
+    descriptor: {
+      id: string
+      name: string
+      publisher: { name: string }
+      repository: { name: string; owner: string }
+    }
+    health: "attention" | "available" | "offline"
+    installation: boolean
+    packageCount: number
+  }>
   projectDetails?: ConstructorParameters<typeof MarketplaceApplicationService>[0]["projectDetails"]
   pluginRuntimeState?: ConstructorParameters<typeof MarketplaceApplicationService>[0]["pluginRuntimeState"]
   repositoryAuthority?: ConstructorParameters<typeof MarketplaceApplicationService>[0]["repositoryAuthority"]
@@ -156,6 +167,7 @@ function harness(options: {
     network: {
       add: async () => undefined,
       listCatalog: async () => options.networkCandidates ?? [],
+      listSourceStatuses: async () => options.networkSourceStatuses ?? [],
       listSources: async () => [],
       preview: async () => {
         throw new Error("not used")
@@ -188,6 +200,43 @@ function harness(options: {
     },
   }
 }
+
+test("projects the installation-owned Official source as non-removable", async () => {
+  const state = await stateStore()
+  const { service } = harness({
+    candidates: [],
+    networkSourceStatuses: [
+      {
+        descriptor: {
+          id: "convax-official",
+          name: "Convax Official",
+          publisher: { name: "Microvoid" },
+          repository: { name: "convax-plugins", owner: "convaxai" },
+        },
+        health: "available",
+        installation: true,
+        packageCount: 33,
+      },
+      {
+        descriptor: {
+          id: "acme",
+          name: "Acme",
+          publisher: { name: "Acme" },
+          repository: { name: "market", owner: "acme" },
+        },
+        health: "available",
+        installation: false,
+        packageCount: 1,
+      },
+    ],
+    state,
+  })
+
+  await expect(service.listMarketplaces()).resolves.toEqual([
+    expect.objectContaining({ id: "convax-official", removable: false }),
+    expect.objectContaining({ id: "acme", removable: true }),
+  ])
+})
 
 async function install(service: MarketplaceApplicationService, item: SourceQualifiedItem) {
   const [choice] = await service.beginInstall({ id: item.id, kind: item.kind }, "sender")

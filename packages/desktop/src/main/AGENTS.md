@@ -164,6 +164,9 @@ For any matching change, read the full routed reference before planning or editi
   never arbitrary URLs, paths, digests, SourceKeys, or transport configuration.
   Network access and immutable artifacts follow the accepted source identity and
   security high-water decisions.
+- Main seeds the canonical `convax-plugins` descriptor as the non-removable Official
+  Network source. This is source discovery only: never infer package installation,
+  execution authority, version pins, or a product lock from that entry.
 - Project Marketplace Plugin categories from the same exact validated manifest used
   for runtime-surface presentation: Service contribution, image/video generation
   output, and owned Skills. Keep the categories bound to the representative source
@@ -198,7 +201,8 @@ For any matching change, read the full routed reference before planning or editi
   snapshot descriptor. Background refresh never expands execution authority.
   Builtin is an installation source, not a general runtime privilege class. Never
   infer authority from Catalog membership or packaged bytes. Desktop has no
-  product-selected default provisioning path.
+  product-selected default provisioning path; its Official Network entry uses the
+  same explicit installer as every other Network source.
 - Explicit installation must commit each immutable package transition before
   queuing runtime reconciliation. Skill publication must
   not list or launch OpenCode per entry, and shutdown must not wait for an active

@@ -14,23 +14,35 @@ test("packaged startup markers remain observable without a provisioning stage", 
   expect(packagedStartupStageReached("2026-08-14T00:00:00.000Z window-created\n", "window-created")).toBe(true)
 })
 
-test("fresh packaged Marketplace contains only user-added state", () => {
+test("fresh packaged Marketplace contains only the Official source entry and no installation", () => {
   expect(() =>
     assertMarketplaceSmokeSnapshot({
       catalogCount: 0,
       installedCount: 0,
       marketplaceSurfaceVisible: true,
-      settingsSources: [],
+      settingsSources: [
+        {
+          id: "convax-official",
+          removable: false,
+          repository: "convaxai/convax-plugins",
+        },
+      ],
     }),
   ).not.toThrow()
   expect(() =>
     assertMarketplaceSmokeSnapshot({
       catalogCount: 1,
-      installedCount: 0,
+      installedCount: 1,
       marketplaceSurfaceVisible: true,
-      settingsSources: [],
+      settingsSources: [
+        {
+          id: "convax-official",
+          removable: false,
+          repository: "convaxai/convax-plugins",
+        },
+      ],
     }),
-  ).toThrow("product-selected")
+  ).toThrow("provisioned")
 })
 
 test("does not recreate the retired default capability receipt", async () => {

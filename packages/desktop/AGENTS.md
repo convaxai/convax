@@ -233,9 +233,10 @@ contract and its routed references.
   exact-source reinstall/update, never a second Plugin setup action. Static Web
   Plugins receive the same exact source/version/artifact-bound authorization.
 - Retired-major recovery may use only an ordinary candidate from the installation's
-  exact SourceKey. Desktop packages no Marketplace product catalog, default
-  installations, or cross-source recovery path; a successful CAS stays inert until
-  restart.
+  exact SourceKey. Desktop packages no Marketplace product catalog, package bytes,
+  default installations, or cross-source recovery path. Its one installation-owned
+  Official Network descriptor follows the ordinary exact-source lifecycle; a
+  successful CAS stays inert until restart.
 - Native paths, credentials, cookies, authorization URLs, SourceKeys, snapshot
   digests, executable bindings, transport choices, and raw diagnostics stay in Main.
 - Preserve `contextIsolation`, disabled Node integration, sandboxing, trusted sender

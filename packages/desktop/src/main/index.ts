@@ -4,7 +4,12 @@ import { tmpdir } from "node:os"
 import { join, resolve } from "node:path"
 import { pathToFileURL } from "node:url"
 import { ManagedAgentSkillStore, OpenCodeAgentRuntime } from "@convax/agent-runtime/node"
-import { computeSourceKey, type SourceKey, type SourceQualifiedItem } from "@convax/marketplace"
+import {
+  computeSourceKey,
+  type MarketplaceDescriptor,
+  type SourceKey,
+  type SourceQualifiedItem,
+} from "@convax/marketplace"
 import {
   CanvasNodeGenerationRunBusinessService,
   CanvasApplicationService,
@@ -478,6 +483,20 @@ export function createProjectTeamRuntimeGate(
 
 const trustedWebContents = new Set<number>()
 const agentHostToolInactivityTimeout = 60 * 60_000
+const officialMarketplaceSource = {
+  descriptor: {
+    compatibility: { convax: ">=0.1.0" },
+    delivery: { kind: "github-pages-releases" },
+    id: "convax-official",
+    name: "Convax Official",
+    publisher: { name: "Microvoid" },
+    registry: { v2: { url: "https://convaxai.github.io/convax-plugins/registry/v2/index.json" } },
+    repository: { name: "convax-plugins", owner: "convaxai" },
+    schema: "convax.marketplace/1",
+    showcase: { v2: { url: "https://convaxai.github.io/convax-plugins/showcase/v2/index.json" } },
+  } satisfies MarketplaceDescriptor,
+  descriptorUrl: "https://convaxai.github.io/convax-plugins/marketplace.json",
+} as const
 type CloseGate = "approved" | "flushing" | "idle"
 
 let quitGate: CloseGate = "idle"
@@ -1808,9 +1827,11 @@ function startApplication() {
       marketplaceRuntimeState = marketplaceState
       const networkMarketplaces = new NetworkMarketplaceManager({
         fetcher: marketplaceFetcher,
-        reservedMarketplaceIds: new Set(["convax-builtin", "convax-local"]),
+        installationSources: [officialMarketplaceSource],
+        reservedMarketplaceIds: new Set(["convax-builtin", "convax-local", "convax-official"]),
         root: join(userDataDirectory, "marketplaces", "network"),
       })
+      await networkMarketplaces.initializeInstallationSources()
       let localMarketplaceSourceKey: SourceKey | undefined
       let localMarketplace: LocalMarketplaceStore | undefined
       const localCandidate = new LocalMarketplaceStore({
@@ -2133,6 +2154,11 @@ function startApplication() {
         repositoryAuthority,
         state: marketplaceState,
       })
+      void networkMarketplaces
+        .refreshInstallationSources()
+        .catch((error) =>
+          console.warn("Could not refresh the Official Marketplace; cached metadata remains available", error),
+        )
       const legacyMigration = new MarketplaceLegacyMigration({
         proveInstallations: async () => {
           const marketplaceSnapshot = await marketplaceState.read()

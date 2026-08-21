@@ -1,8 +1,4 @@
-/**
- * Legacy Skill-management adapter types. Concrete Builtin Skill source is
- * owned by convax-plugins and reaches Desktop only through the locked Builtin
- * Marketplace bundle.
- */
+/** Legacy Skill-management adapter types for a host that supplies a real Builtin archive. */
 export interface DesktopBuiltinSkillBundle {
   description: string
   files: Readonly<Record<string, string | Uint8Array>>

@@ -572,9 +572,16 @@ try {
       const settingsSources = await window.convax.marketplaces.listMarketplaces()
       const marketplaceCatalog = await window.convax.marketplaces.listCatalog()
       const marketplaceInventory = await window.convax.marketplaces.listInstalled()
-      if (settingsSources.length !== 0 || marketplaceCatalog.cards.length !== 0 || marketplaceInventory.capabilities.length !== 0) {
+      const officialSource = settingsSources[0]
+      if (
+        settingsSources.length !== 1 ||
+        officialSource?.id !== "convax-official" ||
+        officialSource.repository !== "convaxai/convax-plugins" ||
+        officialSource.removable !== false ||
+        marketplaceInventory.capabilities.length !== 0
+      ) {
         throw new Error(
-          "Fresh packaged Desktop must start with only user-added Marketplace state: " +
+          "Fresh packaged Desktop must start with only the Official source entry and no installed capabilities: " +
           JSON.stringify({ settingsSources, marketplaceCatalog, marketplaceInventory }),
         )
       }

@@ -1530,7 +1530,7 @@ export class MarketplaceApplicationService implements MarketplaceApplicationPort
         label: source.descriptor.name,
         packageCount: source.packageCount,
         publisher: source.descriptor.publisher.name,
-        removable: true,
+        removable: !source.installation,
         repository: `${source.descriptor.repository.owner}/${source.descriptor.repository.name}`,
       }),
     )

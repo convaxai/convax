@@ -464,8 +464,11 @@ The mandatory gate and request template are defined in
 [`plugin-host-change-governance.md`](plugin-host-change-governance.md).
 
 Marketplace discovery, selection, and installation use the validated Marketplace
-v2 descriptor, Registry, Showcase, and Release path. Desktop does not reserve or
-automatically add an Official source. The legacy
+v2 descriptor, Registry, Showcase, and Release path. Desktop reserves
+`convax-official` and automatically seeds the canonical
+`https://convaxai.github.io/convax-plugins/marketplace.json` descriptor as an
+installation-owned Network source. This adds only a source entry, not package
+bytes, version pins, default installs, or execution authority. The legacy
 `convax.registry/1` client is not a production composition option: old Plugin and
 Skill management surfaces may show installed/local inventory, but they must not
 fetch, install, or open releases from Registry v1. A package publication is admitted
@@ -808,14 +811,13 @@ Electron userData/
     retired-bindings/                   exact prior public bindings for historical verification
     rotation-claims/                    retry-stable missing-key rotation choices
     rotation-bindings/                  immutable replacement public bindings
-  marketplace-sources/index-v1.json     user-added Network Marketplace declarations
+  marketplaces/network/sources-v1.json installation-owned Official plus user-added
+                                        Network Marketplace declarations
   marketplace-source-security/<source-key>.json
                                         authoritative accepted Catalog and rollback high-water
   marketplace-cache/<source-key>/       disposable immutable source/cache snapshots
   marketplace-installations/index-v1.json
                                         exact installed identity and SourceKey bindings
-  marketplace-provisioning-decisions/index-v1.json
-                                        explicit product-default removal decisions
   marketplace-runtime-preferences/index-v1.json
                                         durable runtime enable/disable intent
   marketplace-transitions/<transition-id>.json
@@ -867,7 +869,7 @@ Electron updater platform cache         verified partial or complete Desktop upd
                                         disposable and never a source of Project, Plugin, or preference state
 
 Packaged app Resources/                 application code and assets only; Desktop ships no
-                                        product-selected Marketplace packages or default installs
+                                        Marketplace package bytes or default installs
 
 browser localStorage                    per-user Workbench/renderer preferences, bounded first-run
                                         onboarding progress, plus bounded
@@ -973,9 +975,9 @@ video-thumbnail generator and never depends on hover. The full preview lease rem
 independent and replaces only another hover preview.
 
 Marketplace caches are Desktop-owned, user-global, source-qualified, and
-non-authoritative. Builtin and Official are
-product-declared, user-added Network sources are durable settings, and Local sources
-are Host-provisioned immutable snapshot collections. Every accepted Network Catalog
+non-authoritative. Current Builtin is empty, Official is an installation-owned
+Network descriptor entry, user-added Network sources are durable settings, and
+Local sources are Host-provisioned immutable snapshot collections. Every accepted Network Catalog
 commits one atomic decision containing both its immutable snapshot identity and
 `SourceSecurityState`; a crash exposes either the complete previous decision or the
 complete next decision. Source removal retains the security high-water and installed
@@ -1008,11 +1010,14 @@ runtime is a completed fail-closed Plugin restoration outcome, not a required Ho
 initialization failure; it never prevents the window from reaching non-Plugin
 Project and Canvas capabilities.
 
-Desktop composes no fixed Marketplace catalog and performs no background capability
-provisioning. A fresh profile therefore starts with no Marketplace sources and no
-installed Plugins or Skills. The user may add validated Network descriptors or
-import Local packages; each selection then follows the same source-qualified
-installer, consent, immutable closure, and ActiveSet rules.
+Desktop composes no fixed package catalog and performs no background capability
+provisioning. A fresh profile starts with the installation-owned
+`convaxai/convax-plugins` Official Network source entry and no installed Plugins or
+Skills. Desktop refreshes only that source's descriptor and Catalog metadata in the
+background; it never downloads or installs a package without explicit user intent.
+The user may add other validated Network descriptors or import Local packages; each
+selection follows the same source-qualified installer, consent, immutable closure,
+and ActiveSet rules.
 
 The generic Marketplace protocol retains a Builtin source and deterministic bundle
 format for an application that actually depends on bundled capabilities. Current
@@ -1387,7 +1392,7 @@ This one-time confirmed reset is the only admitted cleanup path.
 ### Marketplace listing, install and setup
 
 ```text
-Builtin + Official + user Network + Host Local adapters
+empty Builtin + installation-owned Official Network + user Network + Host Local adapters
   -> source-qualified validated entries
   -> Desktop derives bounded Plugin categories from exact validated contributions
   -> @convax/marketplace display groups by {kind,id} with one representative source
@@ -1396,14 +1401,14 @@ Builtin + Official + user Network + Host Local adapters
   -> optional GitHub source action returns only {kind,id}; Main opens the representative repository
   -> explicit exact-source confirmation and sender-scoped SelectionToken
   -> Desktop Plugin install transition publishes static bytes, exact execution authorization and InstallRecord
-  -> after the first window, one background product-default single-flight may enter the same installer with exact product authorization
   -> MCP setup may independently publish an ExecutionGrant
   -> InstalledCapability projects setup-required, ready, disabled or attention
 ```
 
 Adding or refreshing a Marketplace fetches only descriptor, Registry, Showcase, and
-presentation metadata. It does not download packages/companions, connect an MCP or
-business endpoint, perform OAuth, or launch a process. Renderer may submit a pasted
+presentation metadata. Startup may perform that same metadata-only refresh for the
+installation-owned Official source. It does not download packages/companions,
+connect an MCP or business endpoint, perform OAuth, or launch a process. Renderer may submit a pasted
 descriptor URL only to the dedicated add-Marketplace request; all other URLs,
 digests, native paths, commands, headers, source identities, and runtime methods are
 derived in Main. A short-lived `SelectionToken` binds the exact source, Catalog
@@ -1435,8 +1440,8 @@ one identity/Skill-name-aware coordinator. Plugin and managed-Skill transactions
 retain their existing canonical decisions; the Marketplace transition is only their
 dependent recovery envelope. MCP metadata has its own canonical transition. Runtime
 revalidates immutable installed bytes, `InstallRecord`, `ExecutionGrant`, and
-`RuntimePreference` without consulting the active source graph, so removing or
-disconnecting a Marketplace disables updates but not a still-safe installed runtime.
+`RuntimePreference` without consulting the active source graph, so removing a user
+Marketplace or losing any source connection disables updates but not a still-safe installed runtime.
 A user-confirmed Plugin install/update, or an explicit Local Plugin import, is the
 execution-consent event and publishes its exact snapshot authorization and
 Marketplace grant in that same durable transition. It never projects a second

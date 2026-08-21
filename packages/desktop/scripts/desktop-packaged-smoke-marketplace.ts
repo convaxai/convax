@@ -28,11 +28,23 @@ export function assertMarketplaceSmokeSnapshot(
   if ((options.marketplaceSurfaceRequired ?? true) && snapshot.marketplaceSurfaceVisible !== true) {
     throw new Error("Packaged Desktop did not expose the Marketplace Settings surface")
   }
-  if (!Array.isArray(snapshot.settingsSources) || snapshot.settingsSources.length !== 0) {
-    throw new Error("Fresh packaged Desktop exposed a product-selected Marketplace source")
+  if (!Array.isArray(snapshot.settingsSources) || snapshot.settingsSources.length !== 1) {
+    throw new Error("Fresh packaged Desktop did not expose exactly one Official Marketplace source")
   }
-  if (snapshot.catalogCount !== 0 || snapshot.installedCount !== 0) {
-    throw new Error("Fresh packaged Desktop provisioned product-selected Marketplace capabilities")
+  const official = snapshot.settingsSources[0]
+  if (
+    !isRecord(official) ||
+    official.id !== "convax-official" ||
+    official.repository !== "convaxai/convax-plugins" ||
+    official.removable !== false
+  ) {
+    throw new Error("Fresh packaged Desktop Official Marketplace source is invalid")
+  }
+  if (!Number.isSafeInteger(snapshot.catalogCount) || Number(snapshot.catalogCount) < 0) {
+    throw new Error("Fresh packaged Desktop Marketplace catalog count is invalid")
+  }
+  if (snapshot.installedCount !== 0) {
+    throw new Error("Fresh packaged Desktop provisioned Marketplace capabilities")
   }
 }
 

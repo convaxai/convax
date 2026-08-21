@@ -197,12 +197,14 @@ model-catalog tool. An installed snapshot that satisfies neither the closed v8 n
 the closed v9 manifest remains invalid and non-executable; Host never parses it as
 migration or in-place update input.
 
-Desktop does not ship a product-selected Marketplace catalog, fixed Official
-source, or default-install policy. Network Marketplace descriptors are added by the
-user and follow one ordinary source-qualified install/update lifecycle. An existing
-installation remains runnable when its source is unavailable, but it has no update
-candidate until the user restores that exact `SourceKey`; matching identity on a
-different source never authorizes migration.
+Desktop ships one installation-owned Network source entry for the canonical
+`convaxai/convax-plugins` Marketplace descriptor. The entry contains no package
+bytes, version pins, product lock, or default-install policy: its packages follow
+the same explicit source-qualified discovery, install, and update lifecycle as any
+user-added Network Marketplace. The source entry is not removable or shadowable,
+but a network failure only leaves its last accepted Catalog offline; existing
+installations remain runnable from their immutable snapshots. Matching identity on
+a different source never authorizes migration.
 
 The protocol still supports an installation-owned Builtin archive for a host that
 actually depends on bundled capabilities. Current Desktop composition supplies no
