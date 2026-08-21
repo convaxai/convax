@@ -18,12 +18,10 @@ describe("Canvas UI copy", () => {
     expect(canvasMessage("zh-CN", "mediaEmpty.addVideo")).toBe("添加视频")
   })
 
-  test("localizes empty and unavailable media fallback copy", () => {
-    expect(canvasMessage("en", "mediaEmpty.blank", { kind: canvasMessage("en", "media.video") })).toBe("Empty video")
+  test("localizes unavailable media fallback copy", () => {
     expect(canvasMessage("en", "mediaEmpty.unavailable", { kind: canvasMessage("en", "media.image") })).toBe(
       "image unavailable",
     )
-    expect(canvasMessage("zh-CN", "mediaEmpty.blank", { kind: canvasMessage("zh-CN", "media.video") })).toBe("空视频")
     expect(canvasMessage("zh-CN", "mediaEmpty.unavailable", { kind: canvasMessage("zh-CN", "media.image") })).toBe(
       "图片不可用",
     )

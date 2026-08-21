@@ -2183,7 +2183,7 @@ type MediaStateCardProps = HTMLAttributes<HTMLDivElement> & {
   icon?: ReactNode
   kind: CanvasMediaKind
   state: "empty" | "failed" | "pending" | "unavailable"
-  title: string
+  title?: string
 }
 
 function MediaStateCard({
@@ -2210,14 +2210,16 @@ function MediaStateCard({
         >
           {icon ?? mediaIcon(kind)}
         </span>
-        <span
-          className={cn(
-            "convax-media-state-card__title",
-            state === "failed" && "convax-media-state-card__title--failed",
-          )}
-        >
-          {title}
-        </span>
+        {title ? (
+          <span
+            className={cn(
+              "convax-media-state-card__title",
+              state === "failed" && "convax-media-state-card__title--failed",
+            )}
+          >
+            {title}
+          </span>
+        ) : null}
         {description ? <span className="convax-media-state-card__description">{description}</span> : null}
         {action ? <div className="convax-media-state-card__action">{action}</div> : null}
       </div>
@@ -2237,9 +2239,7 @@ function EmptyMedia(props: {
   const locale = resolveCanvasUiLocale(editor.locale)
   const kindLabel = mediaLabel(props.kind, locale)
   const blank = props.state === "blank"
-  const title = blank
-    ? canvasMessage(locale, "mediaEmpty.blank", { kind: kindLabel })
-    : canvasMessage(locale, "mediaEmpty.unavailable", { kind: kindLabel })
+  const title = blank ? undefined : canvasMessage(locale, "mediaEmpty.unavailable", { kind: kindLabel })
   const description = blank ? undefined : canvasMessage(locale, "mediaEmpty.unavailableHint")
   if (props.actions) {
     const addLabel = canvasMessage(locale, "mediaEmpty.add")
@@ -3455,9 +3455,6 @@ function OptimisticCanvasGhostNode(props: NodeProps<CanvasNode>) {
             data-canvas-optimistic-empty-card={emptyVisualMedia}
             kind={emptyVisualMedia}
             state="empty"
-            title={canvasMessage(locale, "mediaEmpty.blank", {
-              kind: mediaLabel(emptyVisualMedia, locale),
-            })}
           />
         ) : (
           <span aria-hidden className="grid size-full place-items-center" data-canvas-optimistic-placeholder="pending">
