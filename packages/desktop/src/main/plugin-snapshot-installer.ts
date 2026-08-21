@@ -15,7 +15,6 @@ import {
   PluginInstallationRuntime,
   type PluginInstallationCandidate,
   type PluginInstallationCandidateCompanion,
-  type RetiredPluginSourceMigration,
   type RetiredHostApiRecoveryInspection,
 } from "./plugin-installation-runtime"
 
@@ -44,7 +43,6 @@ export interface PluginSnapshotInstallOptions {
 
 export interface PluginSnapshotInstallerOptions {
   readonly retiredHostApiRecovery?: RetiredHostApiRecoveryInspection
-  readonly retiredSourceMigrations?: readonly RetiredPluginSourceMigration[]
 }
 
 function sha256(bytes: Uint8Array | string) {
@@ -104,13 +102,11 @@ async function validateExecutableContributions(
  */
 export class PluginSnapshotInstaller {
   readonly #retiredHostApiRecovery?: RetiredHostApiRecoveryInspection
-  readonly #retiredSourceMigrations: readonly RetiredPluginSourceMigration[]
   readonly #runtime: PluginInstallationRuntime
 
   constructor(runtime: PluginInstallationRuntime, options: PluginSnapshotInstallerOptions = {}) {
     this.#runtime = runtime
     this.#retiredHostApiRecovery = options.retiredHostApiRecovery
-    this.#retiredSourceMigrations = options.retiredSourceMigrations ?? []
   }
 
   async install(publication: PluginSnapshotPublication, options: PluginSnapshotInstallOptions = {}) {
@@ -124,15 +120,7 @@ export class PluginSnapshotInstaller {
     })
     const installed = current?.plugins.find((candidate) => candidate.plugin.id === plugin.id)
     if (recovery) {
-      if (
-        publication.sourceIdentity !== recovery.sourceIdentity &&
-        !this.#retiredSourceMigrations.some(
-          (migration) =>
-            migration.pluginId === plugin.id &&
-            migration.fromSourceIdentity === recovery.sourceIdentity &&
-            migration.toSourceIdentity === publication.sourceIdentity,
-        )
-      ) {
+      if (publication.sourceIdentity !== recovery.sourceIdentity) {
         throw new Error(`Retired Host API recovery source does not match the active Plugin snapshot: ${plugin.id}`)
       }
       if (options.expectedInstalledVersion && options.expectedInstalledVersion !== recovery.version) {

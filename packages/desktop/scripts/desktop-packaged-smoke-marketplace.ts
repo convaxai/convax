@@ -5,86 +5,9 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value)
 }
 
-const sha256Pattern = /^[a-f0-9]{64}$/
-
 export function packagedStartupStageReached(diagnostics: string, stage: string) {
   const lines = diagnostics.split("\n")
-  if (lines.some((line) => line.includes(" marketplace-provision-failed"))) {
-    throw new Error(`Packaged Marketplace provisioning failed: ${diagnostics.trim()}`)
-  }
   return lines.some((line) => line.includes(` ${stage}`))
-}
-
-export function assertAutomaticPreinstalledCapability(capability: unknown, identity: { id: string; version: string }) {
-  if (
-    !isRecord(capability) ||
-    capability.id !== identity.id ||
-    capability.kind !== "plugin" ||
-    capability.sourceLabel !== "convax-official" ||
-    capability.version !== identity.version ||
-    capability.state !== "ready"
-  ) {
-    throw new Error(
-      `Packaged automatic preinstall must be ready: ${JSON.stringify({
-        capability,
-        identity,
-      })}`,
-    )
-  }
-}
-
-export async function assertAutomaticPreinstalledAuthorization(
-  userDataRoot: string,
-  identity: {
-    artifactDigest: string
-    authorizationContractDigest: string
-    id: string
-    sourceKey: string
-    version: string
-  },
-) {
-  const state = JSON.parse(
-    await fs.readFile(path.join(userDataRoot, "marketplaces", "state-v1.json"), "utf8"),
-  ) as unknown
-  if (!isRecord(state) || state.schema !== "convax.marketplace-state/1") {
-    throw new Error("Packaged automatic preinstall Marketplace state is invalid")
-  }
-  const installations = state.installations
-  const executionGrants = state.executionGrants
-  if (!Array.isArray(installations) || !Array.isArray(executionGrants)) {
-    throw new Error("Packaged automatic preinstall Marketplace authority is invalid")
-  }
-  const installation = installations.find(
-    (candidate) =>
-      isRecord(candidate) &&
-      candidate.id === identity.id &&
-      candidate.kind === "plugin" &&
-      candidate.artifactDigest === identity.artifactDigest &&
-      candidate.sourceKey === identity.sourceKey &&
-      candidate.version === identity.version,
-  )
-  if (!isRecord(installation)) {
-    throw new Error("Packaged automatic preinstall installation is missing")
-  }
-
-  if (!sha256Pattern.test(identity.authorizationContractDigest)) {
-    throw new Error("Packaged automatic preinstall authorization digest is invalid")
-  }
-  const grant = executionGrants.find(
-    (candidate) =>
-      isRecord(candidate) &&
-      isRecord(candidate.identity) &&
-      candidate.identity.id === identity.id &&
-      candidate.identity.kind === "plugin" &&
-      candidate.sourceKey === identity.sourceKey,
-  )
-  if (
-    !isRecord(grant) ||
-    grant.authorizationContractDigest !== identity.authorizationContractDigest ||
-    !Number.isSafeInteger(grant.revision)
-  ) {
-    throw new Error("Packaged automatic preinstall ExecutionGrant does not match its immutable Plugin authorization")
-  }
 }
 
 export async function assertNoLegacyDefaultCapabilityReceipt(userDataRoot: string) {
@@ -99,77 +22,30 @@ export async function assertNoLegacyDefaultCapabilityReceipt(userDataRoot: strin
 
 export function assertMarketplaceSmokeSnapshot(
   snapshot: unknown,
-  automaticPreinstall?: { id: string; version: string },
   options: { marketplaceSurfaceRequired?: boolean } = {},
 ) {
   if (!isRecord(snapshot)) throw new Error("Packaged Marketplace smoke snapshot is invalid")
   if ((options.marketplaceSurfaceRequired ?? true) && snapshot.marketplaceSurfaceVisible !== true) {
     throw new Error("Packaged Desktop did not expose the Marketplace Settings surface")
   }
-  const settingsSources = snapshot.settingsSources
+  if (!Array.isArray(snapshot.settingsSources) || snapshot.settingsSources.length !== 1) {
+    throw new Error("Fresh packaged Desktop did not expose exactly one Official Marketplace source")
+  }
+  const official = snapshot.settingsSources[0]
   if (
-    !Array.isArray(settingsSources) ||
-    !settingsSources.some((source) => isRecord(source) && source.id === "convax-official" && source.removable === false)
+    !isRecord(official) ||
+    official.id !== "convax-official" ||
+    official.repository !== "convaxai/convax-plugins" ||
+    official.removable !== false
   ) {
-    throw new Error("Packaged Marketplace did not expose the fixed Official source")
+    throw new Error("Fresh packaged Desktop Official Marketplace source is invalid")
   }
-  if (
-    settingsSources.some(
-      (source) => isRecord(source) && (source.id === "convax-builtin" || source.id === "convax-local"),
-    )
-  ) {
-    throw new Error("Packaged Marketplace Settings exposed an internal source")
+  if (!Number.isSafeInteger(snapshot.catalogCount) || Number(snapshot.catalogCount) < 0) {
+    throw new Error("Fresh packaged Desktop Marketplace catalog count is invalid")
   }
-  if (
-    !isRecord(snapshot.catalogCard) ||
-    snapshot.catalogCard.id !== "canvas-storyboard" ||
-    snapshot.catalogCard.kind !== "skill"
-  ) {
-    throw new Error("Packaged Marketplace did not catalog the Builtin canvas-storyboard Skill")
+  if (snapshot.installedCount !== 0) {
+    throw new Error("Fresh packaged Desktop provisioned Marketplace capabilities")
   }
-  if (
-    !isRecord(snapshot.storyboardChoice) ||
-    snapshot.storyboardChoice.marketplaceLabel !== "convax-builtin" ||
-    snapshot.storyboardChoice.setup !== "none" ||
-    typeof snapshot.storyboardChoice.version !== "string"
-  ) {
-    throw new Error("Packaged Marketplace did not select the Builtin canvas-storyboard source")
-  }
-  if (
-    !Array.isArray(snapshot.storyboardSources) ||
-    !snapshot.storyboardSources.includes("convax-builtin") ||
-    snapshot.storyboardSources.includes("convax-official")
-  ) {
-    throw new Error(
-      `Packaged Marketplace did not keep the installed Builtin storyboard source-locked: ${JSON.stringify(
-        snapshot.storyboardSources,
-      )}`,
-    )
-  }
-  if (
-    !isRecord(snapshot.storyboardInstalled) ||
-    snapshot.storyboardInstalled.id !== "canvas-storyboard" ||
-    snapshot.storyboardInstalled.kind !== "skill" ||
-    snapshot.storyboardInstalled.sourceLabel !== "convax-builtin" ||
-    snapshot.storyboardInstalled.state !== "ready" ||
-    snapshot.storyboardInstalled.version !== snapshot.storyboardChoice.version
-  ) {
-    throw new Error("Packaged Marketplace did not install the Builtin canvas-storyboard Skill")
-  }
-  if (automaticPreinstall === undefined) {
-    if (snapshot.ffmpegInstalled !== undefined) {
-      throw new Error("Packaged Marketplace installed a target-specific Plugin on an unsupported target")
-    }
-    return
-  }
-  if (
-    !isRecord(snapshot.ffmpegInstalled) ||
-    snapshot.ffmpegInstalled.id !== automaticPreinstall.id ||
-    snapshot.ffmpegInstalled.sourceLabel !== "convax-official"
-  ) {
-    throw new Error("Packaged Marketplace did not retain the declared Official automatic preinstall")
-  }
-  assertAutomaticPreinstalledCapability(snapshot.ffmpegInstalled, automaticPreinstall)
 }
 
 export async function assertLocalMarketplaceIdentity(userDataRoot: string) {

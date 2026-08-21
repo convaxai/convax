@@ -18,13 +18,6 @@ export interface PluginInstallationRuntimeOptions {
     point: PluginInstallationRuntimeFaultPoint,
     context: { pluginId: string; snapshotDigest: PluginSnapshotDigest },
   ) => Promise<void> | void
-  readonly retiredSourceMigrations?: readonly RetiredPluginSourceMigration[]
-}
-
-export interface RetiredPluginSourceMigration {
-  readonly fromSourceIdentity: string
-  readonly pluginId: string
-  readonly toSourceIdentity: string
 }
 
 export interface PluginInstallationCandidateCompanion {

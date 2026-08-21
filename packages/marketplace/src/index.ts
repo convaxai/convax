@@ -4,7 +4,6 @@ import type { MarketplaceDelivery, MarketplaceItemKind, MarketplaceKind, Present
 
 export * from "./schemas.js"
 export * from "./server-schema.js"
-export * from "./product-lock.js"
 export * from "./canonical.js"
 export * from "./builtin-archive.js"
 

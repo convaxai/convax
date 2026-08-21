@@ -1,9 +1,6 @@
-import { randomUUID } from "node:crypto"
-
 import { canonicalJson, sha256Hex } from "@convax/marketplace"
 
-import type { MarketplaceCapabilityKind } from "../marketplace-contracts"
-import { readBoundedAuthorityFile } from "./bounded-authority-file"
+import { randomUUID } from "node:crypto"
 import {
   capabilityTransitionParticipantDigest,
   type FileMarketplaceStateStore,
@@ -22,17 +19,7 @@ export interface ActivePluginAuthorizationIdentity {
   version: string
 }
 
-interface PreinstalledLegacyPolicy {
-  identity: { id: string; kind: MarketplaceCapabilityKind }
-  marketplaceId: string
-  observedPolicyRevision: number
-  policyEntryDigest: string
-  sourceKey: InstallRecord["sourceKey"]
-}
-
 export interface MarketplaceLegacyMigrationOptions {
-  defaultCapabilitiesFile: string
-  preinstalledPolicies: readonly PreinstalledLegacyPolicy[]
   proveInstallations(): Promise<readonly MarketplaceInstallationProof[]>
   state: FileMarketplaceStateStore
 }
@@ -65,44 +52,6 @@ export function proveCurrentPluginExecutionAuthorizations(
   })
 }
 
-function parseLegacyDefaults(value: unknown) {
-  if (!value || typeof value !== "object" || Array.isArray(value)) {
-    throw new Error("Legacy default capabilities state is invalid")
-  }
-  const input = value as Record<string, unknown>
-  if (
-    Object.keys(input).sort().join("\0") !== ["plugins", "schema", "skills"].sort().join("\0") ||
-    input.schema !== "convax.default-capabilities/1" ||
-    !Array.isArray(input.plugins) ||
-    !Array.isArray(input.skills) ||
-    input.plugins.length > 1_024 ||
-    input.skills.length > 1_024 ||
-    [...input.plugins, ...input.skills].some(
-      (entry) => typeof entry !== "string" || entry.length < 1 || entry.length > 256,
-    ) ||
-    new Set(input.plugins).size !== input.plugins.length ||
-    new Set(input.skills).size !== input.skills.length
-  ) {
-    throw new Error("Legacy default capabilities state is invalid")
-  }
-  return {
-    plugins: new Set(input.plugins as string[]),
-    skills: new Set(input.skills as string[]),
-  }
-}
-
-async function readLegacyDefaults(file: string) {
-  try {
-    const bytes = await readBoundedAuthorityFile(file, 256 * 1024, "Legacy default capabilities state")
-    return parseLegacyDefaults(JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(bytes)))
-  } catch (error) {
-    if (error && typeof error === "object" && "code" in error && error.code === "ENOENT") {
-      return { plugins: new Set<string>(), skills: new Set<string>() }
-    }
-    throw error
-  }
-}
-
 /**
  * One bounded Main-owned admission from legacy stores into Marketplace state.
  * The caller supplies only exact-tree/provenance matches; everything else stays
@@ -116,36 +65,8 @@ export class MarketplaceLegacyMigration {
   }
 
   async run() {
-    const [proven, defaults] = await Promise.all([
-      this.#options.proveInstallations(),
-      readLegacyDefaults(this.#options.defaultCapabilitiesFile),
-    ])
+    const proven = await this.#options.proveInstallations()
     for (const proof of proven) await this.#claim(proof)
-    await this.#options.state.update((draft) => {
-      for (const policy of this.#options.preinstalledPolicies) {
-        const wasProvisioned =
-          policy.identity.kind === "plugin"
-            ? defaults.plugins.has(policy.identity.id)
-            : defaults.skills.has(policy.identity.id)
-        if (!wasProvisioned) continue
-        const installed = draft.installations.some((record) => identityKey(record) === identityKey(policy.identity))
-        const decided = draft.provisioningDecisions.some(
-          (decision) =>
-            identityKey(decision.identity) === identityKey(policy.identity) &&
-            decision.marketplaceId === policy.marketplaceId,
-        )
-        if (installed || decided) continue
-        draft.provisioningDecisions.push({
-          decision: "removed-by-user",
-          identity: policy.identity,
-          marketplaceId: policy.marketplaceId,
-          observedPolicyRevision: policy.observedPolicyRevision,
-          policyEntryDigest: policy.policyEntryDigest,
-          revision: 1,
-          sourceKey: policy.sourceKey,
-        })
-      }
-    })
   }
 
   async #claim(proof: MarketplaceInstallationProof) {

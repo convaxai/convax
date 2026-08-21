@@ -79,11 +79,6 @@ export function createElectronBuilderConfig(environment: NodeJS.ProcessEnv = pro
         filter: ["current.json"],
       },
       {
-        from: ".packaging/marketplace-product",
-        to: "marketplace-product",
-        filter: ["**/*"],
-      },
-      {
         from: ".packaging/runtime/opencode",
         to: "opencode",
         filter: ["**/*"],

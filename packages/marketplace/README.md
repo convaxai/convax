@@ -7,9 +7,8 @@ authoring tools.
 
 Builtin has one stable, product-defined source identity:
 `BUILTIN_SOURCE_IDENTITY`. Consumers must use `builtinSourceKey()` and must not
-derive a Builtin source identity from a bundle release id, product-lock
-revision, artifact digest, or member list. Those values describe changing
-content under the same source.
+derive a Builtin source identity from a bundle release id, artifact digest, or
+member list. Those values describe changing content under the same source.
 
 Local sources are different: each Local snapshot root has its own persisted
 `sourceInstanceId`, so multiple Local sources remain independently isolated.

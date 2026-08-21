@@ -1,7 +1,6 @@
 import type { MarketplaceDelivery, MarketplaceItemKind, MarketplaceKind, Presentation } from "./schemas";
 export * from "./schemas";
 export * from "./server-schema";
-export * from "./product-lock";
 export * from "./canonical";
 export * from "./builtin-archive";
 declare const sourceKeyBrand: unique symbol;

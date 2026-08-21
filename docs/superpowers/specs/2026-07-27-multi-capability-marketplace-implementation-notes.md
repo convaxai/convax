@@ -1,5 +1,7 @@
 # Convax 多 Marketplace 实施说明
 
+> 历史方案：其中产品锁、固定 Official 与默认安装设计已退役，不是当前架构或实现依据。当前契约以 `docs/architecture.md` 和 `docs/plugin-skill-platform.md` 为准。
+
 状态：随
 [主方案](2026-07-27-multi-capability-marketplace-design.md)
 一起待最终确认。本文只供开发排期和依赖审阅使用。
@@ -47,13 +49,13 @@ create-convax-marketplace -> @convax/marketplace-kit
 
 开发时优先评估并 exact pin：
 
-| 能力 | 候选 |
-| --- | --- |
-| JSON Schema | `ajv` |
-| Canonical JSON | `canonicalize` |
-| CLI 参数 | `cac` |
-| IP 分类 | `ipaddr.js` |
-| 既有 Plugin/Skill SemVer | `semver` |
+| 能力                     | 候选           |
+| ------------------------ | -------------- |
+| JSON Schema              | `ajv`          |
+| Canonical JSON           | `canonicalize` |
+| CLI 参数                 | `cac`          |
+| IP 分类                  | `ipaddr.js`    |
+| 既有 Plugin/Skill SemVer | `semver`       |
 
 使用门禁：
 
@@ -67,13 +69,13 @@ create-convax-marketplace -> @convax/marketplace-kit
 
 仅在 spike 通过后采用：
 
-| 候选 | 限定用途 |
-| --- | --- |
-| `cacache` + `ssri` | 非权威 artifact/showcase cache |
-| `tuf-js` | Future signed Marketplace |
+| 候选                       | 限定用途                              |
+| -------------------------- | ------------------------------------- |
+| `cacache` + `ssri`         | 非权威 artifact/showcase cache        |
+| `tuf-js`                   | Future signed Marketplace             |
 | `undici` custom dispatcher | Future arbitrary same-origin delivery |
-| `pacote` + `ssri` | Future exact npm artifact delivery |
-| prompt library | CLI 确实需要 TTY 向导时 |
+| `pacote` + `ssri`          | Future exact npm artifact delivery    |
+| prompt library             | CLI 确实需要 TTY 向导时               |
 
 现有确定性 ZIP writer 与 Desktop `safe-zip` 首版保留。通用 archive 解包 API 不处理
 Desktop 不可信输入。

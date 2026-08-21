@@ -1,5 +1,7 @@
 # Convax 多 Marketplace 工程附录
 
+> 历史方案：其中产品锁、固定 Official 与默认安装设计已退役，不是当前架构或实现依据。当前契约以 `docs/architecture.md` 和 `docs/plugin-skill-platform.md` 为准。
+
 状态：随
 [主方案](2026-07-27-multi-capability-marketplace-design.md)
 一起待最终确认。本文供实现与安全审阅使用，不是产品说明。
@@ -48,15 +50,15 @@
 
 主方案不使用以下词，Marketplace 子系统固定为以下权威记录：
 
-| 名称 | 责任 |
-| --- | --- |
-| `InstallRecord` | 内容身份、安装版本、来源和已发布字节摘要 |
-| `ExecutionGrant` | 用户对 exact OAuth/endpoint policy 或本地执行身份的同意 |
-| `OwnerBinding` | Plugin-owned Skill 与 owner Plugin 的权威绑定 |
-| `ProvisioningDecision` | 用户对某个产品预装 policy 的保留或卸载决定 |
-| `SourceSecurityState` | 每个 SourceKey 的 sequence 与版本字节 high-water |
-| `RuntimePreference` | 用户对 exact installed identity/source 的启用或停用选择 |
-| `CapabilityTransition` | 一个 mutation 的编排与恢复 envelope |
+| 名称                   | 责任                                                    |
+| ---------------------- | ------------------------------------------------------- |
+| `InstallRecord`        | 内容身份、安装版本、来源和已发布字节摘要                |
+| `ExecutionGrant`       | 用户对 exact OAuth/endpoint policy 或本地执行身份的同意 |
+| `OwnerBinding`         | Plugin-owned Skill 与 owner Plugin 的权威绑定           |
+| `ProvisioningDecision` | 用户对某个产品预装 policy 的保留或卸载决定              |
+| `SourceSecurityState`  | 每个 SourceKey 的 sequence 与版本字节 high-water        |
+| `RuntimePreference`    | 用户对 exact installed identity/source 的启用或停用选择 |
+| `CapabilityTransition` | 一个 mutation 的编排与恢复 envelope                     |
 
 不要继续把所有记录泛称为 receipt。现有 legacy schema/file name 可以在迁移层保留，
 但新增 domain type、测试和文档使用上表术语。
@@ -1021,15 +1023,15 @@ previous/next outcome 传播给它们；它不能在 owner 已有 durable decisi
 
 decision owner 固定为：
 
-| Mutation | Durable decision owner | Marketplace envelope |
-| --- | --- | --- |
+| Mutation                                                   | Durable decision owner                                            | Marketplace envelope                                           |
+| ---------------------------------------------------------- | ----------------------------------------------------------------- | -------------------------------------------------------------- |
 | Plugin install/update/uninstall（含 Local 和 owned Skill） | 现有 Plugin package + PluginSkill lifecycle 的 canonical decision | 只保存 Local/InstallRecord dependent checkpoints并跟随 outcome |
-| Standalone Skill install/update/uninstall | 现有 managed-Skill transaction | 只保存 Local/InstallRecord dependent checkpoints并跟随 outcome |
-| MCP metadata install/update/uninstall | MCP Marketplace manager 的 CapabilityTransition | 自己拥有 decision |
-| MCP/Plugin Tool/Hook setup | 对应 ExecutionGrant/authorization store | 只编排，不另写竞争 decision |
-| Plugin/MCP runtime enable/disable | RuntimePreference store | 只改变 runtime gate，不参与 package decision |
-| Network source add/remove/refresh | Marketplace source store | 自己拥有 source decision |
-| ProvisioningDecision mutation | Provisioning store | 不参与 package decision |
+| Standalone Skill install/update/uninstall                  | 现有 managed-Skill transaction                                    | 只保存 Local/InstallRecord dependent checkpoints并跟随 outcome |
+| MCP metadata install/update/uninstall                      | MCP Marketplace manager 的 CapabilityTransition                   | 自己拥有 decision                                              |
+| MCP/Plugin Tool/Hook setup                                 | 对应 ExecutionGrant/authorization store                           | 只编排，不另写竞争 decision                                    |
+| Plugin/MCP runtime enable/disable                          | RuntimePreference store                                           | 只改变 runtime gate，不参与 package decision                   |
+| Network source add/remove/refresh                          | Marketplace source store                                          | 自己拥有 source decision                                       |
+| ProvisioningDecision mutation                              | Provisioning store                                                | 不参与 package decision                                        |
 
 对 Plugin/Skill，Marketplace transition 是逻辑 envelope，不是第二个 canonical package
 transaction。
@@ -1043,14 +1045,17 @@ Catalog。add/remove 的来源列表 decision 不删除该 SourceKey 的 canonic
 所有 manager 使用：
 
 ```ts
-CapabilityMutationCoordinator.withMutation({
-  identity,
-  affectedSkillNames,
-  localSource,
-  mutation: "install" | "setup" | "update" | "uninstall" | "enable" | "disable"
-}, async context => {
-  // participant operations
-})
+CapabilityMutationCoordinator.withMutation(
+  {
+    identity,
+    affectedSkillNames,
+    localSource,
+    mutation: "install" | "setup" | "update" | "uninstall" | "enable" | "disable",
+  },
+  async (context) => {
+    // participant operations
+  },
+)
 ```
 
 内部固定锁序：
@@ -1111,27 +1116,27 @@ list/install/update。重新添加 exact SourceKey 后才恢复更新。
 
 ## L. 失败和取消
 
-| 场景 | 行为 |
-| --- | --- |
-| Source list 失败 | 只标记该 Marketplace |
-| Source cache 损坏 | 拒绝从 cache 安装，保留已安装内容 |
-| Catalog rollback | 拒绝新 catalog，保留 last-known-good |
-| same version changed bytes | 拒绝新 catalog，保留 SourceSecurityState |
-| SourceSecurityState 达到硬上限 | 拒绝新 catalog，不裁剪历史，保留 last-known-good |
-| 下载失败 | 保留当前安装版本 |
-| Builtin bundle 损坏 | 不发布 bundle 内容，保留 early reservation |
-| Official preinstall 字节损坏 | 不安装，不 fallback 到 PATH/其他来源 |
-| 导入目录选择取消 | 不改变 Local index 或安装状态 |
-| 导入复制/校验失败 | 不发布 snapshot/index |
-| exact duplicate import | no-op，不增加 revision |
-| 授权取消 | 保留静态安装，状态为需要设置 |
-| 连接失败 | 不卸载，状态为需要处理 |
-| InstallRecord 缺失 | 静态 Plugin/Skill 可保留为 legacy-unbound；MCP、Hook、Tool executable 和产品动作全部停用 |
-| managed Skill 漂移 | 保留用户字节，阻止覆盖 |
-| Marketplace 被移除 | 已安装内容保留，更新不可用 |
-| 已停用后重启或更新 | 保留 RuntimePreference，不启动、不接受新调用 |
-| runtime update 未确认 | candidate 保持非权威，继续使用旧 current |
-| app crash | 根据该 mutation 的唯一 owner decision 收敛 previous/next |
+| 场景                           | 行为                                                                                     |
+| ------------------------------ | ---------------------------------------------------------------------------------------- |
+| Source list 失败               | 只标记该 Marketplace                                                                     |
+| Source cache 损坏              | 拒绝从 cache 安装，保留已安装内容                                                        |
+| Catalog rollback               | 拒绝新 catalog，保留 last-known-good                                                     |
+| same version changed bytes     | 拒绝新 catalog，保留 SourceSecurityState                                                 |
+| SourceSecurityState 达到硬上限 | 拒绝新 catalog，不裁剪历史，保留 last-known-good                                         |
+| 下载失败                       | 保留当前安装版本                                                                         |
+| Builtin bundle 损坏            | 不发布 bundle 内容，保留 early reservation                                               |
+| Official preinstall 字节损坏   | 不安装，不 fallback 到 PATH/其他来源                                                     |
+| 导入目录选择取消               | 不改变 Local index 或安装状态                                                            |
+| 导入复制/校验失败              | 不发布 snapshot/index                                                                    |
+| exact duplicate import         | no-op，不增加 revision                                                                   |
+| 授权取消                       | 保留静态安装，状态为需要设置                                                             |
+| 连接失败                       | 不卸载，状态为需要处理                                                                   |
+| InstallRecord 缺失             | 静态 Plugin/Skill 可保留为 legacy-unbound；MCP、Hook、Tool executable 和产品动作全部停用 |
+| managed Skill 漂移             | 保留用户字节，阻止覆盖                                                                   |
+| Marketplace 被移除             | 已安装内容保留，更新不可用                                                               |
+| 已停用后重启或更新             | 保留 RuntimePreference，不启动、不接受新调用                                             |
+| runtime update 未确认          | candidate 保持非权威，继续使用旧 current                                                 |
+| app crash                      | 根据该 mutation 的唯一 owner decision 收敛 previous/next                                 |
 
 取消必须跨越：
 

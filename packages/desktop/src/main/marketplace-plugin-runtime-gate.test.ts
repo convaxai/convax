@@ -11,10 +11,9 @@ function state(): MarketplaceState {
   return {
     executionGrants: [],
     installations: [],
-    provisioningDecisions: [],
     revision: 1,
     runtimePreferences: [],
-    schema: "convax.marketplace-state/1",
+    schema: "convax.marketplace-state/2",
     transitions: [],
   }
 }

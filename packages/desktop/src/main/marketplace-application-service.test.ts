@@ -32,10 +32,10 @@ afterEach(async () => {
   await Promise.all(roots.splice(0).map((root) => fs.rm(root, { force: true, recursive: true })))
 })
 
-async function stateStore(sourceMigrations: ConstructorParameters<typeof FileMarketplaceStateStore>[1] = {}) {
+async function stateStore() {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "convax-marketplace-application-"))
   roots.push(root)
-  return new FileMarketplaceStateStore(path.join(root, "state.json"), sourceMigrations)
+  return new FileMarketplaceStateStore(path.join(root, "state.json"))
 }
 
 function skill(overrides: Partial<SourceQualifiedItem> = {}): SourceQualifiedItem {
@@ -91,20 +91,24 @@ function harness(options: {
   >[0]["assertCapabilityMutationAllowed"]
   assertLocalImportAllowed?: ConstructorParameters<typeof MarketplaceApplicationService>[0]["assertLocalImportAllowed"]
   candidates: SourceQualifiedItem[]
-  fixedSources?: ConstructorParameters<typeof MarketplaceApplicationService>[0]["fixedSources"]
   installer?: Partial<MarketplaceCapabilityInstallerPort>
   local?: ConstructorParameters<typeof MarketplaceApplicationService>[0]["local"]
   networkCandidates?: SourceQualifiedItem[]
   networkFetch?: ConstructorParameters<typeof MarketplaceApplicationService>[0]["networkFetch"]
   networkRefresh?: (id: string) => Promise<void>
-  defaultInstallPolicy?: ConstructorParameters<typeof MarketplaceApplicationService>[0]["defaultInstallPolicy"]
-  prepareFixedArtifact?: ConstructorParameters<typeof MarketplaceApplicationService>[0]["prepareFixedArtifact"]
+  networkSourceStatuses?: Array<{
+    descriptor: {
+      id: string
+      name: string
+      publisher: { name: string }
+      repository: { name: string; owner: string }
+    }
+    health: "attention" | "available" | "offline"
+    installation: boolean
+    packageCount: number
+  }>
   projectDetails?: ConstructorParameters<typeof MarketplaceApplicationService>[0]["projectDetails"]
   pluginRuntimeState?: ConstructorParameters<typeof MarketplaceApplicationService>[0]["pluginRuntimeState"]
-  pluginUpdateRecoveryBindings?: ConstructorParameters<
-    typeof MarketplaceApplicationService
-  >[0]["pluginUpdateRecoveryBindings"]
-  refreshFixedSource?: ConstructorParameters<typeof MarketplaceApplicationService>[0]["refreshFixedSource"]
   repositoryAuthority?: ConstructorParameters<typeof MarketplaceApplicationService>[0]["repositoryAuthority"]
   reservedBuiltinIdentities?: ConstructorParameters<
     typeof MarketplaceApplicationService
@@ -132,7 +136,6 @@ function harness(options: {
     }),
     prepareSetup: async (_record, pick) => ({ addTarget: await pick() }),
     resolveTransition: async () => "unknown",
-    scheduleStartupRefresh: () => undefined,
     setup: async () => null,
     uninstall: async () => undefined,
     verifyAuthorization: async () => true,
@@ -146,7 +149,6 @@ function harness(options: {
       : {}),
     ...(options.assertLocalImportAllowed ? { assertLocalImportAllowed: options.assertLocalImportAllowed } : {}),
     fixedCatalog: async () => candidates,
-    fixedSources: options.fixedSources ?? (async () => []),
     installer,
     local:
       options.local ??
@@ -165,6 +167,7 @@ function harness(options: {
     network: {
       add: async () => undefined,
       listCatalog: async () => options.networkCandidates ?? [],
+      listSourceStatuses: async () => options.networkSourceStatuses ?? [],
       listSources: async () => [],
       preview: async () => {
         throw new Error("not used")
@@ -181,13 +184,7 @@ function harness(options: {
         },
       } as never),
     ...(options.pluginRuntimeState ? { pluginRuntimeState: options.pluginRuntimeState } : {}),
-    ...(options.pluginUpdateRecoveryBindings
-      ? { pluginUpdateRecoveryBindings: options.pluginUpdateRecoveryBindings }
-      : {}),
-    ...(options.defaultInstallPolicy ? { defaultInstallPolicy: options.defaultInstallPolicy } : {}),
-    ...(options.prepareFixedArtifact ? { prepareFixedArtifact: options.prepareFixedArtifact } : {}),
     ...(options.projectDetails ? { projectDetails: options.projectDetails } : {}),
-    ...(options.refreshFixedSource ? { refreshFixedSource: options.refreshFixedSource } : {}),
     readFixedArtifact: async (item) => {
       preparedOutsideMutation = true
       return new TextEncoder().encode(item.sourceKind === "builtin" ? "builtin-skill" : "unexpected")
@@ -203,6 +200,43 @@ function harness(options: {
     },
   }
 }
+
+test("projects the installation-owned Official source as non-removable", async () => {
+  const state = await stateStore()
+  const { service } = harness({
+    candidates: [],
+    networkSourceStatuses: [
+      {
+        descriptor: {
+          id: "convax-official",
+          name: "Convax Official",
+          publisher: { name: "Microvoid" },
+          repository: { name: "convax-plugins", owner: "convaxai" },
+        },
+        health: "available",
+        installation: true,
+        packageCount: 33,
+      },
+      {
+        descriptor: {
+          id: "acme",
+          name: "Acme",
+          publisher: { name: "Acme" },
+          repository: { name: "market", owner: "acme" },
+        },
+        health: "available",
+        installation: false,
+        packageCount: 1,
+      },
+    ],
+    state,
+  })
+
+  await expect(service.listMarketplaces()).resolves.toEqual([
+    expect.objectContaining({ id: "convax-official", removable: false }),
+    expect.objectContaining({ id: "acme", removable: true }),
+  ])
+})
 
 async function install(service: MarketplaceApplicationService, item: SourceQualifiedItem) {
   const [choice] = await service.beginInstall({ id: item.id, kind: item.kind }, "sender")
@@ -273,10 +307,7 @@ test("treats a confirmed Plugin install as execution consent without a second se
       },
       verifyAuthorization: async (_record, expected) => expected === authorizationContractDigest,
     },
-    prepareFixedArtifact: async () => ({
-      artifactBytes: bytes,
-      companionBytes: {},
-    }),
+    networkFetch: { fetch: async () => bytes } as never,
     state,
   })
 
@@ -343,265 +374,6 @@ test("rejects a legacy explicit Plugin setup before preparing another authorizat
   )
   expect(prepared).toBe(0)
   expect((await state.read()).transitions).toEqual([])
-})
-
-test("startup provisioning installs every missing Builtin member and exact Official defaults", async () => {
-  const state = await stateStore()
-  const builtin = skill()
-  const secondBuiltin = skill({
-    id: "offline-helper",
-    presentation: { name: "Offline Helper" },
-  })
-  const bytes = new TextEncoder().encode("ffmpeg-plugin")
-  const officialSkillBytes = new TextEncoder().encode("official-skill")
-  const ffmpeg: SourceQualifiedItem = {
-    ...runtimeItem(),
-    delivery: {
-      kind: "artifact",
-      sha256: sha256Hex(bytes),
-      size: bytes.byteLength,
-      url: "https://github.com/convaxai/convax-plugins/releases/download/plugin-ffmpeg-tools-v1.0.0/plugin.zip",
-    },
-    id: "ffmpeg-tools",
-    kind: "plugin",
-    marketplaceId: "convax-official",
-    presentation: { name: "FFmpeg Tools" },
-    sourceKey: sourceA,
-    version: "1.0.0",
-  }
-  const officialSkill = skill({
-    delivery: {
-      kind: "artifact",
-      sha256: sha256Hex(officialSkillBytes),
-      size: officialSkillBytes.byteLength,
-      url: "https://github.com/convaxai/convax-plugins/releases/download/skill-creator-v1.0.0/skill.zip",
-    },
-    id: "skill-creator",
-    marketplaceId: "convax-official",
-    official: true,
-    presentation: { name: "Skill Creator" },
-    sourceKey: sourceA,
-    sourceKind: "network",
-  })
-  const installed: string[] = []
-  const startupModes: boolean[] = []
-  const scheduledRefreshes: Array<readonly { id: string; kind: string }[]> = []
-  const { service } = harness({
-    candidates: [builtin, secondBuiltin, ffmpeg, officialSkill],
-    installer: {
-      installArtifact: async (item, _prepared, options) => {
-        installed.push(`${item.kind}/${item.id}`)
-        startupModes.push(options.startup === true)
-        if (item.kind === "plugin") {
-          expect(options).toMatchObject({ authorizeExecution: true, productDefaultAuthorization: true })
-          return { authorizationContractDigest: "f".repeat(64) }
-        }
-        expect(options).toMatchObject({ authorizeExecution: false, startup: true })
-        return {}
-      },
-      installBuiltin: async (item, _bytes, options) => {
-        installed.push(`${item.kind}/${item.id}`)
-        startupModes.push(options?.startup === true)
-      },
-      scheduleStartupRefresh: (identities) => {
-        scheduledRefreshes.push(identities)
-      },
-    },
-    defaultInstallPolicy: (item) =>
-      (item.id === ffmpeg.id || item.id === officialSkill.id) && item.sourceKey === sourceA && item.version === "1.0.0"
-        ? {
-            marketplaceId: ffmpeg.marketplaceId,
-            observedPolicyRevision: 1,
-            policyEntryDigest: sha256Hex(canonicalJson(item)),
-            version: item.version,
-          }
-        : undefined,
-    prepareFixedArtifact: async (item) => ({
-      artifactBytes: item.kind === "skill" ? officialSkillBytes : bytes,
-      companionBytes: {},
-    }),
-    state,
-  })
-
-  await service.provisionDefaults()
-  await service.provisionDefaults()
-
-  expect(installed).toEqual([
-    "skill/canvas-storyboard",
-    "skill/offline-helper",
-    "plugin/ffmpeg-tools",
-    "skill/skill-creator",
-  ])
-  expect(startupModes).toEqual([true, true, true, true])
-  expect(scheduledRefreshes).toEqual([
-    [
-      { id: "canvas-storyboard", kind: "skill" },
-      { id: "offline-helper", kind: "skill" },
-      { id: "ffmpeg-tools", kind: "plugin" },
-      { id: "skill-creator", kind: "skill" },
-    ],
-  ])
-  expect((await state.read()).installations.map(({ id }) => id).sort()).toEqual([
-    "canvas-storyboard",
-    "ffmpeg-tools",
-    "offline-helper",
-    "skill-creator",
-  ])
-  expect(await state.read()).toMatchObject({
-    executionGrants: [{ identity: { id: "ffmpeg-tools", kind: "plugin" }, sourceKey: ffmpeg.sourceKey }],
-    transitions: [],
-  })
-})
-
-test("startup provisioning schedules one refresh for committed defaults even when another entry fails", async () => {
-  const state = await stateStore()
-  const builtin = skill()
-  const bytes = new TextEncoder().encode("official-skill")
-  const official = skill({
-    delivery: {
-      kind: "artifact",
-      sha256: sha256Hex(bytes),
-      size: bytes.byteLength,
-      url: "https://github.com/convaxai/convax-plugins/releases/download/skill-reviewer-v1.0.0/skill.zip",
-    },
-    id: "skill-reviewer",
-    marketplaceId: "convax-official",
-    official: true,
-    sourceKey: sourceA,
-    sourceKind: "network",
-  })
-  const scheduled: Array<readonly { id: string; kind: string }[]> = []
-  const { service } = harness({
-    candidates: [builtin, official],
-    defaultInstallPolicy: (item) =>
-      item.id === official.id
-        ? {
-            marketplaceId: official.marketplaceId,
-            observedPolicyRevision: 1,
-            policyEntryDigest: sha256Hex(canonicalJson(item)),
-            version: item.version,
-          }
-        : undefined,
-    installer: {
-      installBuiltin: async () => {
-        throw new Error("builtin publication failed")
-      },
-      scheduleStartupRefresh: (identities) => scheduled.push(identities),
-    },
-    prepareFixedArtifact: async () => ({ artifactBytes: bytes, companionBytes: {} }),
-    state,
-  })
-
-  await expect(service.provisionDefaults()).rejects.toThrow("Marketplace default provisioning failed")
-  expect(scheduled).toEqual([[{ id: "skill-reviewer", kind: "skill" }]])
-  expect(await state.read()).toMatchObject({ installations: [{ id: "skill-reviewer" }] })
-})
-
-test("Builtin default provisioning preserves an explicit user removal across restart", async () => {
-  const state = await stateStore()
-  const item = skill()
-  const policyEntryDigest = sha256Hex(canonicalJson({ id: item.id, sourceKey: item.sourceKey, version: item.version }))
-  const policy = (identity: { id: string; kind: string; sourceKey: SourceKey; version: string }) =>
-    identity.id === item.id &&
-    identity.kind === item.kind &&
-    identity.sourceKey === item.sourceKey &&
-    identity.version === item.version
-      ? {
-          marketplaceId: item.marketplaceId,
-          observedPolicyRevision: 1,
-          policyEntryDigest,
-          version: item.version,
-        }
-      : undefined
-  let installs = 0
-  const first = harness({
-    candidates: [item],
-    defaultInstallPolicy: policy,
-    installer: {
-      installBuiltin: async () => {
-        installs += 1
-      },
-    },
-    state,
-  })
-
-  await first.service.provisionBuiltins()
-  await first.service.uninstall({ id: item.id, kind: item.kind })
-  expect(installs).toBe(1)
-  expect((await state.read()).provisioningDecisions).toMatchObject([
-    {
-      decision: "removed-by-user",
-      identity: { id: item.id, kind: item.kind },
-      marketplaceId: item.marketplaceId,
-      policyEntryDigest,
-      sourceKey: item.sourceKey,
-    },
-  ])
-
-  const restarted = harness({ candidates: [item], defaultInstallPolicy: policy, state })
-  await restarted.service.provisionBuiltins()
-
-  expect(installs).toBe(1)
-  expect((await state.read()).installations).toEqual([])
-})
-
-test("refreshes the fixed Official source without routing its reserved identity through Network", async () => {
-  const state = await stateStore()
-  const refreshed: string[] = []
-  const networkRefreshes: string[] = []
-  const { service } = harness({
-    candidates: [],
-    fixedSources: async () => [
-      {
-        health: "available",
-        id: "convax-official",
-        label: "Convax Official",
-        packageCount: 28,
-        publisher: "Microvoid",
-        removable: false,
-        repository: "convaxai/convax-plugins",
-      },
-    ],
-    networkRefresh: async (id) => {
-      networkRefreshes.push(id)
-    },
-    refreshFixedSource: async (id) => {
-      refreshed.push(id)
-      return id === "convax-official"
-    },
-    state,
-  })
-
-  await service.refreshMarketplace("convax-official")
-  await service.refreshMarketplace("third-party")
-
-  expect(refreshed).toEqual(["convax-official", "third-party"])
-  expect(networkRefreshes).toEqual(["third-party"])
-})
-
-test("keeps a missing packaged Builtin identity reserved and hides an impostor Network source", async () => {
-  const state = await stateStore()
-  const impostor = skill({
-    marketplaceId: "third-party",
-    sourceKey: sourceA,
-    sourceKind: "network",
-  })
-  const { service } = harness({
-    candidates: [],
-    networkCandidates: [impostor],
-    reservedBuiltinIdentities: [{ id: "canvas-storyboard", kind: "skill" }],
-    state,
-  })
-  await expect(service.listCatalog()).resolves.toMatchObject({
-    cards: [
-      {
-        id: "canvas-storyboard",
-        kind: "skill",
-        otherSourceCount: 0,
-      },
-    ],
-  })
-  await expect(service.beginInstall({ id: "canvas-storyboard", kind: "skill" }, "renderer")).resolves.toEqual([])
 })
 
 test("projects only the representative Plugin source categories into catalog cards", async () => {
@@ -955,183 +727,6 @@ test("marks only Plugins unavailable when the Plugin runtime is quarantined for 
   })
 })
 
-test("recovers an exact retired-Host-API Plugin from fixed offline bytes without fetching", async () => {
-  const retiredSourceKey = sourceB
-  const bytes = new TextEncoder().encode("plugin-v2")
-  const plugin: SourceQualifiedItem = {
-    ...runtimeItem(),
-    delivery: {
-      kind: "artifact",
-      sha256: sha256Hex(bytes),
-      size: bytes.byteLength,
-      url: "https://github.com/acme/marketplace/releases/download/example-plugin-v2/plugin.zip",
-    },
-    id: "example-plugin",
-    kind: "plugin",
-    version: "2.0.0",
-  }
-  const state = await stateStore({
-    sourceMigrations: [
-      {
-        fromSourceKey: retiredSourceKey,
-        id: plugin.id,
-        kind: "plugin",
-        toSourceKey: plugin.sourceKey,
-      },
-    ],
-  })
-  await state.update((draft) => {
-    draft.installations.push({
-      artifactDigest: "e".repeat(64),
-      id: plugin.id,
-      kind: plugin.kind,
-      revision: 1,
-      runtimeSurface: plugin.runtimeSurface,
-      sourceKey: retiredSourceKey,
-      version: "1.0.0",
-    })
-  })
-  const seenMutations: Array<string | undefined> = []
-  let previousVersion: string | undefined
-  let fetches = 0
-  const { service } = harness({
-    activePluginBindings: async () => [
-      {
-        active: true,
-        artifact: { sha256: "a".repeat(64), size: 1 },
-        id: plugin.id,
-        snapshotDigest: "b".repeat(64),
-        sourceKey: retiredSourceKey,
-        version: "1.0.0",
-      },
-    ],
-    assertCapabilityMutationAllowed(identity, mutation) {
-      seenMutations.push(mutation)
-      if (identity.kind === "plugin" && mutation !== "update") throw new Error("Plugin runtime quarantined")
-    },
-    candidates: [plugin],
-    installer: {
-      installArtifact: async (_item, _prepared, options) => {
-        previousVersion = options.previousVersion
-        return {}
-      },
-    },
-    networkFetch: {
-      fetch: async () => {
-        fetches += 1
-        throw new Error("offline recovery must not fetch")
-      },
-    } as never,
-    pluginRuntimeState: "unavailable-for-session",
-    pluginUpdateRecoveryBindings: new Map([
-      [plugin.id, { fromSourceKey: retiredSourceKey, toSourceKey: plugin.sourceKey }],
-    ]),
-    prepareFixedArtifact: async () => ({ artifactBytes: bytes, companionBytes: {} }),
-    state,
-  })
-
-  await expect(service.listInstalled()).resolves.toMatchObject({
-    capabilities: [
-      {
-        id: plugin.id,
-        updateAvailable: true,
-        updateRecoveryAvailable: true,
-      },
-    ],
-  })
-  const [choice] = await service.beginUpdate({ id: plugin.id, kind: plugin.kind }, "renderer")
-  const confirmed = await service.confirmUpdate(choice!.confirmationToken, "renderer")
-  await expect(service.update(confirmed.selectionToken, "renderer")).resolves.toMatchObject({
-    id: plugin.id,
-    version: "2.0.0",
-  })
-  expect(seenMutations).toEqual(["update"])
-  expect(previousVersion).toBe("1.0.0")
-  expect(fetches).toBe(0)
-  expect((await state.read()).installations).toMatchObject([
-    { id: plugin.id, sourceKey: plugin.sourceKey, version: "2.0.0" },
-  ])
-})
-
-test("keeps retired-Host-API Plugin quarantine when no exact offline recovery artifact exists", async () => {
-  const retiredSourceKey = sourceB
-  const bytes = new TextEncoder().encode("plugin-v2")
-  const plugin: SourceQualifiedItem = {
-    ...runtimeItem(),
-    delivery: {
-      kind: "artifact",
-      sha256: sha256Hex(bytes),
-      size: bytes.byteLength,
-      url: "https://github.com/acme/marketplace/releases/download/example-plugin-v2/plugin.zip",
-    },
-    id: "example-plugin",
-    kind: "plugin",
-    version: "2.0.0",
-  }
-  const state = await stateStore({
-    sourceMigrations: [
-      {
-        fromSourceKey: retiredSourceKey,
-        id: plugin.id,
-        kind: "plugin",
-        toSourceKey: plugin.sourceKey,
-      },
-    ],
-  })
-  await state.update((draft) => {
-    draft.installations.push({
-      artifactDigest: "e".repeat(64),
-      id: plugin.id,
-      kind: plugin.kind,
-      revision: 1,
-      runtimeSurface: plugin.runtimeSurface,
-      sourceKey: retiredSourceKey,
-      version: "1.0.0",
-    })
-  })
-  let fetches = 0
-  const { service } = harness({
-    activePluginBindings: async () => [
-      {
-        active: true,
-        artifact: { sha256: "a".repeat(64), size: 1 },
-        id: plugin.id,
-        snapshotDigest: "b".repeat(64),
-        sourceKey: retiredSourceKey,
-        version: "1.0.0",
-      },
-    ],
-    assertCapabilityMutationAllowed(_identity, mutation) {
-      if (mutation !== "update") throw new Error("Plugin runtime quarantined")
-    },
-    candidates: [plugin],
-    networkFetch: {
-      fetch: async () => {
-        fetches += 1
-        throw new Error("network offline")
-      },
-    } as never,
-    pluginRuntimeState: "unavailable-for-session",
-    pluginUpdateRecoveryBindings: new Map([
-      [plugin.id, { fromSourceKey: retiredSourceKey, toSourceKey: plugin.sourceKey }],
-    ]),
-    prepareFixedArtifact: async () => null,
-    state,
-  })
-
-  const [choice] = await service.beginUpdate({ id: plugin.id, kind: plugin.kind }, "renderer")
-  const confirmed = await service.confirmUpdate(choice!.confirmationToken, "renderer")
-  await expect(service.update(confirmed.selectionToken, "renderer")).rejects.toThrow("network offline")
-  expect(fetches).toBe(1)
-  expect(await service.listInstalled()).toMatchObject({
-    pluginRuntimeState: "unavailable-for-session",
-    capabilities: [{ id: plugin.id, state: "attention" }],
-  })
-  expect((await state.read()).installations).toMatchObject([
-    { id: plugin.id, sourceKey: retiredSourceKey, version: "1.0.0" },
-  ])
-})
-
 test("rejects every Plugin mutation before preparing bytes or changing Marketplace state", async () => {
   const state = await stateStore()
   const plugin: SourceQualifiedItem = {
@@ -1275,10 +870,7 @@ test("keeps the old record and grant when an authorization-changing candidate pu
         throw new Error("candidate authorization canceled")
       },
     },
-    prepareFixedArtifact: async () => ({
-      artifactBytes: bytes,
-      companionBytes: {},
-    }),
+    networkFetch: { fetch: async () => bytes } as never,
     state,
   })
   const [choice] = await service.beginUpdate({ id: candidate.id, kind: candidate.kind }, "renderer")
@@ -1348,10 +940,7 @@ test("treats a confirmed Plugin update as fresh execution consent even when the 
       },
       verifyAuthorization: async (_record, expected) => expected === authorizationContractDigest,
     },
-    prepareFixedArtifact: async () => ({
-      artifactBytes: bytes,
-      companionBytes: {},
-    }),
+    networkFetch: { fetch: async () => bytes } as never,
     state,
   })
   const [choice] = await service.beginUpdate({ id: candidate.id, kind: candidate.kind }, "renderer")
@@ -2085,284 +1674,4 @@ test("reports hard-refresh failure as partial success after publishing committed
   )
   expect((await state.read()).installations).toHaveLength(1)
   expect(changes).toBeGreaterThan(0)
-})
-
-test("default-installs only the exact source-bound policy entry and preserves removal across restart", async () => {
-  const state = await stateStore()
-  const bytes = new TextEncoder().encode("plugin-zip")
-  const item: SourceQualifiedItem = {
-    ...runtimeItem(),
-    delivery: {
-      kind: "artifact",
-      sha256: sha256Hex(bytes),
-      size: bytes.byteLength,
-      url: "https://github.com/convaxai/convax-plugins/releases/download/plugin-ffmpeg-tools-v1.0.0/plugin.zip",
-    },
-    id: "ffmpeg-tools",
-    kind: "plugin",
-    marketplaceId: "convax-official",
-    presentation: { name: "FFmpeg Tools" },
-    sourceKey: sourceA,
-    version: "1.0.0",
-  }
-  const policyEntryDigest = sha256Hex(canonicalJson({ id: item.id, sourceKey: item.sourceKey, version: item.version }))
-  const policy = (identity: { id: string; kind: string; sourceKey: SourceKey; version: string }) =>
-    identity.id === item.id &&
-    identity.kind === item.kind &&
-    identity.sourceKey === item.sourceKey &&
-    identity.version === item.version
-      ? {
-          marketplaceId: item.marketplaceId,
-          observedPolicyRevision: 1,
-          policyEntryDigest,
-          version: item.version,
-        }
-      : undefined
-  const first = harness({
-    candidates: [item],
-    installer: {
-      installArtifact: async () => ({ authorizationContractDigest: "f".repeat(64) }),
-    },
-    defaultInstallPolicy: policy,
-    prepareFixedArtifact: async () => ({ artifactBytes: bytes, companionBytes: {} }),
-    state,
-  })
-  await first.service.provisionDefaultPackages()
-  expect(await state.read()).toMatchObject({
-    executionGrants: [{ identity: { id: item.id, kind: item.kind }, sourceKey: item.sourceKey }],
-    installations: [{ id: item.id, sourceKey: item.sourceKey }],
-  })
-  await first.service.uninstall({ id: item.id, kind: item.kind })
-  expect((await state.read()).provisioningDecisions).toMatchObject([
-    {
-      marketplaceId: item.marketplaceId,
-      policyEntryDigest,
-      sourceKey: item.sourceKey,
-    },
-  ])
-  const restarted = harness({
-    candidates: [item],
-    defaultInstallPolicy: policy,
-    prepareFixedArtifact: async () => ({ artifactBytes: bytes, companionBytes: {} }),
-    state,
-  })
-  await restarted.service.provisionDefaultPackages()
-  expect((await state.read()).installations).toEqual([])
-})
-
-test("explicit reinstall clears the matching default-removal decision without a setup mutation", async () => {
-  const state = await stateStore()
-  const bytes = new TextEncoder().encode("plugin-zip")
-  const item: SourceQualifiedItem = {
-    ...runtimeItem(),
-    delivery: {
-      kind: "artifact",
-      sha256: sha256Hex(bytes),
-      size: bytes.byteLength,
-      url: "https://github.com/convaxai/convax-plugins/releases/download/plugin-ffmpeg-tools-v1.0.0/plugin.zip",
-    },
-    id: "ffmpeg-tools",
-    kind: "plugin",
-    marketplaceId: "convax-official",
-    presentation: { name: "FFmpeg Tools" },
-    sourceKey: sourceA,
-    version: "1.0.0",
-  }
-  const policyEntryDigest = sha256Hex(canonicalJson({ id: item.id, sourceKey: item.sourceKey, version: item.version }))
-  const policy = () => ({
-    marketplaceId: item.marketplaceId,
-    observedPolicyRevision: 1,
-    policyEntryDigest,
-    version: item.version,
-  })
-  const authorizationKinds: string[] = []
-  const { service } = harness({
-    candidates: [item],
-    installer: {
-      installArtifact: async (_item, _prepared, options) => {
-        authorizationKinds.push(options.productDefaultAuthorization ? "product-default" : "user")
-        return { authorizationContractDigest: "f".repeat(64) }
-      },
-    },
-    defaultInstallPolicy: policy,
-    prepareFixedArtifact: async () => ({ artifactBytes: bytes, companionBytes: {} }),
-    state,
-  })
-
-  await service.provisionDefaultPackages()
-  await service.uninstall({ id: item.id, kind: item.kind })
-  expect((await state.read()).provisioningDecisions).toHaveLength(1)
-
-  await install(service, item)
-
-  expect(authorizationKinds).toEqual(["product-default", "user"])
-  expect(await state.read()).toMatchObject({
-    executionGrants: [{ identity: { id: item.id, kind: item.kind }, sourceKey: item.sourceKey }],
-    installations: [{ id: item.id, sourceKey: item.sourceKey }],
-    provisioningDecisions: [],
-    transitions: [],
-  })
-})
-
-test("uninstall recovery preserves the accepted removal decision across a product-lock version change", async () => {
-  const state = await stateStore()
-  const bytes = new TextEncoder().encode("plugin-zip")
-  const item: SourceQualifiedItem = {
-    ...runtimeItem(),
-    delivery: {
-      kind: "artifact",
-      sha256: sha256Hex(bytes),
-      size: bytes.byteLength,
-      url: "https://github.com/convaxai/convax-plugins/releases/download/plugin-ffmpeg-tools-v1.0.0/plugin.zip",
-    },
-    id: "ffmpeg-tools",
-    kind: "plugin",
-    marketplaceId: "convax-official",
-    presentation: { name: "FFmpeg Tools" },
-    sourceKey: sourceA,
-    version: "1.0.0",
-  }
-  const nextBytes = new TextEncoder().encode("plugin-zip-v2")
-  const nextItem: SourceQualifiedItem = {
-    ...item,
-    delivery: {
-      kind: "artifact",
-      sha256: sha256Hex(nextBytes),
-      size: nextBytes.byteLength,
-      url: "https://github.com/convaxai/convax-plugins/releases/download/plugin-ffmpeg-tools-v2.0.0/plugin.zip",
-    },
-    version: "2.0.0",
-  }
-  const policyEntryDigest = "d".repeat(64)
-  const nextPolicyEntryDigest = "e".repeat(64)
-  const policy = (identity: { version: string }) =>
-    identity.version === item.version
-      ? {
-          marketplaceId: item.marketplaceId,
-          observedPolicyRevision: 1,
-          policyEntryDigest,
-          version: item.version,
-        }
-      : identity.version === nextItem.version
-        ? {
-            marketplaceId: nextItem.marketplaceId,
-            observedPolicyRevision: 2,
-            policyEntryDigest: nextPolicyEntryDigest,
-            version: nextItem.version,
-          }
-        : undefined
-  const first = harness({
-    candidates: [item],
-    installer: {
-      installArtifact: async () => ({ authorizationContractDigest: "f".repeat(64) }),
-      uninstall: async () => {
-        throw new Error("crashed after removing Plugin bytes")
-      },
-    },
-    defaultInstallPolicy: policy,
-    prepareFixedArtifact: async () => ({ artifactBytes: bytes, companionBytes: {} }),
-    state,
-  })
-  await first.service.provisionDefaultPackages()
-  await expect(first.service.uninstall({ id: item.id, kind: item.kind })).rejects.toThrow(
-    "crashed after removing Plugin bytes",
-  )
-
-  const restarted = harness({
-    activePluginBindings: async () => [],
-    candidates: [nextItem],
-    installer: { resolveTransition: async () => "next" },
-    defaultInstallPolicy: policy,
-    prepareFixedArtifact: async () => ({ artifactBytes: nextBytes, companionBytes: {} }),
-    state,
-  })
-  await restarted.service.recoverTransitions()
-  await restarted.service.provisionDefaultPackages()
-
-  expect(await state.read()).toMatchObject({
-    installations: [],
-    provisioningDecisions: [
-      {
-        decision: "removed-by-user",
-        identity: { id: item.id, kind: item.kind },
-        marketplaceId: item.marketplaceId,
-        policyEntryDigest,
-        sourceKey: item.sourceKey,
-      },
-    ],
-    transitions: [],
-  })
-})
-
-test("retries exact product authorization after recovering a default Plugin publication", async () => {
-  const state = await stateStore()
-  const bytes = new TextEncoder().encode("plugin-zip")
-  const item: SourceQualifiedItem = {
-    ...runtimeItem(),
-    delivery: {
-      kind: "artifact",
-      sha256: sha256Hex(bytes),
-      size: bytes.byteLength,
-      url: "https://github.com/convaxai/convax-plugins/releases/download/plugin-ffmpeg-tools-v1.0.0/plugin.zip",
-    },
-    id: "ffmpeg-tools",
-    kind: "plugin",
-    marketplaceId: "convax-official",
-    presentation: { name: "FFmpeg Tools" },
-    sourceKey: sourceA,
-    version: "1.0.0",
-  }
-  const policy = () => ({
-    marketplaceId: item.marketplaceId,
-    observedPolicyRevision: 1,
-    policyEntryDigest: "e".repeat(64),
-    version: item.version,
-  })
-  const first = harness({
-    candidates: [item],
-    installer: {
-      installArtifact: async () => ({}),
-    },
-    defaultInstallPolicy: policy,
-    prepareFixedArtifact: async () => ({ artifactBytes: bytes, companionBytes: {} }),
-    state,
-  })
-
-  await expect(first.service.provisionDefaultPackages()).rejects.toThrow("default provisioning")
-  expect(await state.read()).toMatchObject({
-    executionGrants: [],
-    installations: [],
-    transitions: [{ identity: { id: item.id }, mutation: "install", phase: "recovery-required" }],
-  })
-
-  const restarted = harness({
-    activePluginBindings: async () => [
-      {
-        active: true,
-        artifact: { sha256: item.delivery.kind === "artifact" ? item.delivery.sha256 : "", size: bytes.byteLength },
-        id: item.id,
-        snapshotDigest: "a".repeat(64),
-        sourceKey: item.sourceKey,
-        version: item.version,
-      },
-    ],
-    candidates: [item],
-    installer: {
-      resolveTransition: async () => "next",
-      installArtifact: async (_item, _prepared, options) => {
-        expect(options).toMatchObject({ authorizeExecution: true, productDefaultAuthorization: true })
-        return { authorizationContractDigest: "f".repeat(64) }
-      },
-    },
-    defaultInstallPolicy: policy,
-    prepareFixedArtifact: async () => ({ artifactBytes: bytes, companionBytes: {} }),
-    state,
-  })
-  await restarted.service.recoverTransitions()
-  await restarted.service.provisionDefaultPackages()
-  expect(await state.read()).toMatchObject({
-    executionGrants: [{ identity: { id: item.id }, sourceKey: item.sourceKey }],
-    installations: [{ id: item.id }],
-    transitions: [],
-  })
 })

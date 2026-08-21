@@ -7,17 +7,8 @@ import os from "node:os"
 import path from "node:path"
 import { pathToFileURL } from "node:url"
 
-import { inspectAgentSkillDirectory } from "@convax/agent-runtime/node"
-import { canonicalJson, computeSourceKey, parseMarketplaceProductLock, sha256Hex } from "@convax/marketplace"
-import { pluginExecutionAuthorizationIdentity } from "../src/main/plugin-installation-runtime"
-import type { InstalledPluginSnapshotDescriptor } from "../src/main/plugin-installation-snapshot-contracts"
-import { PackagedMarketplaceProduct } from "../src/main/packaged-marketplace-product"
-import { unpackSafeZip } from "../src/main/safe-zip"
-import { exactSkillTreeDigest } from "../src/main/skill-manager"
-
 import { desktopPackagedSmokeLaunchArguments } from "./desktop-packaged-smoke-args"
 import {
-  assertAutomaticPreinstalledAuthorization,
   assertLocalMarketplaceIdentity,
   assertMarketplaceSmokeSnapshot,
   assertNoLegacyDefaultCapabilityReceipt,
@@ -29,7 +20,6 @@ const distRoot = path.join(desktopRoot, "dist")
 const startupTimeoutMs = process.platform === "win32" ? 180_000 : 90_000
 const operationTimeoutMs = 120_000
 const pluginTimeoutMs = 45_000
-const defaultRemotePluginId = "ffmpeg-tools"
 
 function loopbackNoProxy(value: string | undefined) {
   const entries = new Set(
@@ -484,58 +474,12 @@ try {
   const seededProject = await seedProject(userDataRoot, projectRoot)
   const executable = await resolvePackagedExecutable()
   const packagedRuntime = await verifyPackagedLayout(executable)
-  const productLock = parseMarketplaceProductLock(
-    JSON.parse(await fs.readFile(path.resolve(desktopRoot, "..", "..", "marketplaces.lock.json"), "utf8")),
-  )
-  const packagedProduct = await PackagedMarketplaceProduct.load(
-    path.join(packagedRuntime.resourcesDirectory, "marketplace-product"),
-  )
-  if (canonicalJson(packagedProduct.lock) !== canonicalJson(productLock)) {
-    throw new Error("Packaged Marketplace product does not contain the repository Product Lock")
+  try {
+    await fs.lstat(path.join(packagedRuntime.resourcesDirectory, "marketplace-product"))
+    throw new Error("Packaged Desktop still contains a Marketplace product bundle")
+  } catch (error) {
+    if (!(error && typeof error === "object" && "code" in error && error.code === "ENOENT")) throw error
   }
-  const runtimeTarget = `${process.platform}-${process.arch}`
-  const officialSourceKey = computeSourceKey({
-    deliveryPolicy: "github-pages-releases",
-    descriptorUrl: productLock.policy.official.descriptorUrl,
-    kind: "network",
-    marketplaceId: productLock.policy.official.marketplaceId,
-    repository: { name: "convax-plugins", owner: "convaxai" },
-  })
-  const expectedOfficialDefaults = productLock.resolved.packages.flatMap((entry) => {
-    if (
-      !entry.purposes.some((purpose) => purpose === "default-install") ||
-      (entry.targets.length > 0 && !entry.targets.some((target) => target === runtimeTarget))
-    ) {
-      return []
-    }
-    const companion =
-      entry.kind === "plugin"
-        ? (entry.companions.find(({ platform, arch }) => `${platform}-${arch}` === runtimeTarget) ?? null)
-        : null
-    return [
-      {
-        artifact: { sha256: entry.artifact.sha256, size: entry.artifact.size },
-        artifactDigest: sha256Hex(
-          canonicalJson({
-            kind: "artifact",
-            sha256: entry.artifact.sha256,
-            size: entry.artifact.size,
-            url: entry.artifact.url,
-          }),
-        ),
-        companion,
-        id: entry.id,
-        kind: entry.kind,
-        sourceKey: officialSourceKey,
-        version: entry.version,
-      },
-    ]
-  })
-  const expectedOfficialDefaultPlugins = expectedOfficialDefaults.filter((entry) => entry.kind === "plugin")
-  const expectedOfficialDefaultSkills = expectedOfficialDefaults.filter((entry) => entry.kind === "skill")
-  const defaultInstallExpected = expectedOfficialDefaults.some(
-    (entry) => entry.id === defaultRemotePluginId && entry.kind === "plugin" && entry.version.length > 0,
-  )
   const portReservation = reservePort()
   const debuggerPort = portReservation.port
   portReservation.stop(true)
@@ -584,7 +528,7 @@ try {
 
   const target = await waitForRendererTarget(debuggerPort, child, path.join(userDataRoot, "packaged-smoke-startup.log"))
   renderer = await DevtoolsClient.connect(target.webSocketDebuggerUrl!)
-  await waitForStartupStage(child, path.join(userDataRoot, "packaged-smoke-startup.log"), "marketplace-provisioned")
+  await waitForStartupStage(child, path.join(userDataRoot, "packaged-smoke-startup.log"), "pets-ready")
   const seeded = (await renderer.evaluate(
     `(async () => {
       const timeoutMs = ${pluginTimeoutMs}
@@ -622,56 +566,25 @@ try {
         throw new Error("The packaged Desktop showed first-run onboarding despite having a seeded Project")
       }
       const inventory = await window.convax.plugins.listPlugins()
-      const defaultRemotePluginId = ${JSON.stringify(defaultRemotePluginId)}
-      const defaultInstallExpected = ${JSON.stringify(defaultInstallExpected)}
-      const packagedDefault = inventory.installed.find((plugin) => plugin.id === defaultRemotePluginId)
-      if (defaultInstallExpected && !packagedDefault) {
-        throw new Error("Packaged default Plugin did not install from the offline seed: " + defaultRemotePluginId)
-      }
-      if (!defaultInstallExpected && packagedDefault) {
-        throw new Error("Packaged default Plugin installed outside its declared target: " + defaultRemotePluginId)
+      if (inventory.installed.length !== 0) {
+        throw new Error("Fresh packaged Desktop installed product-selected Plugins: " + JSON.stringify(inventory.installed))
       }
       const settingsSources = await window.convax.marketplaces.listMarketplaces()
       const marketplaceCatalog = await window.convax.marketplaces.listCatalog()
-      const catalogCard = marketplaceCatalog.cards.find(
-        (card) => card.kind === "skill" && card.id === "canvas-storyboard",
-      )
-      const storyboardChoices = await window.convax.marketplaces.beginInstall({
-        id: "canvas-storyboard",
-        kind: "skill",
-      })
-      const storyboardChoice = storyboardChoices.find(
-        (choice) => choice.marketplaceLabel === "convax-builtin",
-      )
-      if (!storyboardChoice) {
-        throw new Error(
-          "Packaged canvas-storyboard did not expose its Builtin source: " + JSON.stringify(storyboardChoices),
-        )
-      }
       const marketplaceInventory = await window.convax.marketplaces.listInstalled()
-      const expectedOfficialDefaults = ${JSON.stringify(expectedOfficialDefaults)}
-      const missingOfficialDefaults = expectedOfficialDefaults.filter(
-        (expected) => !marketplaceInventory.capabilities.some(
-          (capability) =>
-            capability.kind === expected.kind &&
-            capability.id === expected.id &&
-            capability.sourceLabel === "convax-official" &&
-            capability.state === "ready" &&
-            capability.version === expected.version,
-        ),
-      )
-      if (missingOfficialDefaults.length > 0) {
+      const officialSource = settingsSources[0]
+      if (
+        settingsSources.length !== 1 ||
+        officialSource?.id !== "convax-official" ||
+        officialSource.repository !== "convaxai/convax-plugins" ||
+        officialSource.removable !== false ||
+        marketplaceInventory.capabilities.length !== 0
+      ) {
         throw new Error(
-          "Packaged Official defaults are not ready from their exact source: " +
-          JSON.stringify(missingOfficialDefaults),
+          "Fresh packaged Desktop must start with only the Official source entry and no installed capabilities: " +
+          JSON.stringify({ settingsSources, marketplaceCatalog, marketplaceInventory }),
         )
       }
-      const storyboardInstalled = marketplaceInventory.capabilities.find(
-        (capability) => capability.kind === "skill" && capability.id === "canvas-storyboard",
-      )
-      const ffmpegInstalled = marketplaceInventory.capabilities.find(
-        (capability) => capability.kind === "plugin" && capability.id === defaultRemotePluginId,
-      )
       let marketplaceSurfaceVisible = false
       const applicationMenuTrigger = document.querySelector('[data-application-menu-trigger="true"]')
       if (!(applicationMenuTrigger instanceof HTMLElement)) {
@@ -692,46 +605,25 @@ try {
       )
       marketplaceSurfaceVisible = true
       return {
-        defaultRemote: packagedDefault ? { id: packagedDefault.id, version: packagedDefault.version } : undefined,
         marketplace: {
-          catalogCard,
-          ffmpegInstalled,
+          catalogCount: marketplaceCatalog.cards.length,
+          installedCount: marketplaceInventory.capabilities.length,
           marketplaceSurfaceVisible,
           settingsSources,
-          storyboardSources: storyboardChoices.map((choice) => choice.marketplaceLabel),
-          storyboardChoice: {
-            marketplaceLabel: storyboardChoice.marketplaceLabel,
-            setup: storyboardChoice.setup,
-            version: storyboardChoice.version,
-          },
-          storyboardInstalled,
         },
         projectId: project.id,
         protocol: mainProtocol,
       }
     })()`,
   )) as {
-    defaultRemote?: { id?: string; version?: string }
     marketplace?: unknown
     projectId?: string
     protocol?: string
   }
-  if (
-    defaultInstallExpected !== Boolean(seeded.defaultRemote) ||
-    (seeded.defaultRemote !== undefined &&
-      (seeded.defaultRemote.id !== defaultRemotePluginId || !seeded.defaultRemote.version)) ||
-    seeded.projectId !== seededProject.id ||
-    typeof seeded.protocol !== "string"
-  ) {
+  if (seeded.projectId !== seededProject.id || typeof seeded.protocol !== "string") {
     throw new Error(`Unexpected packaged seed result: ${JSON.stringify(seeded)}`)
   }
-  assertMarketplaceSmokeSnapshot(
-    seeded.marketplace,
-    defaultInstallExpected && seeded.defaultRemote?.version
-      ? { id: defaultRemotePluginId, version: seeded.defaultRemote.version }
-      : undefined,
-    { marketplaceSurfaceRequired: true },
-  )
+  assertMarketplaceSmokeSnapshot(seeded.marketplace, { marketplaceSurfaceRequired: true })
   const agent = (await renderer.evaluate(
     `(async () => {
       const projects = await window.convax.projects.listProjects()
@@ -758,143 +650,10 @@ try {
   }
 
   await assertLocalMarketplaceIdentity(userDataRoot)
-  if (expectedOfficialDefaultPlugins.length > 0) {
-    const pluginInstallationRoot = path.join(userDataRoot, "plugin-installations")
-    const activePointer = JSON.parse(
-      await fs.readFile(path.join(pluginInstallationRoot, "state", "active-pointer.json"), "utf8"),
-    ) as { activeSetDigest?: string; schema?: string }
-    if (
-      activePointer.schema !== "convax.active-plugin-pointer/1" ||
-      !activePointer.activeSetDigest?.match(/^[a-f0-9]{64}$/)
-    ) {
-      throw new Error(`Packaged Plugin ActiveSet pointer is invalid: ${JSON.stringify(activePointer)}`)
-    }
-    const activeSet = JSON.parse(
-      await fs.readFile(
-        path.join(pluginInstallationRoot, "state", "active-sets", `${activePointer.activeSetDigest}.json`),
-        "utf8",
-      ),
-    ) as { plugins?: Array<{ pluginId?: string; snapshotDigest?: string }>; schema?: string }
-    if (activeSet.schema !== "convax.active-plugin-set-snapshot/2") {
-      throw new Error(`Packaged Plugin ActiveSet is invalid: ${JSON.stringify(activeSet)}`)
-    }
-    for (const expected of expectedOfficialDefaultPlugins) {
-      const reference = activeSet.plugins?.find((plugin) => plugin.pluginId === expected.id)
-      if (!reference?.snapshotDigest) {
-        throw new Error(`Packaged Plugin ActiveSet does not contain ${expected.id}`)
-      }
-      const snapshot = JSON.parse(
-        await fs.readFile(
-          path.join(pluginInstallationRoot, "state", "installed", `${reference.snapshotDigest}.json`),
-          "utf8",
-        ),
-      ) as InstalledPluginSnapshotDescriptor
-      if (
-        snapshot.schema !== "convax.installed-plugin-snapshot/1" ||
-        snapshot.pluginId !== expected.id ||
-        snapshot.version !== expected.version ||
-        snapshot.sourceIdentity !== expected.sourceKey ||
-        snapshot.package.artifact.sha256 !== expected.artifact.sha256 ||
-        snapshot.package.artifact.size !== expected.artifact.size ||
-        snapshot.hook !== undefined
-      ) {
-        throw new Error(`Packaged default Plugin snapshot is invalid: ${JSON.stringify(expected)}`)
-      }
-      const authorizationContractDigest = pluginExecutionAuthorizationIdentity(snapshot)
-      if (!authorizationContractDigest) {
-        throw new Error(`Packaged default Plugin immutable authorization is missing: ${expected.id}`)
-      }
-      await assertAutomaticPreinstalledAuthorization(userDataRoot, {
-        artifactDigest: expected.artifactDigest,
-        authorizationContractDigest,
-        id: expected.id,
-        sourceKey: expected.sourceKey,
-        version: expected.version,
-      })
-      const closureRoot = path.join(pluginInstallationRoot, "closures", reference.snapshotDigest)
-      if (expected.companion === null) {
-        if (snapshot.companion !== undefined) {
-          throw new Error(`Packaged default Plugin has an undeclared companion: ${expected.id}`)
-        }
-      } else {
-        const companion = snapshot.companion
-        const target = `${expected.companion.platform}-${expected.companion.arch}`
-        if (
-          !companion ||
-          companion.target !== target ||
-          companion.sha256 !== expected.companion.sha256 ||
-          companion.size !== expected.companion.size
-        ) {
-          throw new Error(`Packaged default Plugin companion identity is invalid: ${expected.id}`)
-        }
-        const companionRoot = path.join(closureRoot, "companion")
-        const executable = path.resolve(companionRoot, ...companion.entryPath.split("/"))
-        if (
-          !executable.startsWith(`${path.resolve(companionRoot)}${path.sep}`) ||
-          !(await regularFile(executable)) ||
-          (await sha256(executable)) !== companion.sha256 ||
-          (await fs.stat(executable)).size !== companion.size
-        ) {
-          throw new Error(`Packaged default Plugin companion file is invalid: ${expected.id}`)
-        }
-      }
-    }
-    if (defaultInstallExpected) {
-      const defaultRemote = seeded.defaultRemote
-      if (!defaultRemote?.version) throw new Error("Packaged default Plugin identity is missing")
-      const ffmpegReference = activeSet.plugins?.find((plugin) => plugin.pluginId === defaultRemotePluginId)
-      if (!ffmpegReference?.snapshotDigest) {
-        throw new Error(`Packaged Plugin ActiveSet does not contain ${defaultRemotePluginId}`)
-      }
-      const ffmpegSnapshot = JSON.parse(
-        await fs.readFile(
-          path.join(pluginInstallationRoot, "state", "installed", `${ffmpegReference.snapshotDigest}.json`),
-          "utf8",
-        ),
-      ) as InstalledPluginSnapshotDescriptor
-      const ffmpegClosureRoot = path.join(pluginInstallationRoot, "closures", ffmpegReference.snapshotDigest)
-      const ffmpegManifest = JSON.parse(
-        await fs.readFile(path.join(ffmpegClosureRoot, "package", "manifest.json"), "utf8"),
-      ) as { id?: string; runtime?: { command?: string }; version?: string }
-      if (
-        ffmpegSnapshot.schema !== "convax.installed-plugin-snapshot/1" ||
-        ffmpegSnapshot.pluginId !== defaultRemotePluginId ||
-        ffmpegSnapshot.version !== defaultRemote.version ||
-        ffmpegManifest.id !== defaultRemotePluginId ||
-        ffmpegManifest.version !== defaultRemote.version ||
-        ffmpegManifest.runtime?.command !== "convax-ffmpeg-mcp" ||
-        ffmpegSnapshot.companion?.entryPath !== ffmpegManifest.runtime.command
-      ) {
-        throw new Error(`Packaged default Plugin installation is invalid: ${JSON.stringify(ffmpegManifest)}`)
-      }
-    }
-  }
-  for (const expected of expectedOfficialDefaultSkills) {
-    const registryItem = packagedProduct.registry.packages.find(
-      (entry) =>
-        entry.kind === "skill" &&
-        entry.id === expected.id &&
-        entry.version === expected.version &&
-        entry.ownerPluginId === undefined &&
-        entry.delivery.kind === "artifact",
-    )
-    if (!registryItem) throw new Error(`Packaged default standalone Skill metadata is missing: ${expected.id}`)
-    const candidate = await packagedProduct.verifiedCandidate(registryItem)
-    const expectedFiles = Object.entries(unpackSafeZip(candidate.artifactBytes)).map(([filePath, content]) => ({
-      content,
-      path: filePath,
-    }))
-    const installed = await inspectAgentSkillDirectory(
-      path.join(userDataRoot, "opencode", "skills", "user", expected.id),
-    )
-    if (exactSkillTreeDigest(installed.files) !== exactSkillTreeDigest(expectedFiles)) {
-      throw new Error(`Packaged default standalone Skill tree is not exact: ${expected.id}`)
-    }
-  }
   await assertNoLegacyDefaultCapabilityReceipt(userDataRoot)
 
   console.log(
-    `Packaged Desktop smoke passed (${path.basename(executable)}, OpenCode ${packagedRuntime.version}, ${seeded.projectId}, ${defaultInstallExpected ? defaultRemotePluginId : "no target-specific default"}, ${agent.providerCount} OpenCode providers)`,
+    `Packaged Desktop smoke passed (${path.basename(executable)}, OpenCode ${packagedRuntime.version}, ${seeded.projectId}, user-added Marketplaces only, ${agent.providerCount} OpenCode providers)`,
   )
   const application =
     process.platform === "darwin" ? path.resolve(path.dirname(executable), "..", "..") : path.dirname(executable)

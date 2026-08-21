@@ -1,5 +1,7 @@
 # Convax 多 Marketplace 设计
 
+> 历史方案：其中产品锁、固定 Official 与默认安装设计已退役，不是当前架构或实现依据。当前契约以 `docs/architecture.md` 和 `docs/plugin-skill-platform.md` 为准。
+
 状态：已按人工意见收敛，待最终确认。确认前不进入代码开发。
 
 本文只保留产品与架构决策。协议、持久化、恢复、安全和详细验收见
@@ -45,12 +47,12 @@ Plugin、Skill、MCP Server 是扩展的类型 badge，不是三套产品流程�
 
 ### 2.1 来源
 
-| 用户看到的来源 | 内部类型 | 用户是否管理 |
-| --- | --- | --- |
-| Convax 内置 | Builtin | 否 |
-| Convax Official | Network Marketplace | 只查看状态和刷新 |
+| 用户看到的来源     | 内部类型            | 用户是否管理     |
+| ------------------ | ------------------- | ---------------- |
+| Convax 内置        | Builtin             | 否               |
+| Convax Official    | Network Marketplace | 只查看状态和刷新 |
 | 第三方 Marketplace | Network Marketplace | 添加、移除、刷新 |
-| 已导入 | Local Marketplace | 否 |
+| 已导入             | Local Marketplace   | 否               |
 
 预装和离线镜像不是新来源：
 
@@ -113,12 +115,12 @@ setup
 
 所有扩展统一使用四种稳定状态：
 
-| 状态 | 含义 |
-| --- | --- |
+| 状态     | 含义                             |
+| -------- | -------------------------------- |
 | 需要设置 | 已安装，还需要登录或本地执行授权 |
-| 可用 | 当前功能可使用 |
-| 已停用 | 用户主动停用连接或本地执行 |
-| 需要处理 | 登录失效、组件变化或运行失败 |
+| 可用     | 当前功能可使用                   |
+| 已停用   | 用户主动停用连接或本地执行       |
+| 需要处理 | 登录失效、组件变化或运行失败     |
 
 “正在连接”只是进度，“有更新”只是 badge。Marketplace 离线是来源状态，不把已经
 安全安装且可运行的扩展错误标成“需要处理”。
@@ -142,11 +144,11 @@ HTTP/managed-stdio 推断作用范围。
 
 Main 严格检查根标记：
 
-| 根标记 | 类型 |
-| --- | --- |
-| `manifest.json` | Plugin |
-| `SKILL.md` | Skill |
-| `server.json` | MCP Server |
+| 根标记          | 类型       |
+| --------------- | ---------- |
+| `manifest.json` | Plugin     |
+| `SKILL.md`      | Skill      |
+| `server.json`   | MCP Server |
 
 必须恰好匹配一种；零种或多种都拒绝并给出明确原因。Main 始终路由默认 Local
 Marketplace，Renderer 不提交 Local id 或 native root。成功后来源显示“已导入”。
@@ -322,13 +324,13 @@ owned Skill 和 target companion 的全部输入字节；不在打包时读取�
 
 ## 5. 架构边界
 
-| Owner | 责任 |
-| --- | --- |
-| `@convax/marketplace` | refs、聚合、公开 schema 和严格校验 |
-| `@convax/agent-runtime` | Host 注入的 HTTP MCP 配置、OpenCode 状态和认证操作 |
-| `@convax/desktop` | source adapters、Local、安装、设置、native runtime、IPC/UI |
-| Convax tooling | `@convax/marketplace-kit` 和 create CLI |
-| `convax-plugins` | 具体 Plugin/Skill/MCP Server、Official Registry、Builtin bundle |
+| Owner                   | 责任                                                            |
+| ----------------------- | --------------------------------------------------------------- |
+| `@convax/marketplace`   | refs、聚合、公开 schema 和严格校验                              |
+| `@convax/agent-runtime` | Host 注入的 HTTP MCP 配置、OpenCode 状态和认证操作              |
+| `@convax/desktop`       | source adapters、Local、安装、设置、native runtime、IPC/UI      |
+| Convax tooling          | `@convax/marketplace-kit` 和 create CLI                         |
+| `convax-plugins`        | 具体 Plugin/Skill/MCP Server、Official Registry、Builtin bundle |
 
 首版不新增 `@convax/mcp-server`。Metadata 属于 Marketplace 协议，HTTP MCP 属于
 Agent Runtime，安装和 native process 属于 Desktop；当前没有独立 package owner。
@@ -375,19 +377,19 @@ Agent Runtime，安装和 native process 属于 Desktop；当前没有独立 pac
 
 ## 6. V1 边界
 
-| 本期包含 | 本期不包含 |
-| --- | --- |
-| 多 Marketplace 与来源隔离 | 跨来源换源或 adoption |
-| Plugin、Skill、MCP Server | 同 identity 多版本并存 |
-| Builtin、Official、第三方、Local | 自动依赖解析 |
-| 一个 Catalog、一个导入入口 | Capability Pack |
-| Settings 添加第三方来源 | WASM/WASI |
-| HTTP MCP 供 Agent 使用 | HTTP MCP 产品直调 |
+| 本期包含                         | 本期不包含                                |
+| -------------------------------- | ----------------------------------------- |
+| 多 Marketplace 与来源隔离        | 跨来源换源或 adoption                     |
+| Plugin、Skill、MCP Server        | 同 identity 多版本并存                    |
+| Builtin、Official、第三方、Local | 自动依赖解析                              |
+| 一个 Catalog、一个导入入口       | Capability Pack                           |
+| Settings 添加第三方来源          | WASM/WASI                                 |
+| HTTP MCP 供 Agent 使用           | HTTP MCP 产品直调                         |
 | 固定 HTTPS endpoint 与标准 OAuth | HTTP URL 变量、自定义 Header/API Key 表单 |
-| Desktop-managed stdio MCP | npm/PyPI/NuGet/OCI/MCPB 执行 |
-| MCP tools | MCP resources/prompts |
-| immutable bundle/product lock | 任意公网/私网 Registry transport |
-| npm-first scaffold/Kit | Marketplace 付费、排名、账号、推荐 |
+| Desktop-managed stdio MCP        | npm/PyPI/NuGet/OCI/MCPB 执行              |
+| MCP tools                        | MCP resources/prompts                     |
+| immutable bundle/product lock    | 任意公网/私网 Registry transport          |
+| npm-first scaffold/Kit           | Marketplace 付费、排名、账号、推荐        |
 
 Registry 每个 revision 对每个 `{kind,id}` 只广告一个 current version。历史版本只在
 已安装记录和 immutable artifact 中存在，不进入 Catalog，也不需要 latest/range

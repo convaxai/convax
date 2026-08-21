@@ -2,11 +2,7 @@ import { mkdtemp, rm } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 
-import {
-  PluginInstallationRuntime,
-  type RetiredHostApiRecoveryInspection,
-  type RetiredPluginSourceMigration,
-} from "./plugin-installation-runtime"
+import { PluginInstallationRuntime, type RetiredHostApiRecoveryInspection } from "./plugin-installation-runtime"
 
 export const pluginRuntimeUnavailableMessage =
   "Plugin runtime is unavailable for this session; repair the invalid ActiveSet before changing Plugins"
@@ -33,7 +29,6 @@ interface DesktopPluginRuntimeStartupOptions {
   createRuntime?: (root: string) => PluginInstallationRuntime
   createTemporaryDirectory?: () => Promise<string>
   removeTemporaryDirectory?: (root: string) => Promise<void>
-  retiredSourceMigrations?: readonly RetiredPluginSourceMigration[]
 }
 
 /**
@@ -49,15 +44,7 @@ export async function openDesktopPluginRuntimeSession(
   userDataDirectory: string,
   options: DesktopPluginRuntimeStartupOptions = {},
 ): Promise<DesktopPluginRuntimeSession> {
-  const createRuntime =
-    options.createRuntime ??
-    ((root: string) =>
-      new PluginInstallationRuntime(
-        root,
-        options.retiredSourceMigrations === undefined
-          ? {}
-          : { retiredSourceMigrations: options.retiredSourceMigrations },
-      ))
+  const createRuntime = options.createRuntime ?? ((root: string) => new PluginInstallationRuntime(root))
   const persistent = createRuntime(join(userDataDirectory, "plugin-installations"))
   try {
     await persistent.readActive()
@@ -112,15 +99,7 @@ export async function openDesktopPluginRuntimeSession(
       assertUpdateMutable(input) {
         if (
           retiredHostApiRecovery?.plugins.some(
-            (plugin) =>
-              plugin.pluginId === input.pluginId &&
-              (plugin.sourceIdentity === input.sourceIdentity ||
-                options.retiredSourceMigrations?.some(
-                  (migration) =>
-                    migration.pluginId === plugin.pluginId &&
-                    migration.fromSourceIdentity === plugin.sourceIdentity &&
-                    migration.toSourceIdentity === input.sourceIdentity,
-                )),
+            (plugin) => plugin.pluginId === input.pluginId && plugin.sourceIdentity === input.sourceIdentity,
           )
         )
           return

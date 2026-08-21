@@ -3,7 +3,7 @@ import os from "node:os"
 import path from "node:path"
 
 import { afterEach, expect, mock, test } from "bun:test"
-import { canonicalJson, sha256Hex } from "@convax/marketplace"
+import { canonicalJson, sha256Hex, type MarketplaceDescriptor } from "@convax/marketplace"
 
 import { NetworkMarketplaceManager } from "./network-marketplace-manager"
 import type { PinnedHttpsFetcher } from "./pinned-https-fetch"
@@ -59,7 +59,7 @@ function fixture(id = "acme", sequence = 1, packageOverrides?: Record<string, un
   const fetch = mock(async (url: string) =>
     new TextEncoder().encode(JSON.stringify(url === descriptorUrl ? descriptor : registry)),
   )
-  return { descriptorUrl, fetch, registry }
+  return { descriptor, descriptorUrl, fetch, registry }
 }
 
 function pluginPackage(id: string, contributes: Record<string, unknown>) {
@@ -112,6 +112,52 @@ test("binds previews to their renderer and keeps source order monotonic across r
   const next = await manager.preview(second.descriptorUrl, "renderer-1")
   await manager.add(next.previewToken, "renderer-1")
   expect((await manager.listSources())[0]?.sourceOrder).toBe(1)
+})
+
+test("seeds the installation Marketplace without product content and refreshes it through the Network lifecycle", async () => {
+  const directory = await root()
+  const remote = fixture("convax-official")
+  const installationSources = [
+    { descriptor: remote.descriptor as MarketplaceDescriptor, descriptorUrl: remote.descriptorUrl },
+  ]
+  const manager = new NetworkMarketplaceManager({
+    fetcher: { fetch: remote.fetch } as unknown as PinnedHttpsFetcher,
+    installationSources,
+    root: directory,
+  })
+
+  await manager.initializeInstallationSources()
+  expect(remote.fetch).toHaveBeenCalledTimes(0)
+  expect(await manager.listSourceStatuses()).toEqual([
+    expect.objectContaining({
+      descriptor: expect.objectContaining({ id: "convax-official" }),
+      health: "offline",
+      installation: true,
+      packageCount: 0,
+    }),
+  ])
+  await expect(manager.remove("convax-official")).rejects.toThrow("cannot be removed")
+  await expect(manager.preview(remote.descriptorUrl, "renderer-1")).rejects.toThrow("reserved")
+
+  await manager.refreshInstallationSources()
+  expect((await manager.listCatalog())[0]).toMatchObject({
+    id: "example",
+    marketplaceId: "convax-official",
+    official: true,
+    sourceKind: "network",
+  })
+
+  const offlineRestart = new NetworkMarketplaceManager({
+    fetcher: {
+      fetch: mock(async () => {
+        throw new Error("offline")
+      }),
+    } as unknown as PinnedHttpsFetcher,
+    installationSources,
+    root: directory,
+  })
+  await offlineRestart.initializeInstallationSources()
+  expect((await offlineRestart.listCatalog())[0]).toMatchObject({ id: "example", official: true })
 })
 
 test("preserves Plugin ownership when projecting a Registry Skill into a source-qualified candidate", async () => {
