@@ -1604,6 +1604,14 @@ describe("CanvasEditor insertion surfaces", () => {
     expect(source).toContain("props.onGenerationStateChange?.(false)")
   })
 
+  test("creates a pending Canvas node for whole-Canvas generation so recoverable tools can commit their result", async () => {
+    const source = await Bun.file(new URL("./canvas-editor.tsx", import.meta.url)).text()
+    const start = source.indexOf("const runGenerate = useCallback")
+    const runGenerate = source.slice(start, source.indexOf("submitGenerationRef.current = runGenerate", start))
+
+    expect(runGenerate).toContain('resultMode: { type: "create-pending-node" }')
+  })
+
   test("moves Search to the top Canvas toolbar while keeping viewport controls at the bottom-left", async () => {
     const source = await Bun.file(new URL("./canvas-editor.tsx", import.meta.url)).text()
     const markup = renderEditor()

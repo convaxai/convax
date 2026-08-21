@@ -4394,6 +4394,7 @@ function CanvasEditorContent(
           output: submission.tool.output,
           ...(parentGroupId ? { parentId: parentGroupId } : {}),
           prompt: submission.prompt,
+          resultMode: { type: "create-pending-node" },
           ...(submission.promptContextNodeIds.length > 0
             ? { promptContextNodeIds: submission.promptContextNodeIds }
             : {}),

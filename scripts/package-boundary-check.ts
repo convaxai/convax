@@ -271,7 +271,7 @@ requireDocumentMarkers(
     "PUT /api/v1/integrations/authx/{integrationId}/applications/convax",
     "AuthX 服务凭据不能创建或激活 Application",
     "重新激活同一个 Application id",
-    "OS credential store",
+    "私有用户应用数据文件",
     "convax.generation-lro/1",
     "不增加 Convax package dependency",
     "协调发布",

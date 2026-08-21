@@ -74,6 +74,7 @@ import {
 import electronUpdater from "electron-updater"
 import { resolveMainWindowChrome, setNativeMainWindowControlsVisible } from "./main-window-chrome"
 import { registerMainWindowControlsIpc } from "./main-window-controls-ipc"
+import { assertMarketplacePluginSetupPolicy } from "./marketplace-plugin-setup-authorization"
 import appIcon from "../../resources/icon.png?asset"
 import { registerAgentIpc } from "./agent-ipc"
 import {
@@ -1931,18 +1932,7 @@ function startApplication() {
         const current = await pluginInstallations.readActive()
         const plugin = current.plugins.find((entry) => entry.plugin.id === id)?.plugin
         if (!plugin) throw new Error("Installed Plugin is unavailable")
-        if (mode === "automatic-product-lock" && plugin.hooks) {
-          throw new Error("Automatic Plugin setup cannot authorize executable Hook modules")
-        }
-        if (
-          mode === "automatic-product-lock" &&
-          (plugin.contributes.service !== undefined ||
-            (plugin.contributes.capabilities?.exports.length ?? 0) > 0 ||
-            (plugin.contributes.capabilities?.imports.optional.length ?? 0) > 0 ||
-            (plugin.contributes.capabilities?.imports.required.length ?? 0) > 0)
-        ) {
-          throw new Error("Automatic Plugin setup cannot authorize extra runtime authority")
-        }
+        assertMarketplacePluginSetupPolicy(plugin, mode)
         if (mode === "automatic-product-lock" && !plugin.runtime) {
           throw new Error("Automatic Plugin setup requires an immutable managed companion")
         }

@@ -338,6 +338,63 @@ try {
     // the machine's OpenCode session database and startup latency.
     electron.ipcMain.removeHandler("agent:session-list")
     electron.ipcMain.handle("agent:session-list", () => [])
+    // A fresh userData directory now enters the product Onboarding before
+    // Project Home. Keep this smoke independent from a real account or browser
+    // session while exercising the same generic Service projection and the
+    // explicit "continue with Free" route that production uses.
+    let onboardingAuthorized = false
+    const onboardingStatus = () => onboardingAuthorized
+      ? {
+          account: { availability: "available", displayName: "Smoke User" },
+          billing: {
+            availability: "available",
+            checkout: {
+              availability: "available",
+              plans: [{ billingInterval: "month", key: "pro", name: "Pro" }],
+            },
+          },
+          credential: { configured: true, verification: "verified" },
+          credits: { availability: "available", remaining: 40, unit: "credits" },
+          plan: { availability: "available", key: "free", name: "Free" },
+          schema: "convax.plugin-service-status/2",
+          state: "connected",
+          usage: { availability: "available", consumed: 0, unit: "credits" },
+        }
+      : {
+          account: { availability: "unavailable" },
+          billing: { availability: "unavailable" },
+          credential: { configured: false, verification: "unverified" },
+          credits: { availability: "unavailable" },
+          plan: { availability: "unavailable" },
+          schema: "convax.plugin-service-status/2",
+          state: "disconnected",
+          usage: { availability: "unavailable" },
+        }
+    electron.ipcMain.removeHandler("plugin-service:list")
+    electron.ipcMain.handle("plugin-service:list", () => [{
+      actions: ["authorize", "authorization.cancel", "checkout", "sign_out"],
+      capabilities: ["text"],
+      description: "Built-smoke product account service",
+      models: [],
+      pluginId: "smoke-account",
+      pluginName: "Smoke Account",
+      version: "1.0.0",
+    }])
+    electron.ipcMain.removeHandler("plugin-service:status")
+    electron.ipcMain.handle("plugin-service:status", () => onboardingStatus())
+    electron.ipcMain.removeHandler("plugin-service:usage-history")
+    electron.ipcMain.handle("plugin-service:usage-history", () => ({
+      availability: "unavailable",
+      schema: "convax.plugin-service-usage/1",
+    }))
+    electron.ipcMain.removeHandler("plugin-service:authorize")
+    electron.ipcMain.handle("plugin-service:authorize", () => {
+      onboardingAuthorized = true
+      return onboardingStatus()
+    })
+    electron.BrowserWindow.getAllWindows()
+      .find((window) => !window.isDestroyed())
+      ?.webContents.send("plugin-service:changed")
     return true
   })()`,
   )
@@ -367,10 +424,35 @@ try {
       if (Date.now() >= preloadDeadline) throw new Error("The preload bridge did not become ready")
       await new Promise((resolve) => setTimeout(resolve, 50))
     }
-    const initialSurface = await waitFor(
-      () => document.querySelector('[data-project-home="true"]') || document.querySelector(".convax-canvas"),
-      "Project Home or the restored Canvas",
+    let initialSurface = await waitFor(
+      () => document.querySelector('[data-convax-onboarding="true"]')
+        || document.querySelector('[data-project-home="true"]')
+        || document.querySelector(".convax-canvas"),
+      "Onboarding, Project Home, or the restored Canvas",
     )
+    if (initialSurface.matches('[data-convax-onboarding="true"]')) {
+      if (initialSurface.getAttribute("data-convax-onboarding-step") !== "1") {
+        throw new Error("Fresh Desktop state did not start at the Account Onboarding step")
+      }
+      const signIn = await waitFor(
+        () => buttonWithAnyText("Sign in", "登录"),
+        "the Onboarding account action",
+      )
+      signIn.click()
+      await waitFor(
+        () => document.querySelector('[data-convax-onboarding-step="2"]'),
+        "the Onboarding Plan step",
+      )
+      const continueFree = await waitFor(
+        () => buttonWithAnyText("Continue with Free plan", "继续使用 Free plan"),
+        "the Onboarding Free-plan action",
+      )
+      continueFree.click()
+      initialSurface = await waitFor(
+        () => document.querySelector('[data-project-home="true"]'),
+        "Project Home after continuing with Free",
+      )
+    }
     const projectAlreadyOpen = initialSurface instanceof Element
       && initialSurface.classList.contains("convax-canvas")
     if (!projectAlreadyOpen && (buttonWithText("Skill & Plugin") || buttonWithText("技能与插件"))) {
@@ -378,7 +460,15 @@ try {
     }
     if (!projectAlreadyOpen) {
       const enterProject = await waitFor(
-        () => buttonWithAnyText("Continue", "继续", "Open project", "打开项目"),
+        () =>
+          buttonWithAnyText(
+            "Continue",
+            "继续",
+            "Open project",
+            "打开项目",
+            "Open existing project",
+            "打开已有项目",
+          ),
         "the Project Home enter action",
       )
       enterProject.click()

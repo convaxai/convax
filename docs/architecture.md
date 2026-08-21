@@ -163,7 +163,7 @@ flowchart TB
 
   subgraph Desktop["@convax/desktop · Electron composition root"]
     subgraph Entry["Runtime entry surfaces"]
-      Renderer["Renderer UI<br/>React and controllers"]
+      Renderer["Renderer UI<br/>React, controllers, first-run onboarding"]
       Preload["Preload<br/>typed window.convax bridge"]
       Agent["Agent / OpenCode"]
       PluginRuntime["Plugin iframe, sidecar, Skill, Hook"]
@@ -224,18 +224,23 @@ flowchart TB
   DesktopUpdateFeed -->|version, release notes, SHA-512 and signed package| Main
 
   subgraph ExternalServices["External first-party service boundary"]
-    AuthXNexus["AuthX identity + Nexus resource control plane<br/>signed administrator binding handoff"]
+    AuthXPortal["AuthX ProjectUser Portal<br/>identity UI + short-lived Application Session"]
+    NexusControl["Nexus resource control plane<br/>Plan · Quota · Usage · Checkout"]
   end
-  PluginRuntime -->|system-browser OAuth + runtime HTTPS only| AuthXNexus
+  Web -->|public ProjectUser Portal links only| AuthXPortal
+  AuthXPortal -->|exact-origin bearer requests; no product persistence| NexusControl
+  PluginRuntime -->|system-browser OAuth + runtime HTTPS only| NexusControl
 
   subgraph State["State and persistence"]
     UserData["Electron userData<br/>bindings, Marketplace, grants, immutable Plugin closures<br/>isolated per identified development task"]
+    CompanionUserData["Companion-owned user application data<br/>private rotating refresh credential only"]
     ProjectRoot["Project root / .convax<br/>identity, final-frame objects/journals/heads, checkpoints/floors, managed assets"]
-    LocalStorage["Browser localStorage<br/>preferences, recovery and disposable Marketplace / Service / model display caches"]
+    LocalStorage["Browser localStorage<br/>preferences, onboarding progress, recovery<br/>and disposable Marketplace / Service / model display caches"]
     UpdaterCache["Electron updater cache<br/>verified partial/downloaded package · disposable"]
   end
 
   Main --> UserData
+  PluginRuntime --> CompanionUserData
   Main --> UpdaterCache
   Main -->|validated native I/O · range streams| ProjectRoot
   Renderer -. non-authoritative UI state only .-> LocalStorage
@@ -263,7 +268,7 @@ flowchart TB
   classDef store fill:#15382e,stroke:#63d4a5,color:#ffffff;
   classDef external fill:#312a1a,stroke:#e8b44e,color:#ffffff;
   class Main authority;
-  class UserData,ProjectRoot,LocalStorage store;
+  class UserData,CompanionUserData,ProjectRoot,LocalStorage store;
   class PluginSource,Release,PeerReplicas external;
 ```
 
@@ -699,6 +704,7 @@ boundary checker fails closed until those admissions are complete.
 | Plugin-owned Skill selection and provenance                           | Desktop main                                             | Immutable ActiveSet closure paths enter Agent Runtime through a generic port                                     |
 | Installed Plugin snapshots and ActiveSet                              | Desktop main                                             | One global CAS pointer; exact snapshot leases bind all runtime use                                               |
 | Plugin Service status and usage display                               | Installed sidecar through Desktop main                   | Renderer may retain only a disposable last-complete safe projection                                              |
+| First-run account onboarding progress                                 | Desktop Renderer preference                              | Bounded local progress only; account, Plan, Credits, Checkout and entitlement remain live Service authority      |
 | Available/downloaded Desktop application update                       | Desktop Main update controller plus signed remote feed   | Feed metadata and updater cache are not Project, Plugin, or renderer authority                                   |
 
 A recovery preference such as “last Canvas for Project X” is not canonical state.
@@ -760,6 +766,11 @@ Electron userData/
                                         private crash-recovery Cookie handoff; never a browser profile
   canvas-external-drags/                short-lived host-owned native drag copies
 
+Companion-owned per-user application data/
+  <service-private namespace>/          optional private 0700 directory
+    authx-refresh-credential.json       optional 0600 rotating Refresh Credential;
+                                        never an Access Token or Host credential
+
 Identified development task userData    the same schema under a task-private absolute
                                         profile; never the ordinary development or packaged profile
 
@@ -771,7 +782,8 @@ Packaged app Resources/
   default-capabilities/                 build-verified remote first-install seed;
                                         never built-in provenance or executable-in-place
 
-browser localStorage                    per-user Workbench/renderer preferences plus bounded
+browser localStorage                    per-user Workbench/renderer preferences, bounded first-run
+                                        onboarding progress, plus bounded
                                         disposable Marketplace, Plugin Service and model catalog
                                         display projections
 
@@ -902,10 +914,11 @@ pins the Builtin bundle, Official descriptor/Registry/Showcase, package, owned-S
 presentation, and target companion URLs, sizes, and SHA-256 values. Packaging
 consumes and verifies this closure without resolving “latest.” Startup installs
 every verified member of the Builtin bundle from its offline bytes, then applies the
-product preinstall policy. The current policy contains only
-`convax-official/plugin/ffmpeg-tools` on `darwin-arm64`, with automatic setup. Its
-recovery closure admits five exact retired Host API v1 snapshot bindings with their
-current Official Host API v3 Release bytes: `cutout-studio`, `nexus-service`,
+product preinstall policy. The current policy contains
+`convax-official/plugin/ffmpeg-tools` and
+`convax-official/plugin/nexus-service` on `darwin-arm64`, both with automatic
+setup. Its recovery closure admits four exact retired Host API v1 snapshot bindings
+with their current Official Host API v3 Release bytes: `cutout-studio`,
 `storyai-3d-director-desk`, `storyboard-studio`, and `video-timeline`. Retired
 bindings without a current Official Registry replacement remain preserved and
 inactive; they are never recovered from source checkouts or mutable install files.
@@ -933,8 +946,11 @@ presence as authority.
 Automatic setup remains an independent durable `CapabilityTransition` that
 publishes an `ExecutionGrant`; it does not execute the companion. It is admitted
 only for the exact product-locked source, id, version, and target, and only for a
-verified managed Tool companion with no PATH fallback, Hook, Service, extra Plugin
-capability, credential, or secret input. User removal of a policy preinstall
+verified managed Tool companion with no PATH fallback, Hook, extra Plugin
+capability, credential, or secret input. A Service projection may coexist on that
+exact companion so first-run account UI can discover it, but setup invokes no
+Service action and never signs in, checks out, or grants an entitlement. User
+removal of a policy preinstall
 creates a per-entry `ProvisioningDecision` that startup cannot silently clear or
 override. Refreshing the fixed Official source reopens and verifies the packaged
 product closure; it never routes the reserved Official identity through the
@@ -1160,6 +1176,52 @@ installer-start failure keeps or relaunches the currently installed version and
 reports a bounded native error. Project data, installed Plugin closures, preferences,
 and user content remain outside the replaceable application bundle.
 
+### First-run account onboarding
+
+First-run onboarding is a Desktop Renderer composition over the existing Project
+startup route and Plugin Service projection. It is not Project state, a new account
+owner, a billing authority, or a Plugin-specific runtime path.
+
+```text
+Project registry initializes
+  -> any available registered Project bypasses account onboarding and restores locally
+  -> an empty successful registry reads bounded renderer onboarding progress
+  -> Renderer selects exactly one installed Plugin Service whose declared actions
+     contain authorization and Checkout
+  -> zero candidates waits/retries provisioning; multiple candidates fail closed
+     instead of choosing by Plugin id, vendor, display name or ordering
+  -> authorize/reauthorize uses the existing Main-owned system-browser flow
+  -> the live v2 Service status alone proves connected account, current Plan,
+     Credits, Checkout offers and subscription state
+  -> a connected Free account may start one advertised Checkout or continue Free
+  -> Checkout cancellation, failure, closure, unknown state or provider delay keeps
+     the current Plan usable and never grants a local entitlement
+  -> Ready reuses Create Project / Open Project; successful Project entry marks the
+     bounded renderer preference complete
+```
+
+The progress record contains only `{version, step, completed}`. It contains no
+Plugin id, account identifier, email, Plan key, price, Credits, Checkout id, token,
+URL, grant, source identity or entitlement. A missing, malformed, unknown-version,
+or unwritable record safely restarts the presentation without changing any Service
+or Project state. Before completion, a disconnected or unverified account returns
+to the account step even when the stored presentation step was later. After
+completion, the ordinary empty-registry Project entry is shown and Settings →
+Services is the only recurring account/Plan management surface.
+
+System-browser authorization and Checkout retain their existing trust boundaries:
+Renderer sends only the selected installed Plugin id and, for Checkout, one currently
+advertised bounded Plan key. Main and the exact companion revalidate them; auth and
+Checkout URLs never cross preload. The current offer name, interval, account display,
+Plan and Credits are display projections only. When the v2 status does not carry a
+price or benefit list, Renderer directs the user to the secure Checkout for those
+live facts rather than hard-coding them.
+
+Signing in does not upload, synchronize, share, enroll, or change collaboration
+authority for a local Project. Existing local Projects remain openable and editable
+while offline, signed out, or unsubscribed, subject only to their independent local
+Project authority and recovery state.
+
 ### Project creation and opening
 
 ```text
@@ -1375,9 +1437,11 @@ never resolves a mutable companion directory or silently falls back after the
 snapshot is active. Choosing install or update is normally the execution consent
 event. The sole product exception is an exact
 `setup: automatic` preinstall, which runs the independent setup transition only
-after installation and admits only its product-locked managed Tool companion; it
-rejects PATH fallback, Hooks, Services, extra Plugin capabilities, credentials, and
-identity or target drift. Before package publication, Desktop resolves the exact
+after installation and admits only its product-locked managed Tool companion. A
+Service projection may coexist on that exact companion, but automatic setup invokes
+no Service action and never supplies credentials, signs in, or starts Checkout. It
+rejects PATH fallback, Hooks, extra Plugin capabilities, secret input, and identity
+or target drift. Before package publication, Desktop resolves the exact
 managed or PATH binding and transactionally coordinates a private receipt keyed by
 the normalized manifest fingerprint, binding kind, real path, size and SHA-256 with
 the package switch. The old and new receipts may coexist during an update; any
@@ -1704,8 +1768,11 @@ exact resource or an explicitly managed first-party Application trust domain tha
 contains it. An arbitrary or unbound client-audience Access Token, ID Token, Cookie,
 Refresh Credential, or Management credential is never a resource credential. The
 verified companion owns the loopback callback, PKCE transaction, token validation,
-refresh rotation and OS credential-store adapter; only the rotating Refresh
-Credential may be durable and short-lived Access Tokens remain in companion memory.
+refresh rotation and its private credential-storage adapter. Only the rotating
+Refresh Credential may be durable, either in an operating-system credential service
+or a private same-user application-data file; short-lived Access Tokens remain in
+companion memory. Main, Preload and Renderer receive neither credential bytes nor
+the native storage path.
 The Resource Server validates exact issuer/JWKS, audience, Application/client,
 subject, environment, token use, capability scope, time claims and the live
 server-side integration binding, then resolves its product authorization and

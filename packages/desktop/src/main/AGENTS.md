@@ -175,7 +175,9 @@ For any matching change, read the full routed reference before planning or editi
   snapshot descriptor. Background refresh never expands execution authority.
   Builtin/preinstalled are provisioning sources, not runtime privilege classes; the
   product-lock automatic-setup exception remains exact, managed, credential-free,
-  and fail-closed.
+  and fail-closed. An exact managed companion may expose a Service projection, but
+  automatic setup performs no Service action and never authorizes, signs in, starts
+  Checkout, or grants an entitlement.
 - A user-confirmed install/update or explicit Local import publishes its exact
   execution authorization in the same transition. Static Web Plugins bind that
   authorization to the capability contract, source, version, and artifact even
