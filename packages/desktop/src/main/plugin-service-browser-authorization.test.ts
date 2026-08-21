@@ -21,6 +21,8 @@ const rawRequest = {
   timeout_seconds: 60,
 } as const
 
+const target = { pluginId: "account-tools", serviceId: "account-tools" } as const
+
 const authorizationOptions = {
   action: "authorize" as const,
   isCurrent: async () => true,
@@ -106,7 +108,7 @@ describe("Plugin service browser authorization", () => {
   test("exports only allowlisted names from the exact origin and always clears the session", async () => {
     const browser = fakeSession()
     const broker = new PluginServiceBrowserAuthorizationBroker(async () => browser.session)
-    const pending = broker.authorize("account-tools", parsePluginServiceBrowserAuthorizationRequest(rawRequest), {
+    const pending = broker.authorize(target, parsePluginServiceBrowserAuthorizationRequest(rawRequest), {
       ...authorizationOptions,
     })
     browser.confirmation.resolve()
@@ -137,7 +139,7 @@ describe("Plugin service browser authorization", () => {
     ])
     const first = new PluginServiceBrowserAuthorizationBroker(() => browser.session, checkpoints)
     const firstPending = first.authorize(
-      "account-tools",
+      target,
       parsePluginServiceBrowserAuthorizationRequest(rawRequest),
       authorizationOptions,
     )
@@ -148,6 +150,7 @@ describe("Plugin service browser authorization", () => {
     expect(
       await checkpoints.inspect({
         pluginId: "account-tools",
+        serviceId: "account-tools",
         serviceIdentity: authorizationOptions.serviceIdentity,
         snapshotDigest: authorizationOptions.snapshotDigest,
       }),
@@ -158,6 +161,7 @@ describe("Plugin service browser authorization", () => {
           cookieNames: rawRequest.cookie_names,
           cookieOrigin: rawRequest.cookie_origin,
           pluginId: "account-tools",
+          serviceId: "account-tools",
           serviceIdentity: authorizationOptions.serviceIdentity,
           snapshotDigest: authorizationOptions.snapshotDigest,
         })
@@ -173,16 +177,17 @@ describe("Plugin service browser authorization", () => {
       ...rawRequest,
       authorization_id: "request_fedcba9876543210",
     })
-    expect(await resumed.authorize("account-tools", freshRequest, authorizationOptions)).toEqual({
+    expect(await resumed.authorize(target, freshRequest, authorizationOptions)).toEqual({
       ...captured,
       authorization_id: "request_fedcba9876543210",
     })
     expect(browserReopens).toBe(0)
 
-    await resumed.commitPlugin("account-tools")
+    await resumed.commitPlugin(target)
     expect(
       await checkpoints.inspect({
         pluginId: "account-tools",
+        serviceId: "account-tools",
         serviceIdentity: authorizationOptions.serviceIdentity,
         snapshotDigest: authorizationOptions.snapshotDigest,
       }),
@@ -201,7 +206,8 @@ describe("Plugin service browser authorization", () => {
       cookieOrigin: rawRequest.cookie_origin,
       cookies: [{ name: "session_id", value: "recoverable-session" }],
       pluginId: "account-tools",
-      schema: "convax.plugin-service-authorization-checkpoint/2",
+      schema: "convax.plugin-service-authorization-checkpoint/3",
+      serviceId: "account-tools",
       serviceIdentity: authorizationOptions.serviceIdentity,
       snapshotDigest: authorizationOptions.snapshotDigest,
     })
@@ -220,11 +226,7 @@ describe("Plugin service browser authorization", () => {
         return fakeSession().session
       }, checkpoints)
       await expect(
-        broker.authorize(
-          "account-tools",
-          parsePluginServiceBrowserAuthorizationRequest(rawRequest),
-          authorizationOptions,
-        ),
+        broker.authorize(target, parsePluginServiceBrowserAuthorizationRequest(rawRequest), authorizationOptions),
       ).rejects.toThrow("invalid or inaccessible")
       expect(browserReopens).toBe(0)
     } finally {
@@ -236,6 +238,7 @@ describe("Plugin service browser authorization", () => {
         cookieNames: rawRequest.cookie_names,
         cookieOrigin: rawRequest.cookie_origin,
         pluginId: "account-tools",
+        serviceId: "account-tools",
         serviceIdentity: authorizationOptions.serviceIdentity,
         snapshotDigest: authorizationOptions.snapshotDigest,
       }),
@@ -246,7 +249,7 @@ describe("Plugin service browser authorization", () => {
     const browser = fakeSession()
     const broker = new PluginServiceBrowserAuthorizationBroker(() => browser.session)
     const controller = new AbortController()
-    const pending = broker.authorize("account-tools", parsePluginServiceBrowserAuthorizationRequest(rawRequest), {
+    const pending = broker.authorize(target, parsePluginServiceBrowserAuthorizationRequest(rawRequest), {
       ...authorizationOptions,
       signal: controller.signal,
     })
@@ -261,7 +264,7 @@ describe("Plugin service browser authorization", () => {
   test("fails closed before export when the Plugin changed", async () => {
     const browser = fakeSession()
     const broker = new PluginServiceBrowserAuthorizationBroker(() => browser.session)
-    const pending = broker.authorize("account-tools", parsePluginServiceBrowserAuthorizationRequest(rawRequest), {
+    const pending = broker.authorize(target, parsePluginServiceBrowserAuthorizationRequest(rawRequest), {
       ...authorizationOptions,
       isCurrent: async () => false,
     })
@@ -270,6 +273,35 @@ describe("Plugin service browser authorization", () => {
     await expect(pending).rejects.toThrow("changed during browser authorization")
     expect(browser.calls.origins).toEqual([])
     expect(browser.calls.clear).toBe(1)
+  })
+
+  test("keeps concurrent browser authorization isolated between sibling services", async () => {
+    const image = fakeSession([{ name: "session_id", value: "image-session" }])
+    const video = fakeSession([{ name: "session_id", value: "video-session" }])
+    const videoTarget = { pluginId: "account-tools", serviceId: "video-generation" } as const
+    const broker = new PluginServiceBrowserAuthorizationBroker((requestedTarget) =>
+      requestedTarget.serviceId === "video-generation" ? video.session : image.session,
+    )
+
+    const imagePending = broker.authorize(target, parsePluginServiceBrowserAuthorizationRequest(rawRequest), {
+      ...authorizationOptions,
+    })
+    const videoPending = broker.authorize(
+      videoTarget,
+      parsePluginServiceBrowserAuthorizationRequest({
+        ...rawRequest,
+        authorization_id: "request_video_0123456789",
+      }),
+      authorizationOptions,
+    )
+    await expect(
+      broker.authorize(target, parsePluginServiceBrowserAuthorizationRequest(rawRequest), authorizationOptions),
+    ).rejects.toThrow("already active")
+
+    image.confirmation.resolve()
+    video.confirmation.resolve()
+    expect((await imagePending).cookies).toEqual([{ name: "session_id", value: "image-session" }])
+    expect((await videoPending).cookies).toEqual([{ name: "session_id", value: "video-session" }])
   })
 
   test("rejects ambiguous or oversized approved cookies", async () => {
@@ -282,7 +314,7 @@ describe("Plugin service browser authorization", () => {
     ]) {
       const browser = fakeSession(cookies)
       const broker = new PluginServiceBrowserAuthorizationBroker(() => browser.session)
-      const pending = broker.authorize("account-tools", parsePluginServiceBrowserAuthorizationRequest(rawRequest), {
+      const pending = broker.authorize(target, parsePluginServiceBrowserAuthorizationRequest(rawRequest), {
         ...authorizationOptions,
       })
       browser.confirmation.resolve()
@@ -294,11 +326,11 @@ describe("Plugin service browser authorization", () => {
   test("sign-out/plugin disposal cancels and waits for native cleanup", async () => {
     const browser = fakeSession()
     const broker = new PluginServiceBrowserAuthorizationBroker(() => browser.session)
-    const pending = broker.authorize("account-tools", parsePluginServiceBrowserAuthorizationRequest(rawRequest), {
+    const pending = broker.authorize(target, parsePluginServiceBrowserAuthorizationRequest(rawRequest), {
       ...authorizationOptions,
     })
 
-    await broker.disposePlugin("account-tools")
+    await broker.disposePlugin(target)
     await expect(pending).rejects.toMatchObject({ name: "AbortError" })
     expect(browser.calls.clear).toBe(1)
     expect(browser.calls.close).toBe(1)

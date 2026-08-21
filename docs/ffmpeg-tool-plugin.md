@@ -6,9 +6,10 @@ Plugin-owned Skill、companion、发布配置、许可证材料与 target smoke 
 [`plugin-system-analysis.md`](plugin-system-analysis.md) 和生成的
 `@convax/plugin-api` / `@convax/plugin-sdk` reference。
 
-媒体处理集成必须使用与所有 Tool Plugin 相同的 v8 通用边界：
+媒体处理集成必须使用与所有 Tool Plugin 相同的 v8/v9 通用边界：
 
-- 唯一 portable Manifest 是 `convax.plugin/8`；
+- portable Manifest 必须是闭合的 `convax.plugin/8` 或 `convax.plugin/9`；v8 单
+  Service 身份和行为保持不变；
 - operation、generation、service、Agent Tool 和 Plugin-to-Plugin export 复用同一
   verified sidecar execution owner；
 - managed companion 必须是 closure 中摘要固定、安装时授权、运行前重新验证的精确字节；

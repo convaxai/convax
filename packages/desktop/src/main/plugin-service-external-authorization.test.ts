@@ -56,7 +56,7 @@ describe("Plugin service external authorization", () => {
       authorization_url: "https://nexus.example/workspace/convax/auth/sign-in?state=opaque-state",
       schema: pluginServiceExternalAuthorizationRequestSchema,
     })
-    expect(await broker.authorize("nexus-service", request, {})).toEqual({
+    expect(await broker.authorize({ pluginId: "nexus-service", serviceId: "nexus-service" }, request, {})).toEqual({
       authorization_id: "request_0123456789abcdef",
       schema: pluginServiceExternalAuthorizationCompletionSchema,
     })

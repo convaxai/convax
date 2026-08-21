@@ -7,11 +7,20 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 
 const sha256Pattern = /^[a-f0-9]{64}$/
 
+export function packagedStartupStageReached(diagnostics: string, stage: string) {
+  const lines = diagnostics.split("\n")
+  if (lines.some((line) => line.includes(" marketplace-provision-failed"))) {
+    throw new Error(`Packaged Marketplace provisioning failed: ${diagnostics.trim()}`)
+  }
+  return lines.some((line) => line.includes(` ${stage}`))
+}
+
 export function assertAutomaticPreinstalledCapability(capability: unknown, identity: { id: string; version: string }) {
   if (
     !isRecord(capability) ||
     capability.id !== identity.id ||
     capability.kind !== "plugin" ||
+    capability.sourceLabel !== "convax-official" ||
     capability.version !== identity.version ||
     capability.state !== "ready"
   ) {
@@ -26,7 +35,13 @@ export function assertAutomaticPreinstalledCapability(capability: unknown, ident
 
 export async function assertAutomaticPreinstalledAuthorization(
   userDataRoot: string,
-  identity: { authorizationContractDigest: string; id: string; version: string },
+  identity: {
+    artifactDigest: string
+    authorizationContractDigest: string
+    id: string
+    sourceKey: string
+    version: string
+  },
 ) {
   const state = JSON.parse(
     await fs.readFile(path.join(userDataRoot, "marketplaces", "state-v1.json"), "utf8"),
@@ -44,9 +59,11 @@ export async function assertAutomaticPreinstalledAuthorization(
       isRecord(candidate) &&
       candidate.id === identity.id &&
       candidate.kind === "plugin" &&
+      candidate.artifactDigest === identity.artifactDigest &&
+      candidate.sourceKey === identity.sourceKey &&
       candidate.version === identity.version,
   )
-  if (!isRecord(installation) || typeof installation.sourceKey !== "string") {
+  if (!isRecord(installation)) {
     throw new Error("Packaged automatic preinstall installation is missing")
   }
 
@@ -59,7 +76,7 @@ export async function assertAutomaticPreinstalledAuthorization(
       isRecord(candidate.identity) &&
       candidate.identity.id === identity.id &&
       candidate.identity.kind === "plugin" &&
-      candidate.sourceKey === installation.sourceKey,
+      candidate.sourceKey === identity.sourceKey,
   )
   if (
     !isRecord(grant) ||

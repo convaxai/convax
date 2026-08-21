@@ -202,6 +202,7 @@ function tool(overrides: Partial<GenerationToolSummary> = {}): GenerationToolSum
     title: "Write",
     toolId: "write",
     ...overrides,
+    serviceId: overrides.serviceId ?? overrides.pluginId ?? "creative-tools",
   }
 }
 

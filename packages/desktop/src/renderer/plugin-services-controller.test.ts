@@ -14,11 +14,15 @@ const summary: PluginServiceSummary = {
   actions: ["sign_out"],
   capabilities: [],
   description: "Account connection",
+  llmProviderIds: [],
   models: [],
   pluginId: "account-tools",
   pluginName: "Account Tools",
+  serviceId: "account-tools",
   version: "1.0.0",
 }
+
+const serviceTarget = { pluginId: "account-tools", serviceId: "account-tools" }
 
 const connected: PluginServiceStatus = {
   account: { availability: "unavailable" },
@@ -89,10 +93,10 @@ describe("PluginServicesController", () => {
     const controller = new PluginServicesController(serviceClient)
     await controller.refresh()
 
-    await controller.checkout("account-tools", "pro")
+    await controller.checkout(serviceTarget, "pro")
 
-    expect(serviceClient.checkout).toHaveBeenCalledWith({ planKey: "pro", pluginId: "account-tools" })
-    await expect(controller.checkout("account-tools", "enterprise")).rejects.toThrow("no longer available")
+    expect(serviceClient.checkout).toHaveBeenCalledWith({ ...serviceTarget, planKey: "pro" })
+    await expect(controller.checkout(serviceTarget, "enterprise")).rejects.toThrow("no longer available")
     controller.dispose()
   })
 
@@ -113,10 +117,10 @@ describe("PluginServicesController", () => {
       status: connected,
       usageHistory,
     })
-    await controller.perform("account-tools", "sign_out")
-    expect(serviceClient.signOut).toHaveBeenCalledWith({ pluginId: "account-tools" })
+    await controller.perform(serviceTarget, "sign_out")
+    expect(serviceClient.signOut).toHaveBeenCalledWith(serviceTarget)
     expect(controller.getSnapshot().services[0]?.status).toEqual(disconnected)
-    await expect(controller.perform("account-tools", "reauthorize")).rejects.toThrow("no longer available")
+    await expect(controller.perform(serviceTarget, "reauthorize")).rejects.toThrow("no longer available")
     expect(serviceClient.reauthorize).not.toHaveBeenCalled()
     controller.dispose()
   })
@@ -221,7 +225,7 @@ describe("PluginServicesController", () => {
     })
     const controller = new PluginServicesController(serviceClient, { storage: target })
 
-    await controller.perform("account-tools", "sign_out")
+    await controller.perform(serviceTarget, "sign_out")
 
     expect(controller.getSnapshot().services[0]).toMatchObject({ status: disconnected })
     expect(controller.getSnapshot().services[0]?.usageHistory).toBeUndefined()
@@ -304,7 +308,7 @@ describe("PluginServicesController", () => {
     const controller = new PluginServicesController(serviceClient)
     controller.start()
     await new Promise((resolve) => setTimeout(resolve, 0))
-    const action = controller.perform("account-tools", "sign_out")
+    const action = controller.perform(serviceTarget, "sign_out")
     installed = [{ ...summary, version: "2.0.0" }]
     changed?.()
     await new Promise((resolve) => setTimeout(resolve, 0))
@@ -336,15 +340,54 @@ describe("PluginServicesController", () => {
     const controller = new PluginServicesController(serviceClient)
     await controller.refresh()
 
-    const pending = controller.perform("account-tools", "authorize")
+    const pending = controller.perform(serviceTarget, "authorize")
     await Promise.resolve()
-    await controller.perform("account-tools", "authorization.cancel")
-    expect(serviceClient.cancelAuthorization).toHaveBeenCalledWith({ pluginId: "account-tools" })
+    await controller.perform(serviceTarget, "authorization.cancel")
+    expect(serviceClient.cancelAuthorization).toHaveBeenCalledWith(serviceTarget)
     expect(controller.getSnapshot().services[0]?.status).toEqual(cancelResult)
 
     authorization.resolve(connected)
     await pending
     expect(controller.getSnapshot().services[0]?.status).toEqual(cancelResult)
+    controller.dispose()
+  })
+
+  test("isolates sibling Service actions and results inside one Plugin", async () => {
+    const image = { ...summary, serviceId: "image-generation" }
+    const video = { ...summary, serviceId: "video-generation" }
+    const imageResult = deferred<PluginServiceStatus>()
+    const videoResult = deferred<PluginServiceStatus>()
+    const serviceClient = client({
+      listServices: mock(async () => [image, video]),
+      signOut: mock(({ serviceId }) => (serviceId === image.serviceId ? imageResult.promise : videoResult.promise)),
+    })
+    const controller = new PluginServicesController(serviceClient)
+    await controller.refresh()
+
+    const imageTarget = { pluginId: summary.pluginId, serviceId: image.serviceId }
+    const videoTarget = { pluginId: summary.pluginId, serviceId: video.serviceId }
+    const imageAction = controller.perform(imageTarget, "sign_out")
+    const videoAction = controller.perform(videoTarget, "sign_out")
+    expect(controller.getSnapshot().actions).toHaveLength(2)
+
+    videoResult.resolve({ ...disconnected, state: "attention" })
+    await videoAction
+    expect(
+      controller.getSnapshot().services.find(({ serviceId }) => serviceId === video.serviceId)?.status?.state,
+    ).toBe("attention")
+    expect(controller.getSnapshot().services.find(({ serviceId }) => serviceId === image.serviceId)?.status).toEqual(
+      connected,
+    )
+    expect(controller.getSnapshot().actions).toEqual([{ action: "sign_out", target: imageTarget }])
+
+    imageResult.resolve(disconnected)
+    await imageAction
+    expect(controller.getSnapshot().services.find(({ serviceId }) => serviceId === image.serviceId)?.status).toEqual(
+      disconnected,
+    )
+    expect(controller.getSnapshot().actions).toBeUndefined()
+    expect(serviceClient.signOut).toHaveBeenCalledWith(imageTarget)
+    expect(serviceClient.signOut).toHaveBeenCalledWith(videoTarget)
     controller.dispose()
   })
 })

@@ -37,8 +37,9 @@ export interface ProjectTeamPeerBootstrapOpenResult {
 }
 
 /**
- * Main-only composition seam. Its implementation owns raw service DTOs, OS-vault
- * signers, credential refresh, exact handshake/channel admission and PeerJS.
+ * Main-only composition seam. Its implementation owns raw service DTOs,
+ * user-managed signers, credential refresh, exact handshake/channel admission and
+ * PeerJS.
  */
 export interface ProjectTeamPeerSessionFactory {
   openExisting(input: { readonly projectId: string; readonly signal: AbortSignal }): Promise<ProjectTeamPeerSessionOpenResult>

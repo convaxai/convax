@@ -38,6 +38,13 @@ export const pluginManagementIpcChannels = {
   uninstallPlugin: "plugin:uninstall",
 } as const
 
+export function publishPluginManagementChange() {
+  for (const window of BrowserWindow.getAllWindows()) {
+    if (window.isDestroyed() || window.webContents.isDestroyed()) continue
+    window.webContents.send(pluginManagementIpcChannels.changed)
+  }
+}
+
 function showDirectoryDialog(event: IpcMainInvokeEvent, options: OpenDialogOptions) {
   const owner = BrowserWindow.fromWebContents(event.sender)
   return owner ? dialog.showOpenDialog(owner, options) : dialog.showOpenDialog(options)
@@ -70,12 +77,7 @@ export function registerPluginManagementIpc(
     })
     return () => ipcMain.removeHandler(channel)
   }
-  const publishChange = () => {
-    for (const window of BrowserWindow.getAllWindows()) {
-      if (window.isDestroyed() || window.webContents.isDestroyed()) continue
-      window.webContents.send(pluginManagementIpcChannels.changed)
-    }
-  }
+  const publishChange = publishPluginManagementChange
   const unsubscribeRemote = remoteCatalog?.subscribe?.(publishChange)
   const listPlugins = async (): ReturnType<WebPluginClient["listPlugins"]> => {
     const installed = await manager.list()

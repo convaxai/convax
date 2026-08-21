@@ -29,7 +29,13 @@ function fileIdentity(relativePath: string, contents: string) {
 function activeSet(plugins: readonly { readonly pluginId: string; readonly snapshotDigest: string }[]) {
   const topology = planPluginCapabilityTopology([])
   if (!topology.ok) throw new Error("Empty Plugin capability topology must be valid")
-  return { capabilityTopology: topology.topology, plugins }
+  return {
+    capabilityTopology: topology.topology,
+    plugins: plugins.map((plugin) => ({
+      activationId: sha256(`${plugin.pluginId}:${plugin.snapshotDigest}:activation`),
+      ...plugin,
+    })),
+  }
 }
 
 function runtimeCandidate(assetContent: string, version: string): PluginInstallationCandidate {

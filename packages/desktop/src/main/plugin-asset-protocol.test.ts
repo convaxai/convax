@@ -145,11 +145,11 @@ describe("Plugin asset protocol", () => {
     expect(response.headers.get("content-security-policy")).not.toContain("convax-connected-media:")
   })
 
-  test("opens the connected-media CSP source only for an exact declared and granted v8 surface", async () => {
+  test("opens the connected-media CSP source only for an exact declared and granted v8/v9 surface", async () => {
     const asset = await temporaryAsset("index.html", "<!doctype html>")
     let authorized = true
     let declared = true
-    let schema = "convax.plugin/8"
+    let schema = "convax.plugin/9"
     const handle = createWebPluginAssetHandler(
       {
         async acquirePluginSnapshot(identity) {
@@ -180,6 +180,11 @@ describe("Plugin asset protocol", () => {
       "media-src 'self' data: blob: convax-connected-media:",
     )
     expect(allowed.headers.get("content-security-policy")).toContain("img-src 'self' data: blob:;")
+    schema = "convax.plugin/8"
+    const allowedV8 = await handle({ url: assetUrl("index.html") })
+    expect(allowedV8.headers.get("content-security-policy")).toContain(
+      "media-src 'self' data: blob: convax-connected-media:",
+    )
     authorized = false
     const denied = await handle({ url: assetUrl("index.html") })
     expect(denied.headers.get("content-security-policy")).not.toContain("convax-connected-media:")
@@ -239,11 +244,11 @@ describe("Plugin asset protocol", () => {
     expect(undeclared.headers.get("content-security-policy")).not.toContain("convax-connected-media:")
   })
 
-  test("projects custom Pet assets only onto an exact declared and granted v8 Pet surface", async () => {
+  test("projects custom Pet assets only onto an exact declared and granted v8/v9 Pet surface", async () => {
     const asset = await temporaryAsset("pet/index.html", "<!doctype html>")
     let authorized = true
     let contributed = true
-    let schema = "convax.plugin/8"
+    let schema = "convax.plugin/9"
     const handle = createWebPluginAssetHandler(
       {
         async acquirePluginSnapshot(identity) {
@@ -286,6 +291,10 @@ describe("Plugin asset protocol", () => {
       expect(policy).toContain("connect-src 'none'")
       expect(policy).not.toContain("convax-connected-media:")
     }
+
+    schema = "convax.plugin/8"
+    const allowedV8 = await handle({ url: assetUrl("pet/index.html") })
+    expect(allowedV8.headers.get("content-security-policy")).toContain("img-src 'self' data: blob: convax-pet-asset:")
 
     const unrelatedDocument = await handle({ url: assetUrl("other/index.html") })
     expect(unrelatedDocument.headers.get("content-security-policy")).not.toContain("convax-pet-asset:")

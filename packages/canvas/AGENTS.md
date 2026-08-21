@@ -20,6 +20,11 @@ Canvas owns document and editor semantics independently of Project and Agent.
 
 - Use host-neutral `scopeId`; Canvas must not know Project roots, `.convax`, Electron,
   Workbench, OpenCode, or native persistence.
+- Canvas owns editable-text draft semantics and the transient write-behind store
+  keyed by scope/document/node. Stage each edit immediately, autosave through the
+  injected text-resource port, keep failures for retry across remounts, and let an
+  ordinary document switch start or join that save without prompting or waiting.
+  Host composition may drain the store before its scope is torn down.
 - Version persisted schema changes and provide migration tests by default. A breaking
   cutover requires an explicit canonical architecture decision and rejection tests;
   unknown or unsupported documents never become partially hydrated live state.
@@ -73,6 +78,14 @@ Canvas owns document and editor semantics independently of Project and Agent.
 - Hosts may provide only edge-inset geometry for unavailable viewport space. Canvas
   owns the resulting safe rectangle, camera avoidance, and Canvas overlay clamping;
   host product/utility identity never enters this package.
+- Canvas owns typed shortcut-command semantics that call its existing editor, view
+  and business operations, but never owns product chord mapping, focus routing,
+  conflict arbitration or a global keyboard listener. A host calls the narrow
+  `canRunShortcut`/`runShortcut` editor port and projects Space/native-drag holds
+  through dedicated held-state ports. Those values are transient gesture state and
+  never enter the Canvas document, typed intents, history, persistence, or IPC.
+  Native copy/paste remains on Canvas's browser
+  clipboard handlers so the system `DataTransfer` path is preserved.
 - Domain mutation commits before any camera behavior. Canvas may own an optional
   post-mutation safe reveal for the current mounted view when newly affected nodes
   are outside its host-provided safe viewport; stale scope, remount, background
@@ -232,8 +245,16 @@ Canvas owns document and editor semantics independently of Project and Agent.
 - A host-neutral selection drag source may expose a persistent drag-out mode. Canvas
   owns its top-level mode UI and interaction semantics: selection, pan and zoom stay
   available, in-Canvas node movement is disabled, and each completed native drag
-  rearms the current immutable selection. Host/native paths and ticket publication
-  remain outside Canvas.
+  rearms the current immutable selection. Modifier-only compatibility gestures must
+  be explicit host opt-ins. The host focus router owns key listeners, scope/conflict
+  arbitration, and held-key release, and forwards only held/released state through
+  the Canvas editor handle. The host must synchronously project activation before
+  its activating keydown returns. While source preparation is pending, Canvas
+  immediately disables in-Canvas movement for the armed selection and exposes the
+  preparing state; native `dragstart` remains gated on a ready source. Canvas must
+  not infer activation from window/document events. React Flow modifier behavior is derived from the initiating
+  pointer event, and Space panning is scoped to a focused Canvas with an exact
+  unmodified key. Host/native paths and ticket publication remain outside Canvas.
 
 Run `bun typecheck && bun test`. For public command, plugin or export changes also
 run root `bun run pack:check`.

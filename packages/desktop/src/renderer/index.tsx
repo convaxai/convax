@@ -4,6 +4,7 @@ import {
   createDefaultCanvasNodeRegistry,
   createCanvasViewRegistry,
   createCanvasServices,
+  createCanvasTextDraftStore,
   type CanvasEditorHandle,
   type CanvasDocument,
   type CanvasGenerateService,
@@ -12,6 +13,7 @@ import {
   type CanvasSelectionAction,
   type CanvasSelectionActionContext,
   type CanvasSelectionDragSource,
+  type CanvasShortcutCommand,
 } from "@convax/canvas"
 import { ProjectController, ProjectSidebar } from "@convax/project"
 import { ProjectFilesController, type ProjectEntry, type ProjectFilePreviewPurpose } from "@convax/project-files"
@@ -29,7 +31,16 @@ import {
   WorkbenchLayoutParts,
 } from "@convax/workbench"
 import { CheckCircle2, FileOutput, Info, Layers3, MessageSquarePlus, TriangleAlert, Users, XCircle } from "lucide-react"
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore } from "react"
+import {
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+  useSyncExternalStore,
+  type ReactNode,
+} from "react"
 import { createRoot } from "react-dom/client"
 import { I18nextProvider } from "react-i18next"
 import { createAgentCanvasNodeResource } from "../agent-canvas-context"
@@ -39,6 +50,7 @@ import {
   type ActiveInstalledWebPluginSummary,
   type WebPluginManifest,
 } from "../plugin-contracts"
+import { pluginServiceTargetKey } from "../plugin-service-contracts"
 import { AgentPanel, type AgentPanelHandle } from "./agent-panel"
 import { AgentDrawerTrigger } from "./agent-drawer-header"
 import { AgentGenerationPreferenceProvider } from "./agent-generation-preference"
@@ -67,7 +79,8 @@ import {
   type AppearancePreferences,
 } from "./appearance-preferences"
 import { resolveCanvasAppearancePalette } from "./appearance-themes"
-import { ConvaxOnboarding } from "./convax-onboarding"
+import { ConvaxOnboarding, ConvaxOnboardingTaskCard } from "./convax-onboarding"
+import { readConvaxOnboardingProgress, type ConvaxOnboardingProgress } from "./convax-onboarding-model"
 import {
   shouldMountResizeHandle,
   startCapturedPointerDrag,
@@ -80,7 +93,7 @@ import {
   canvasCardGenerationReferenceConstraint,
 } from "./canvas-card-conversation-panel"
 import { createCanvasMediaSelectionDragSource } from "./canvas-media-drag-source"
-import { createWorkspaceCanvasHistoryShortcutHandler } from "./canvas-history-shortcuts"
+import { createCanvasShortcutFeatures } from "./canvas-shortcut-features"
 import { openDesktopCanvasRendererSession, type DesktopCanvasRendererSession } from "./canvas-collaboration-client"
 import { mountCanvasSessionWithBackgroundReconcile } from "./canvas-session-mount"
 import { createCanvasRendererRequestHandler } from "./canvas-renderer-request-handler"
@@ -111,6 +124,8 @@ import {
   type MediaOperationInput,
 } from "./media-operation-selection-action"
 import { MediaOperationDialog } from "./media-operation-dialog"
+import { isEditableShortcutTarget, ScopedShortcutService, type ShortcutChord } from "./scoped-shortcut-service"
+import { useShortcutFeature, useShortcutFeatures, useShortcutScope } from "./use-scoped-shortcuts"
 import { preloadMarketplaceProjection } from "./marketplace-projection-cache"
 import {
   canRunPluginMaterialization,
@@ -173,11 +188,74 @@ const primarySidebarCollapseThreshold = 180
 const secondarySidebarCollapseThreshold = 260
 const sidebarCollapseReopenDelayMs = 1_000
 
+const applicationShortcutScopeId = "desktop.application"
+const workspaceShortcutScopeId = "desktop.workspace"
+const canvasShortcutScopeId = "desktop.canvas"
+const canvasInteractionShortcutScopeId = "desktop.canvas.interaction"
+const canvasNodeInputShortcutScopeId = "desktop.canvas.node-input"
+const conversationShortcutScopeId = "desktop.conversation"
+
+function isCanvasIgnoredShortcutTarget(target: Element) {
+  return Boolean(target.closest("[data-canvas-shortcuts='ignore']"))
+}
+
+function primaryShortcutChord(key: string, shift = false): ShortcutChord {
+  return window.convax.platform === "darwin" ? { key, meta: true, shift } : { ctrl: true, key, shift }
+}
+
+function ShortcutScopeBoundary(props: {
+  readonly children: ReactNode
+  readonly id: string
+  readonly service: ScopedShortcutService
+}) {
+  const ref = useShortcutScope(props.service, { id: props.id })
+  return (
+    <div className="size-full min-h-0" ref={ref}>
+      {props.children}
+    </div>
+  )
+}
+
 function ensureWorkbenchPartVisible(controller: WorkbenchLayoutController, partId: string) {
   return controller.getSnapshot().parts[partId]?.visible === true || controller.setPartVisible(partId, true)
 }
 
 function App() {
+  const shortcutService = useMemo(() => new ScopedShortcutService({ document, window }), [])
+  const applicationShortcutScopeRef = useShortcutScope(shortcutService, {
+    id: applicationShortcutScopeId,
+    kind: "application",
+  })
+  const workspaceShortcutScopeRef = useShortcutScope(shortcutService, { id: workspaceShortcutScopeId })
+  const canvasShortcutScopeRef = useShortcutScope(shortcutService, { id: canvasShortcutScopeId })
+  const canvasInteractionShortcutScopeRef = useShortcutScope(shortcutService, {
+    id: canvasInteractionShortcutScopeId,
+    matchesTarget: isCanvasIgnoredShortcutTarget,
+    priority: 100,
+  })
+  const canvasNodeInputShortcutScopeRef = useShortcutScope(shortcutService, {
+    id: canvasNodeInputShortcutScopeId,
+    matchesTarget: isEditableShortcutTarget,
+    priority: 200,
+  })
+  const mountCanvasShortcutScopes = useCallback(
+    (element: HTMLElement | null) => {
+      canvasShortcutScopeRef(element)
+      canvasInteractionShortcutScopeRef(element)
+      canvasNodeInputShortcutScopeRef(element)
+    },
+    [canvasInteractionShortcutScopeRef, canvasNodeInputShortcutScopeRef, canvasShortcutScopeRef],
+  )
+  const conversationShortcutScopeRef = useShortcutScope(shortcutService, { id: conversationShortcutScopeId })
+  useLayoutEffect(() => {
+    const handle = shortcutService.registerScope({
+      element: document.body,
+      id: applicationShortcutScopeId,
+      kind: "application",
+    })
+    return () => handle.dispose()
+  }, [shortcutService])
+  useEffect(() => () => shortcutService.dispose(), [shortcutService])
   const developmentIdentity = useMemo(() => rendererDevelopmentIdentity(window.location.href), [])
   const [notification, setNotification] = useState<CanvasNotification | null>(null)
   const [viewportWidth, setViewportWidth] = useState(() => window.innerWidth)
@@ -186,6 +264,10 @@ function App() {
   )
   const [appearancePreferences, setAppearancePreferences] = useState(() => readAppearancePreferences(localStorage))
   const [appearanceSaveState, setAppearanceSaveState] = useState<"error" | "idle" | "saved">("idle")
+  const [convaxOnboardingProgress, setConvaxOnboardingProgress] = useState(() =>
+    readConvaxOnboardingProgress(localStorage),
+  )
+  const [convaxOnboardingOverlayOpen, setConvaxOnboardingOverlayOpen] = useState(false)
   const [desktopSurface, setDesktopSurface] = useState(createDesktopSurfaceState)
   const [commandPaletteOpen, setCommandPaletteOpen] = useState(false)
   const [projectTitlebarEntryHost, setProjectTitlebarEntryHost] = useState<HTMLDivElement | null>(null)
@@ -234,6 +316,13 @@ function App() {
   const agentTitlebarTriggerRef = useRef<HTMLButtonElement>(null)
   const utilityReturnFocusTargetRef = useRef<HTMLElement | null>(null)
   const workspaceShellRef = useRef<HTMLElement>(null)
+  const mountWorkspaceShell = useCallback(
+    (element: HTMLElement | null) => {
+      workspaceShellRef.current = element
+      workspaceShortcutScopeRef(element)
+    },
+    [workspaceShortcutScopeRef],
+  )
   const workbenchResizeSessionRef = useRef<CapturedPointerDragSession | null>(null)
   const canvasEditorScopeRef = useRef<{
     canvasId: string
@@ -248,6 +337,7 @@ function App() {
   const canvasNodeRegistry = useMemo(() => createDefaultCanvasNodeRegistry(), [])
   const canvasFileRendererRegistry = useMemo(() => createDefaultCanvasFileRendererRegistry(), [])
   const canvasViewRegistry = useMemo(() => createCanvasViewRegistry(), [])
+  const canvasTextDraftStore = useMemo(() => createCanvasTextDraftStore(), [])
   const pluginFrameRegistry = useMemo(() => new DesktopPluginFrameRegistry(), [])
   const [installedPlugins, setInstalledPlugins] = useState<readonly ActiveInstalledWebPluginSummary[]>([])
   const [admittedOperationToolIds, setAdmittedOperationToolIds] = useState<ReadonlySet<string>>(() => new Set())
@@ -274,7 +364,7 @@ function App() {
     () =>
       new ProjectController(window.convax.projects, {
         beforeActiveProjectChange: async () => {
-          const canLeave = await canvasEditorRef.current?.prepareToLeave()
+          const canLeave = await canvasEditorRef.current?.prepareToLeave({ waitForPendingDrafts: true })
           if (canLeave === false) return false
           await canvasEditorRef.current?.flush()
           return true
@@ -330,9 +420,8 @@ function App() {
       new WorkbenchController({
         beforeInputChange: async (currentInput) => {
           if (currentInput?.kind === "canvas") {
-            const canLeave = await canvasEditorRef.current?.prepareToLeave()
+            const canLeave = await canvasEditorRef.current?.prepareToLeave({ waitForPendingDrafts: false })
             if (canLeave === false) return false
-            await canvasEditorRef.current?.flush()
           }
           return true
         },
@@ -374,6 +463,11 @@ function App() {
   const effectivePrimaryDesktopSurface = projectBootstrapView.kind === "opening" ? primaryDesktopSurface : "home"
   const activeProject = projectSnapshot.projects.find((project) => project.id === projectSnapshot.activeProjectId)
   const activeProjectId = activeProject?.id
+  const showDeferredOnboardingTask = convaxOnboardingProgress.deferred && !convaxOnboardingProgress.completed
+  const handleConvaxOnboardingProgressChange = useCallback((progress: ConvaxOnboardingProgress) => {
+    setConvaxOnboardingProgress(progress)
+    if (progress.completed) setConvaxOnboardingOverlayOpen(false)
+  }, [])
   const projectResetCandidate = projectSnapshot.pendingRecoveryProjectId
     ? projectSnapshot.projects.find(
         (project) =>
@@ -409,24 +503,41 @@ function App() {
     serviceCatalogController.getSnapshot,
   )
   const agentModelCatalog = serviceCatalogAgentModelsForScope(serviceCatalogSnapshot, activeProjectId)
-  const generationPlugins = installedPlugins.flatMap((plugin) =>
-    plugin.contributes.generation
+  const generationPlugins = installedPlugins.flatMap((plugin) => [
+    ...(plugin.contributes.generation
       ? [
           {
             id: plugin.id,
             generation: plugin.contributes.generation,
             runtime: plugin.runtime,
+            serviceId: plugin.id,
             version: plugin.version,
           },
         ]
-      : [],
-  )
+      : []),
+    ...("services" in plugin.contributes
+      ? (plugin.contributes.services ?? []).flatMap((service) =>
+          service.generation
+            ? [
+                {
+                  id: plugin.id,
+                  generation: service.generation,
+                  runtime: plugin.runtime,
+                  serviceId: service.id,
+                  serviceRuntime: service.runtime,
+                  version: plugin.version,
+                },
+              ]
+            : [],
+        )
+      : []),
+  ])
   const generationToolCatalogVersion = JSON.stringify([
     modelCatalogEpoch,
     generationPlugins,
     serviceGenerationAvailabilityVersion(
       serviceCatalogSnapshot,
-      generationPlugins.map((plugin) => plugin.id),
+      generationPlugins.map((plugin) => ({ pluginId: plugin.id, serviceId: plugin.serviceId })),
     ),
   ])
   generationToolCatalogVersionRef.current = generationToolCatalogVersion
@@ -503,27 +614,32 @@ function App() {
       window.removeEventListener("storage", synchronizeStoredLanguage)
     }
   }, [])
-  useEffect(() => {
-    const openSettingsShortcut = (event: KeyboardEvent) => {
-      if ((!event.metaKey && !event.ctrlKey) || event.altKey || event.key !== ",") return
-      event.preventDefault()
+  useShortcutFeature(shortcutService, {
+    allowInEditable: true,
+    chords: [primaryShortcutChord(",")],
+    id: "application.open-settings",
+    kind: "command",
+    onTrigger: () => {
       workspaceEntryCoordinator.cancelPendingEntry()
       closeMediaOperationDialog()
       setDesktopSurface((current) => openDesktopSettings(current, "general"))
-    }
-    window.addEventListener("keydown", openSettingsShortcut)
-    return () => window.removeEventListener("keydown", openSettingsShortcut)
-  }, [closeMediaOperationDialog, workspaceEntryCoordinator])
-  useEffect(() => {
-    if (!settingsSection) return
-    const closeSettings = (event: KeyboardEvent) => {
-      if (event.key === "Escape") {
-        setDesktopSurface(closeDesktopSettings)
-      }
-    }
-    window.addEventListener("keydown", closeSettings)
-    return () => window.removeEventListener("keydown", closeSettings)
-  }, [settingsSection])
+    },
+    scopeId: applicationShortcutScopeId,
+  })
+  useShortcutFeature(
+    shortcutService,
+    settingsSection
+      ? {
+          allowInEditable: true,
+          chords: [{ key: "Escape" }],
+          id: "application.close-settings",
+          kind: "command",
+          onTrigger: () => setDesktopSurface(closeDesktopSettings),
+          priority: 100,
+          scopeId: applicationShortcutScopeId,
+        }
+      : null,
+  )
   useEffect(() => {
     if (!workbenchLayoutSnapshot.resize) {
       writeWorkbenchLayoutPreferences(localStorage, workbenchLayoutSnapshot)
@@ -706,41 +822,6 @@ function App() {
   )
     ? mediaOperationDialog
     : null
-  useEffect(() => {
-    if (
-      !activeCanvasSession ||
-      desktopSurface.kind !== "workspace" ||
-      settingsSection ||
-      activeMediaOperationDialog ||
-      sharingProjectId ||
-      workbenchSnapshot.changingInput ||
-      projectCanvasSnapshot.busy ||
-      projectSnapshot.changingActiveProject
-    ) {
-      return
-    }
-    const handleWorkspaceCanvasHistoryShortcut = createWorkspaceCanvasHistoryShortcutHandler({
-      onError(direction, error) {
-        console.warn(`Canvas ${direction} failed`, error)
-        setNotification({
-          kind: "error",
-          title: direction === "undo" ? "Could not undo Canvas change" : "Could not redo Canvas change",
-        })
-      },
-      session: activeCanvasSession,
-    })
-    window.addEventListener("keydown", handleWorkspaceCanvasHistoryShortcut)
-    return () => window.removeEventListener("keydown", handleWorkspaceCanvasHistoryShortcut)
-  }, [
-    activeCanvasSession,
-    activeMediaOperationDialog,
-    desktopSurface.kind,
-    projectCanvasSnapshot.busy,
-    projectSnapshot.changingActiveProject,
-    settingsSection,
-    sharingProjectId,
-    workbenchSnapshot.changingInput,
-  ])
   const activeProjectIdRef = useRef<string | null>(activeProjectId ?? null)
   activeProjectIdRef.current = activeProjectId ?? null
   useEffect(
@@ -989,7 +1070,7 @@ function App() {
           id: tool.id,
           ...(tool.modelName ? { modelName: tool.modelName } : {}),
           output: tool.output,
-          serviceId: tool.pluginId,
+          serviceId: pluginServiceTargetKey({ pluginId: tool.pluginId, serviceId: tool.serviceId }),
           serviceName: tool.pluginName,
           title: tool.title,
         }))
@@ -1017,7 +1098,7 @@ function App() {
           id: tool.id,
           ...(tool.modelName ? { modelName: tool.modelName } : {}),
           output: tool.output,
-          serviceId: tool.pluginId,
+          serviceId: pluginServiceTargetKey({ pluginId: tool.pluginId, serviceId: tool.serviceId }),
           serviceName: tool.pluginName,
           title: tool.title,
         }))
@@ -1072,14 +1153,7 @@ function App() {
         flush: flushAuthoritativeCanvas,
         projectFiles: window.convax.projectFiles,
       }),
-      draftDecision: {
-        decide({ count }) {
-          if (window.confirm(`Save ${count === 1 ? "the text draft" : `${count} text drafts`} before leaving?`)) {
-            return "save"
-          }
-          return window.confirm("Discard the pending text draft changes?") ? "discard" : "cancel"
-        },
-      },
+      textDrafts: canvasTextDraftStore,
       assistant: {
         render(request) {
           const host = assistantHostRef.current
@@ -1092,22 +1166,27 @@ function App() {
             return node ? [createAgentCanvasNodeResource(request.document.id, node.id, node.data.label)] : []
           })
           const agent = (
-            <AgentPanel
-              activeCanvas={host.activeCanvas}
-              beforePrompt={host.beforePrompt}
-              canvases={host.canvases}
-              className="!h-full !min-h-0 rounded-none border-0"
-              contextResources={contextResources}
-              conversationKey={JSON.stringify([request.document.id, request.ownerNodeId])}
-              embedded
-              embeddedHeader={request.mode !== "file"}
-              generationCatalogVersion={host.generationCatalogVersion}
-              initialResources={initialResources}
-              onOpenServices={host.onOpenServices}
-              onOpenSkillDetails={host.onOpenSkillDetails}
-              projectId={host.activeProject?.id}
-              projectName={host.activeProject?.name}
-            />
+            <ShortcutScopeBoundary
+              id={`${conversationShortcutScopeId}:${request.document.id}:${request.ownerNodeId}`}
+              service={shortcutService}
+            >
+              <AgentPanel
+                activeCanvas={host.activeCanvas}
+                beforePrompt={host.beforePrompt}
+                canvases={host.canvases}
+                className="!h-full !min-h-0 rounded-none border-0"
+                contextResources={contextResources}
+                conversationKey={JSON.stringify([request.document.id, request.ownerNodeId])}
+                embedded
+                embeddedHeader={request.mode !== "file"}
+                generationCatalogVersion={host.generationCatalogVersion}
+                initialResources={initialResources}
+                onOpenServices={host.onOpenServices}
+                onOpenSkillDetails={host.onOpenSkillDetails}
+                projectId={host.activeProject?.id}
+                projectName={host.activeProject?.name}
+              />
+            </ShortcutScopeBoundary>
           )
           return request.mode === "file" ? (
             <CanvasCardConversationPanel
@@ -1227,15 +1306,32 @@ function App() {
           console.info("[convax]", event.name, event.properties ?? {})
         },
       },
-      textResources: window.convax.canvas.textResources,
+      textResources: {
+        save(input, signal) {
+          if (!activeProjectId || !activeCanvasId || !activeCanvasSession) {
+            throw new Error("Open a mounted Project Canvas before saving text")
+          }
+          return window.convax.canvas.textResources.save(
+            {
+              ...input,
+              canvasId: activeCanvasId,
+              projectId: activeProjectId,
+              sessionId: activeCanvasSession.sessionId,
+            },
+            signal,
+          )
+        },
+      },
     })
   }, [
     activeCanvasId,
     activeCanvasSession,
     activeProjectId,
+    canvasTextDraftStore,
     flushAuthoritativeCanvas,
     generationModelCatalogController,
     generationToolCatalogVersion,
+    shortcutService,
   ])
 
   const runMediaOperation = useCallback(
@@ -1450,6 +1546,117 @@ function App() {
       scopeId: activeProjectId,
     })
   }, [activeCanvasId, activeProjectId, flushCanvasForAgent, locale])
+
+  const canvasShortcutsEnabled = Boolean(
+    activeCanvasSession &&
+      desktopSurface.kind === "workspace" &&
+      !settingsSection &&
+      !activeMediaOperationDialog &&
+      !sharingProjectId &&
+      !workbenchSnapshot.changingInput &&
+      !projectCanvasSnapshot.busy &&
+      !projectSnapshot.changingActiveProject,
+  )
+  const reportCanvasHistoryFailure = useCallback((direction: "redo" | "undo", error: unknown) => {
+    console.warn(`Canvas ${direction} failed`, error)
+    setNotification({
+      kind: "error",
+      title: direction === "undo" ? "Could not undo Canvas change" : "Could not redo Canvas change",
+    })
+  }, [])
+  const runCanvasHistory = useCallback(
+    (direction: "redo" | "undo") => {
+      if (!activeCanvasSession) return
+      void activeCanvasSession[direction]().catch((error) => reportCanvasHistoryFailure(direction, error))
+    },
+    [activeCanvasSession, reportCanvasHistoryFailure],
+  )
+  useShortcutFeature(
+    shortcutService,
+    canvasShortcutsEnabled
+      ? {
+          chords: [primaryShortcutChord("z")],
+          id: "workspace.canvas.undo",
+          kind: "command",
+          onTrigger: () => runCanvasHistory("undo"),
+          scopeId: workspaceShortcutScopeId,
+        }
+      : null,
+  )
+  useShortcutFeature(
+    shortcutService,
+    canvasShortcutsEnabled
+      ? {
+          chords: [primaryShortcutChord("z", true), { ctrl: true, key: "y" }],
+          id: "workspace.canvas.redo",
+          kind: "command",
+          onTrigger: () => runCanvasHistory("redo"),
+          scopeId: workspaceShortcutScopeId,
+        }
+      : null,
+  )
+  useShortcutFeature(
+    shortcutService,
+    canvasShortcutsEnabled
+      ? {
+          chords: [primaryShortcutChord("z")],
+          id: "canvas.undo",
+          kind: "command",
+          onTrigger: () => runCanvasHistory("undo"),
+          scopeId: canvasShortcutScopeId,
+        }
+      : null,
+  )
+  useShortcutFeature(
+    shortcutService,
+    canvasShortcutsEnabled
+      ? {
+          chords: [primaryShortcutChord("z", true), { ctrl: true, key: "y" }],
+          id: "canvas.redo",
+          kind: "command",
+          onTrigger: () => runCanvasHistory("redo"),
+          scopeId: canvasShortcutScopeId,
+        }
+      : null,
+  )
+  const runCanvasShortcut = (command: CanvasShortcutCommand) => {
+    canvasEditorRef.current?.runShortcut(command)
+  }
+  useShortcutFeatures(
+    shortcutService,
+    canvasShortcutsEnabled
+      ? createCanvasShortcutFeatures({
+          canRun: (command) => canvasEditorRef.current?.canRunShortcut(command) === true,
+          platform: window.convax.platform,
+          run: runCanvasShortcut,
+          scopeId: canvasShortcutScopeId,
+          setSpacePanningHeld: (held) => canvasEditorRef.current?.setSpacePanningShortcutHeld(held),
+        })
+      : [],
+  )
+  useShortcutFeature(
+    shortcutService,
+    canvasShortcutsEnabled && selectionDragSource
+      ? {
+          chords:
+            window.convax.platform === "darwin"
+              ? [
+                  { key: "Meta", meta: true, shift: true },
+                  { key: "Shift", meta: true, shift: true },
+                ]
+              : [
+                  { ctrl: true, key: "Control", shift: true },
+                  { ctrl: true, key: "Shift", shift: true },
+                ],
+          id: "canvas.drag-media-to-other-apps",
+          kind: "gesture-modifier",
+          onActivate: () => canvasEditorRef.current?.setExternalDragShortcutHeld(true),
+          onRelease: () => canvasEditorRef.current?.setExternalDragShortcutHeld(false),
+          releaseOnAnyOtherKey: true,
+          scopeId: canvasShortcutScopeId,
+        }
+      : null,
+  )
 
   useEffect(() => {
     if (!notification) return
@@ -1952,7 +2159,18 @@ function App() {
       filesController={projectFilesController}
       filesLabel={locale === "zh-CN" ? "项目文件" : "Project files"}
       footerActions={
-        <ApplicationMenu locale={locale} onOpenSettings={openSettings} services={serviceCatalogSnapshot} />
+        <div className="grid min-w-0 gap-2">
+          {showDeferredOnboardingTask ? (
+            <ConvaxOnboardingTaskCard
+              activeProject
+              locale={locale}
+              onResume={() => setConvaxOnboardingOverlayOpen(true)}
+              progress={convaxOnboardingProgress}
+              serviceSnapshot={serviceCatalogSnapshot}
+            />
+          ) : null}
+          <ApplicationMenu locale={locale} onOpenSettings={openSettings} services={serviceCatalogSnapshot} />
+        </div>
       }
       headerActions={
         <button
@@ -2035,15 +2253,14 @@ function App() {
     ],
     [activeCanvasId, activeProjectId, locale, openAgentDrawer, openCanvasGenerate, openWorkspaceSettings],
   )
-  useEffect(() => {
-    const openCommands = (event: KeyboardEvent) => {
-      if (!(event.metaKey || event.ctrlKey) || event.altKey || event.key.toLocaleLowerCase() !== "k") return
-      event.preventDefault()
-      setCommandPaletteOpen(true)
-    }
-    window.addEventListener("keydown", openCommands)
-    return () => window.removeEventListener("keydown", openCommands)
-  }, [])
+  useShortcutFeature(shortcutService, {
+    allowInEditable: true,
+    chords: [primaryShortcutChord("k")],
+    id: "application.command-palette",
+    kind: "command",
+    onTrigger: () => setCommandPaletteOpen(true),
+    scopeId: applicationShortcutScopeId,
+  })
 
   return (
     <AgentGenerationPreferenceProvider storage={localStorage}>
@@ -2052,7 +2269,7 @@ function App() {
         llm={agentModelCatalog}
         refreshLlmModels={serviceCatalogController.refreshAgentModels}
       >
-        <div className="relative flex size-full flex-col overflow-hidden">
+        <div className="relative flex size-full flex-col overflow-hidden" ref={applicationShortcutScopeRef}>
           <ApplicationTitlebar
             centerAction={
               effectivePrimaryDesktopSurface === "workspace" && activeCanvas ? (
@@ -2147,14 +2364,15 @@ function App() {
                   <ConvaxOnboarding
                     locale={locale}
                     onEnterProject={enterHomeProject}
+                    onProgressChange={handleConvaxOnboardingProgressChange}
                     onProjectSelectionStart={() => {
                       startupAutoRestoreEnabledRef.current = false
                       setStartupEntryFailure(null)
                       setStartupRecoveryError(null)
                     }}
                     onRefreshServices={() => serviceCatalogController.refresh()}
-                    onServiceAction={(pluginId, action) => serviceCatalogController.perform(pluginId, action)}
-                    onServiceCheckout={(pluginId, planKey) => serviceCatalogController.checkout(pluginId, planKey)}
+                    onServiceAction={(target, action) => serviceCatalogController.perform(target, action)}
+                    onServiceCheckout={(target, planKey) => serviceCatalogController.checkout(target, planKey)}
                     projectController={projectController}
                     reducedMotion={appearancePreferences.reducedMotion}
                     serviceSnapshot={serviceCatalogSnapshot}
@@ -2179,10 +2397,12 @@ function App() {
               </div>
             ) : (
               <WorkspaceShell
-                blocked={Boolean(settingsSection || activeMediaOperationDialog || sharingProjectId)}
+                blocked={Boolean(
+                  settingsSection || activeMediaOperationDialog || sharingProjectId || convaxOnboardingOverlayOpen,
+                )}
                 resizing={Boolean(workbenchLayoutSnapshot.resize)}
                 utilityMode={workspaceUtilityDrawer.mode}
-                workspaceRef={workspaceShellRef}
+                workspaceRef={mountWorkspaceShell}
               >
                 {activeProject ? (
                   <ProjectSidebarShell
@@ -2213,7 +2433,7 @@ function App() {
                     {projectSidebar}
                   </ProjectSidebarShell>
                 ) : null}
-                <section className="workspace-canvas-region relative min-w-0 flex-1">
+                <section className="workspace-canvas-region relative min-w-0 flex-1" ref={mountCanvasShortcutScopes}>
                   {workbenchSnapshot.surface.kind === "empty" && workbenchSnapshot.surface.reason === "no-project" ? (
                     <ProjectRegistryLoadingState locale={locale} reducedMotion={appearancePreferences.reducedMotion} />
                   ) : workbenchSnapshot.surface.kind === "file" ? (
@@ -2304,65 +2524,67 @@ function App() {
                 </section>
                 <WorkspaceUtilityDrawer
                   agent={({ modeNavigation }) => (
-                    <RendererErrorBoundary
-                      name="Agent panel"
-                      renderFallback={({ retry }) => (
-                        <div className="flex size-full min-h-0 flex-col">
-                          <header className="flex h-10 shrink-0 items-center gap-2 border-b border-border-subtle px-2.5">
-                            {modeNavigation}
-                          </header>
-                          <div className="grid min-h-0 flex-1 place-items-center p-4 text-center" role="alert">
-                            <div>
-                              <h2 className="text-sm font-semibold">{rendererFailureCopy.agentTitle}</h2>
-                              <p className="mt-2 text-xs leading-5 text-text-tertiary">
-                                {rendererFailureCopy.agentDescription}
-                              </p>
-                              <button
-                                className="mt-4 rounded-md bg-brand px-3 py-2 text-xs font-medium text-on-brand outline-none focus-visible:ring-2 focus-visible:ring-focus-ring/50"
-                                onClick={retry}
-                                type="button"
-                              >
-                                {rendererFailureCopy.retry}
-                              </button>
+                    <div className="size-full min-h-0" ref={conversationShortcutScopeRef}>
+                      <RendererErrorBoundary
+                        name="Agent panel"
+                        renderFallback={({ retry }) => (
+                          <div className="flex size-full min-h-0 flex-col">
+                            <header className="flex h-10 shrink-0 items-center gap-2 border-b border-border-subtle px-2.5">
+                              {modeNavigation}
+                            </header>
+                            <div className="grid min-h-0 flex-1 place-items-center p-4 text-center" role="alert">
+                              <div>
+                                <h2 className="text-sm font-semibold">{rendererFailureCopy.agentTitle}</h2>
+                                <p className="mt-2 text-xs leading-5 text-text-tertiary">
+                                  {rendererFailureCopy.agentDescription}
+                                </p>
+                                <button
+                                  className="mt-4 rounded-md bg-brand px-3 py-2 text-xs font-medium text-on-brand outline-none focus-visible:ring-2 focus-visible:ring-focus-ring/50"
+                                  onClick={retry}
+                                  type="button"
+                                >
+                                  {rendererFailureCopy.retry}
+                                </button>
+                              </div>
                             </div>
                           </div>
-                        </div>
-                      )}
-                      resetKey={rendererScopeKey}
-                    >
-                      <AgentPanel
-                        activeCanvas={activeCanvas}
-                        beforePrompt={flushCanvasForAgent}
-                        canvases={projectCanvasSnapshot.canvases}
-                        collapsedEntry={false}
-                        generationCatalogVersion={generationToolCatalogVersionRef.current}
-                        hosted
-                        layout={{
-                          collapsedWidth: 0,
-                          maxWidth: secondarySidebarAvailableSize,
-                          maxWidthStyle: secondarySidebarMaxWidthStyle,
-                          minWidth: secondarySidebarBounds.minSize,
-                          onOpenChange: (open) => {
-                            if (open) openAgentDrawer()
-                            else closeWorkspaceUtility()
-                          },
-                          onResizeKeyDown: () => undefined,
-                          onResizeStart: () => undefined,
-                          open: secondarySidebar.visible,
-                          resizable: false,
-                          resizing: resizingSecondarySidebar,
-                          width: agentPanelWidth,
-                        }}
-                        onOpenServices={openServices}
-                        onOpenSkillDetails={openSkillDetails}
-                        onSessionDisplayed={reportDisplayedPetSession}
-                        onStatusChange={setAgentCompactStatus}
-                        projectId={activeProjectId}
-                        projectName={activeProject?.name}
-                        ref={mountAgentPanel}
-                        utilityNavigation={modeNavigation ?? undefined}
-                      />
-                    </RendererErrorBoundary>
+                        )}
+                        resetKey={rendererScopeKey}
+                      >
+                        <AgentPanel
+                          activeCanvas={activeCanvas}
+                          beforePrompt={flushCanvasForAgent}
+                          canvases={projectCanvasSnapshot.canvases}
+                          collapsedEntry={false}
+                          generationCatalogVersion={generationToolCatalogVersionRef.current}
+                          hosted
+                          layout={{
+                            collapsedWidth: 0,
+                            maxWidth: secondarySidebarAvailableSize,
+                            maxWidthStyle: secondarySidebarMaxWidthStyle,
+                            minWidth: secondarySidebarBounds.minSize,
+                            onOpenChange: (open) => {
+                              if (open) openAgentDrawer()
+                              else closeWorkspaceUtility()
+                            },
+                            onResizeKeyDown: () => undefined,
+                            onResizeStart: () => undefined,
+                            open: secondarySidebar.visible,
+                            resizable: false,
+                            resizing: resizingSecondarySidebar,
+                            width: agentPanelWidth,
+                          }}
+                          onOpenServices={openServices}
+                          onOpenSkillDetails={openSkillDetails}
+                          onSessionDisplayed={reportDisplayedPetSession}
+                          onStatusChange={setAgentCompactStatus}
+                          projectId={activeProjectId}
+                          projectName={activeProject?.name}
+                          ref={mountAgentPanel}
+                          utilityNavigation={modeNavigation ?? undefined}
+                        />
+                      </RendererErrorBoundary>
+                    </div>
                   )}
                   className={`${agentPanelClassName ?? ""} ${
                     resizingSecondarySidebar
@@ -2400,6 +2622,29 @@ function App() {
                 {notification ? <Toast notification={notification} /> : null}
               </WorkspaceShell>
             )}
+            {convaxOnboardingOverlayOpen && showDeferredOnboardingTask && !settingsSection ? (
+              <div className="absolute inset-0 z-[80]" data-convax-onboarding-overlay="true">
+                <ConvaxOnboarding
+                  forceOpen
+                  locale={locale}
+                  onDismiss={() => setConvaxOnboardingOverlayOpen(false)}
+                  onEnterProject={enterHomeProject}
+                  onProgressChange={handleConvaxOnboardingProgressChange}
+                  onProjectSelectionStart={() => {
+                    startupAutoRestoreEnabledRef.current = false
+                    setStartupEntryFailure(null)
+                    setStartupRecoveryError(null)
+                  }}
+                  onRefreshServices={() => serviceCatalogController.refresh()}
+                  onServiceAction={(target, action) => serviceCatalogController.perform(target, action)}
+                  onServiceCheckout={(target, planKey) => serviceCatalogController.checkout(target, planKey)}
+                  projectController={projectController}
+                  reducedMotion={appearancePreferences.reducedMotion}
+                  serviceSnapshot={serviceCatalogSnapshot}
+                  storage={localStorage}
+                />
+              </div>
+            ) : null}
             {activeMediaOperationDialog && !settingsSection ? (
               <MediaOperationDialog
                 key={`${activeMediaOperationDialog.context.document.id}:${activeMediaOperationDialog.action.pluginId}:${activeMediaOperationDialog.action.id}`}
@@ -2455,8 +2700,8 @@ function App() {
                 onClose={() => setDesktopSurface(closeDesktopSettings)}
                 onLanguageChange={changeLanguage}
                 onRefreshServices={() => void serviceCatalogController.refresh()}
-                onServiceAction={(pluginId, action) => void serviceCatalogController.perform(pluginId, action)}
-                onServiceCheckout={(pluginId, planKey) => void serviceCatalogController.checkout(pluginId, planKey)}
+                onServiceAction={(target, action) => void serviceCatalogController.perform(target, action)}
+                onServiceCheckout={(target, planKey) => void serviceCatalogController.checkout(target, planKey)}
                 onUsePluginOnCanvas={usePluginOnCanvas}
                 onUsePluginInAgent={usePluginInAgent}
                 petClient={window.convax.pets}

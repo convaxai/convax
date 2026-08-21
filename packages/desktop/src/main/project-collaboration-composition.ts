@@ -180,6 +180,10 @@ export function createMainProjectCollaborationComposition(input: Readonly<{
     async prepareProject(projectIdInput: string) {
       const projectId = parseProjectId(projectIdInput)
       const runtime = await runtimeFor(projectId)
+      // ProjectIndex runtimes may be opened for background recovery before the
+      // renderer selects a Project. Reassert the selected Canvas route even when
+      // this Project runtime came from that cache.
+      await input.canvasRoutes.switchProject(projectId)
       runtime.canvasSessions.resumeProject(projectId)
     },
     quiesceProject,

@@ -16,6 +16,7 @@ export interface DesktopMarketplaceCapabilityInstallerOptions {
       previousVersion?: string
       recoverExistingSkillOnly?: boolean
       replaceExistingSkill?: boolean
+      startup?: boolean
     },
     item: LocalMarketplacePackage,
   ): Promise<void>
@@ -31,7 +32,9 @@ export interface DesktopMarketplaceCapabilityInstallerOptions {
   disablePlugin(id: string): Promise<void>
   enablePlugin(id: string): Promise<void>
   hardRefreshPlugin(id: string): Promise<void>
+  publishPluginChange(): void
   refreshPetProvider(id: string): Promise<void>
+  scheduleStartupRefresh(identities: readonly { id: string; kind: "plugin" | "skill" }[]): void
   remote: Pick<MarketplaceArtifactInstaller, "installVerifiedMarketplaceCandidate">
   resolvePackage(item: SourceQualifiedItem): Promise<RegistryPackage>
   uninstallPlugin(id: string): Promise<void>
@@ -65,8 +68,10 @@ export class DesktopMarketplaceCapabilityInstaller implements MarketplaceCapabil
     options: {
       authorizeExecution: boolean
       previousVersion?: string
+      productDefaultAuthorization?: boolean
       recoverExistingSkillOnly?: boolean
       replaceExistingSkill?: boolean
+      startup?: boolean
     },
   ) {
     const registryItem = await this.#options.resolvePackage(item)
@@ -80,6 +85,8 @@ export class DesktopMarketplaceCapabilityInstaller implements MarketplaceCapabil
       {
         deferExecutionAuthorization: !options.authorizeExecution,
         ...(options.previousVersion ? { expectedInstalledVersion: options.previousVersion } : {}),
+        ...(options.startup ? { startup: true } : {}),
+        ...(options.productDefaultAuthorization ? { productDefaultAuthorization: true } : {}),
         ...(options.replaceExistingSkill ? { replaceExistingSkill: true } : {}),
         ...(options.recoverExistingSkillOnly ? { recoverExistingSkillOnly: true } : {}),
       },
@@ -93,7 +100,7 @@ export class DesktopMarketplaceCapabilityInstaller implements MarketplaceCapabil
   async installBuiltin(
     item: SourceQualifiedItem,
     bytes: Uint8Array,
-    options: { recoverExistingSkillOnly?: boolean; replaceExistingSkill?: boolean } = {},
+    options: { recoverExistingSkillOnly?: boolean; replaceExistingSkill?: boolean; startup?: boolean } = {},
   ) {
     if (item.kind !== "skill" || item.delivery.kind !== "builtin-artifact") {
       throw new Error("The first Builtin Marketplace bundle admits standalone Skills only")
@@ -117,6 +124,7 @@ export class DesktopMarketplaceCapabilityInstaller implements MarketplaceCapabil
         },
       },
       {
+        ...(options.startup ? { startup: true } : {}),
         ...(options.replaceExistingSkill ? { replaceExistingSkill: true } : {}),
         ...(options.recoverExistingSkillOnly ? { recoverExistingSkillOnly: true } : {}),
       },
@@ -253,7 +261,16 @@ export class DesktopMarketplaceCapabilityInstaller implements MarketplaceCapabil
     if (identity.kind === "plugin") {
       await this.#options.hardRefreshPlugin(identity.id)
       await this.#options.refreshPetProvider(identity.id)
+      this.#options.publishPluginChange()
     }
+  }
+
+  scheduleStartupRefresh(identities: readonly { id: string; kind: "mcp-server" | "plugin" | "skill" }[]) {
+    this.#options.scheduleStartupRefresh(
+      identities.flatMap((identity) =>
+        identity.kind === "mcp-server" ? [] : [{ id: identity.id, kind: identity.kind }],
+      ),
+    )
   }
 
   verifyAuthorization(record: InstallRecord, authorizationContractDigest: string) {

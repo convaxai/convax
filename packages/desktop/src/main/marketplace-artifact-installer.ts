@@ -22,7 +22,7 @@ export interface MarketplaceArtifactInstallerOptions {
   beforePluginPublish?(input: { pluginId: string; sourceIdentity: string }): Promise<void> | void
   deferExecutionAuthorization?: boolean
   platform?: NodeJS.Platform
-  skillManager: Pick<DesktopSkillManager, "installFromFiles">
+  skillManager: Pick<DesktopSkillManager, "installFromFiles" | "installFromFilesAtStartup">
   snapshotInstaller: Pick<PluginSnapshotInstaller, "install">
 }
 
@@ -69,6 +69,8 @@ export class MarketplaceArtifactInstaller {
     options: {
       deferExecutionAuthorization?: boolean
       expectedInstalledVersion?: string
+      startup?: boolean
+      productDefaultAuthorization?: boolean
       recoverExistingSkillOnly?: boolean
       replaceExistingSkill?: boolean
     } = {},
@@ -85,6 +87,12 @@ export class MarketplaceArtifactInstaller {
     const files = unpackSafeZip(candidate.artifactBytes)
     if (item.kind === "skill") {
       if (item.ownerPluginId) throw new Error(`Skill is provided by Plugin ${item.ownerPluginId}`)
+      if (options.startup) {
+        if (options.replaceExistingSkill || options.recoverExistingSkillOnly) {
+          throw new Error("Cold-start Skill provisioning cannot replace an existing installation")
+        }
+        return this.#skillManager.installFromFilesAtStartup(files, item.id)
+      }
       return this.#skillManager.installFromFiles(
         files,
         undefined,
@@ -101,6 +109,13 @@ export class MarketplaceArtifactInstaller {
       throw new Error("Verified Marketplace Plugin metadata does not match its manifest")
     }
     decodePluginManifest(manifest, files)
+    const deferExecutionAuthorization = options.deferExecutionAuthorization ?? this.#deferExecutionAuthorization
+    if (options.productDefaultAuthorization && deferExecutionAuthorization) {
+      throw new Error("Product-default Plugin installation must publish exact execution authorization")
+    }
+    if (options.productDefaultAuthorization && manifest.hooks !== undefined) {
+      throw new Error("Product-default Plugin installation cannot authorize executable Hook modules")
+    }
     const companionArtifacts = (item.companions ?? []).map((companion) => {
       const target = companion.targets.find(
         (candidate) => candidate.platform === this.#platform && candidate.arch === this.#arch,
@@ -123,7 +138,7 @@ export class MarketplaceArtifactInstaller {
       files,
       companionArtifacts,
       candidate.sourceIdentity,
-      options.deferExecutionAuthorization,
+      deferExecutionAuthorization,
       options.expectedInstalledVersion,
     )
   }

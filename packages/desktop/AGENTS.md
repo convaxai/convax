@@ -43,6 +43,10 @@ contract and its routed references.
 
 ## Process boundaries
 
+- Main creates and shows the inert local startup window before restoring product
+  runtimes. The startup document has no trusted-sender authority; the same window
+  loads the trusted Renderer only after required Main bridges are ready, and startup
+  failure replaces the loading surface instead of leaving it indefinite.
 - Main owns Electron/native I/O, Project Node adapters, authoritative repositories,
   ActiveSet and installed capability authority, Agent runtime composition, trusted
   IPC, and the signed packaged-application update lifecycle.
@@ -60,9 +64,10 @@ contract and its routed references.
   depend on `node_modules`, and Main stays CommonJS so Electron Vite cannot inject
   its ESM compatibility shim into dependency-bundled source strings.
 - Main also composes the PeerJS data plane, its independently bound channels,
-  OS-vault identity keys, Project-scoped writer coordination, and typed ports to
-  collaboration, Project, Canvas, and control-plane owners. Peer or service arrival
-  order never becomes edit order.
+  user-managed private identity-key files, Project-scoped writer coordination, and
+  typed ports to collaboration, Project, Canvas, and control-plane owners. It never
+  calls a system credential vault. Peer or service arrival order never becomes edit
+  order.
 - Development runtime identity is Main-owned composition state. A bounded task id
   and label require a task-private userData profile; Main owns native/window
   branding and may project only the display identity to Renderer. Packaged runtime
@@ -75,6 +80,10 @@ contract and its routed references.
 
 ## Shared composition rules
 
+- Development Marketplace materialization may use only fixed bounded concurrency
+  for distinct locked artifacts. Preserve exact URL/size/digest verification,
+  single-link cache files, fsync and atomic staging, fail closed without a stale
+  product fallback, and expose only aggregate count/byte progress.
 - Keep Project lifecycle, Project Files, Project Canvas, Canvas, generation, Agent,
   Plugin, Plugin capability, and Plugin service bridge namespaces distinct. Do not
   add general file methods to `window.convax.projects` or a generic invoke bridge.
@@ -84,8 +93,10 @@ contract and its routed references.
 - First-run account onboarding is an empty-registry Renderer composition. Resolve
   its account surface only from generic installed Service actions, reuse the
   system-browser authorization and Checkout operations, and persist only bounded
-  presentation progress. Live Service status owns account, Plan, Credits and
-  entitlement display; an existing local Project always bypasses the flow.
+  presentation progress, including whether the incomplete flow was deferred. A
+  deferred flow becomes a non-blocking bottom-left task and resumes only by explicit
+  user action. Live Service status owns account, Plan, Credits and entitlement
+  display; an existing local Project always bypasses automatic presentation.
 - Derive the active Canvas/file from Workbench Surface only. Project Canvas owns
   catalog CRUD; Desktop coordinators may own save guards, fallback, rollback, and
   preference flows, but not a second active selection.
@@ -94,6 +105,32 @@ contract and its routed references.
   Preload never receive or choose the default native creation path.
 - Workbench owns generic resize/collapse transactions. Desktop owns concrete pixels,
   viewport constraints, pointer/keyboard wiring, animation, and browser persistence.
+- Desktop Renderer owns one explicitly composed scoped shortcut service for window
+  keyboard routing. Registrations are the closed discriminated union
+  `CommandShortcut | HoldShortcut | GestureModifier`: commands consume one winning
+  keydown, holds consume and own active/release state, and gesture modifiers never
+  consume native key handling because a later pointer gesture observes their
+  transient state. The React binding must synchronously commit hold and gesture
+  activation before the activating `keydown` returns, so a pointer event from the
+  same physical gesture cannot observe the previous presentation state; release
+  remains safe across scope and component teardown. Focus scopes register DOM roots and feature/chord bindings;
+  the deepest focus scope wins, application features alone may fall back, and one
+  deterministic priority/registration-order winner handles a conflict within a
+  scope. Scope changes, top-level Window blur, visibility loss, and disposal release
+  all held features; descendant DOM blur inside the active scope must not impersonate
+  Window focus loss. A transient pointer-created `activeElement === body` gap is
+  rechecked on the next frame; explicit registered-scope transitions stay immediate,
+  and a sustained outside-root focus releases the held feature. A fresh non-repeat matching keydown releases and replaces a stale held
+  feature when a native operating-system loop swallowed keyup; repeat events never
+  restart it. Do not add parallel global listeners for application/workspace/Canvas
+  command routing or move DOM focus into Workbench. Register the complete product
+  Canvas chord inventory in Renderer and invoke only Canvas's typed shortcut-command
+  or held-state ports. Prioritized target-matched scopes isolate node inputs and
+  Canvas interaction surfaces. Gesture/hold state is never persisted to Canvas,
+  Workbench, browser storage, or native tickets. Register `document.body` only as an
+  additional application Portal root; direct body/document-element focus remains
+  ambiguous and never preserves Canvas scope. Native copy/paste stays on browser
+  clipboard events.
 - Main's Canvas application service is authoritative. Mounted UI submits closed
   commands through its originating session lease, installs the returned projection
   and accepted frame marker, and queries only for unknown/remote invalidation; it never saves a complete snapshot,
@@ -147,6 +184,12 @@ contract and its routed references.
   Main-owned adapter over Project Files compare-and-replace, ProjectIndex version
   publication, and the Canvas resource relink operation. Filesystem notifications
   remain refresh hints and never substitute for that transaction path.
+- Renderer composes Canvas's transient editable-text write-behind store across
+  Canvas mounts. A Canvas-to-Canvas Workbench change starts or joins background save
+  and never prompts or waits; Project teardown drains the store. Each background
+  request carries the originating mounted Canvas session lease, Main validates that
+  exact lease at admission, and only the active Project must remain stable through
+  relink so a later active Canvas cannot retarget or cancel the admitted save.
 - Card conversations infer only direct incoming file nodes. Image/video replacement
   cards may persist one opaque output-tool override. Text cards isolate model and
   options by output for the mounted composer and create a separate pending media
@@ -165,7 +208,20 @@ contract and its routed references.
   through the global ActiveSet CAS. Plugin-owned Skills and Hooks resolve from the
   leased closure; never copy them into standalone namespaces or recreate legacy
   ownership/authorization journals.
-- Bind `convax.plugin/8` contributions and `hostApi` declarations independently.
+- Bind `convax.plugin/8` or `convax.plugin/9` contributions and `hostApi`
+  declarations independently. V8 remains the closed singleton-Service contract and
+  keeps its Plugin-level routing identity. For v9, route each Service by the exact
+  `{pluginId, serviceId}` from the installed manifest, append only its validated
+  static args to the shared base runtime args, and key process lifecycle,
+  authorization, recovery, status, usage, model projection, and cancellation by
+  that profile. One verified companion artifact may back every profile, but each
+  profile owns a separate process and private runtime state. A Service does not
+  imply generation or LLM; both are independently optional. Bind nested persistent
+  state to a private per-install Plugin incarnation that survives unrelated
+  ActiveSet changes, is published atomically in the current ActiveSet reference,
+  rotates on every explicit install/update publication, and lets an owner-pinned
+  LRO retain only its old profile binding until final release. Preserve legacy
+  ActiveSet `/1` bytes for v8 reads; only an explicit later CAS writes `/2`.
   Plugin-to-Plugin imports/exports resolve through the typed Host broker and exact
   leased caller/provider snapshots, never direct calls or a service locator.
 - Renderer owns the application-language preference. Mirror only its validated
@@ -195,6 +251,26 @@ contract and its routed references.
   Strictly reject malformed, oversized, unknown-field, or Main-authority-shaped
   cache data; never accept it as Marketplace, installation, grant, or ActiveSet
   authority.
+- Derive Plugin Marketplace categories only from the exact validated manifest:
+  `service` from the v8 singleton or non-empty v9 Services, image/video from
+  top-level or service-scoped generation outputs, and `skill` from owned Skills.
+  Carry only that bounded display enum through the source representative and
+  Renderer cache.
+  Renderer uses `service`, `video`, and `image` to filter Plugin cards, but the
+  `skill` control selects first-class Skill cards rather than Plugins with owned
+  Skills. List cards do not render category chips. Bounded text search composes with
+  these filters and stays local to Renderer. Neither operation selects a source or
+  authorizes work.
+  Adding or changing this Main-to-Renderer card projection bumps both the Desktop
+  protocol and the disposable display-cache schema so a stale Main or cache cannot
+  make a current filter silently appear empty.
+- Resolve Marketplace details on demand from the same source-qualified
+  representative as the visible card. Renderer may identify only the capability
+  `{kind,id}`; Main derives the exact source, immutable artifact, bounded Skill file
+  previews, and optional Showcase poster. Never cache detail bytes, expose a native
+  path or source URL, or render active media before size, digest, and file-signature
+  validation. A GitHub source icon exposes only a closed availability marker and
+  returns `{kind,id}` to Main, which re-resolves and opens the canonical repository.
 - Plugin Services seed from the last complete safe Renderer projection across
   remounts and cold windows, then revalidate inventory, status, and optional usage
   independently in the background. Keep old values visible during refresh; reject

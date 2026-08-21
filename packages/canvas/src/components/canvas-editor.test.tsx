@@ -47,9 +47,12 @@ let renderedColorMode: string | undefined
 let renderedReactFlowOptions:
   | {
       connectionRadius?: number
-      multiSelectionKeyCode?: readonly string[]
+      multiSelectionKeyCode?: readonly string[] | null
+      onlyRenderVisibleElements?: boolean
+      panActivationKeyCode?: string | null
       snapGrid?: readonly [number, number]
       snapToGrid?: boolean
+      zoomActivationKeyCode?: readonly string[] | null
     }
   | undefined
 
@@ -97,10 +100,13 @@ function MockReactFlow(props: {
   colorMode?: string
   connectionRadius?: number
   edges?: CanvasEdge[]
-  multiSelectionKeyCode?: readonly string[]
+  multiSelectionKeyCode?: readonly string[] | null
+  onlyRenderVisibleElements?: boolean
+  panActivationKeyCode?: string | null
   nodes?: CanvasNode[]
   snapGrid?: readonly [number, number]
   snapToGrid?: boolean
+  zoomActivationKeyCode?: readonly string[] | null
 }) {
   renderedCanvasEdges = props.edges ?? []
   renderedCanvasNodes = props.nodes ?? []
@@ -108,13 +114,18 @@ function MockReactFlow(props: {
   renderedReactFlowOptions = {
     connectionRadius: props.connectionRadius,
     multiSelectionKeyCode: props.multiSelectionKeyCode,
+    onlyRenderVisibleElements: props.onlyRenderVisibleElements,
+    panActivationKeyCode: props.panActivationKeyCode,
     snapGrid: props.snapGrid,
     snapToGrid: props.snapToGrid,
+    zoomActivationKeyCode: props.zoomActivationKeyCode,
   }
   return <>{props.children}</>
 }
 
 mock.module("@convax/ui", () => ({
+  BeamButton: (props: { children?: ReactNode }) => <button>{props.children}</button>,
+  BeamSurface: Passthrough,
   Button: (props: { "aria-label"?: string; children?: ReactNode; onClick?: () => void }) => {
     if (props["aria-label"]) {
       buttonContents.set(props["aria-label"], props.children)
@@ -232,6 +243,11 @@ mock.module("@xyflow/react", () => ({
     zoomOut,
     zoomTo,
   }),
+  useStoreApi: () => ({
+    getState: () => ({}),
+    setState: () => undefined,
+    subscribe: () => () => undefined,
+  }),
   useViewport: () => ({ x: 17, y: 29, zoom: 1.35 }),
 }))
 
@@ -255,6 +271,7 @@ const {
   runCanvasReloadScopeEffect,
   settleCanvasReloadFailure,
 } = await import("./canvas-editor")
+const { resolveCanvasOnlyRenderVisibleElements } = await import("./canvas-node-visibility")
 const { getCanvasNodeInsertionItems } = await import("./insertion-items")
 const { createDefaultCanvasFileRendererRegistry, createDefaultCanvasNodeRegistry } = await import("../builtin-registry")
 const { createCanvasServices } = await import("../services")
@@ -352,14 +369,55 @@ function renderEditor(
 }
 
 describe("CanvasEditor edge port projection", () => {
-  test("uses one bounded connection radius and explicit multi-selection chord", () => {
+  test("uses event-scoped pointer and focus-scoped navigation modifiers", () => {
     renderEditor()
     expect(renderedReactFlowOptions).toMatchObject({
       connectionRadius: 120,
-      multiSelectionKeyCode: ["Meta", "Shift"],
+      multiSelectionKeyCode: null,
+      onlyRenderVisibleElements: true,
+      panActivationKeyCode: null,
       snapGrid: [8, 8],
       snapToGrid: true,
+      zoomActivationKeyCode: null,
     })
+  })
+
+  test("keeps a selected media composer mounted outside the viewport without disabling normal culling", () => {
+    for (const selectedNodeKind of ["image", "video"] as const) {
+      expect(
+        resolveCanvasOnlyRenderVisibleElements({
+          assistantAvailable: true,
+          configured: true,
+          editorAvailable: true,
+          selectedNodeKind,
+        }),
+      ).toBeFalse()
+    }
+
+    expect(
+      resolveCanvasOnlyRenderVisibleElements({
+        assistantAvailable: true,
+        configured: true,
+        editorAvailable: true,
+        selectedNodeKind: "text",
+      }),
+    ).toBeTrue()
+    expect(
+      resolveCanvasOnlyRenderVisibleElements({
+        assistantAvailable: false,
+        configured: true,
+        editorAvailable: true,
+        selectedNodeKind: "image",
+      }),
+    ).toBeTrue()
+    expect(
+      resolveCanvasOnlyRenderVisibleElements({
+        assistantAvailable: true,
+        configured: false,
+        editorAvailable: true,
+        selectedNodeKind: "image",
+      }),
+    ).toBeFalse()
   })
 
   test("projects handleless and legacy edges onto fixed ports without mutating the document", () => {
@@ -701,20 +759,89 @@ describe("CanvasEditor resource mutation", () => {
     expect(uploaded).toEqual([[first, second]])
     expect(relinked).toEqual([])
 
-    handleCanvasResourceRelinkSelection("missing-image", [first, second], (nodeId, file) => {
-      relinked.push({ file, nodeId })
-    })
+    expect(
+      handleCanvasResourceRelinkSelection(
+        "missing-image",
+        [first, second],
+        (nodeId, file) => {
+          relinked.push({ file, nodeId })
+        },
+        "image",
+      ),
+    ).toBe("selected")
     expect(relinked).toEqual([{ file: first, nodeId: "missing-image" }])
 
     const markup = renderEditor()
-    expect(markup).toMatch(/accept="image\/\*"[^>]*data-canvas-resource-picker="image"/)
-    expect(markup).toMatch(/accept="video\/\*"[^>]*data-canvas-resource-picker="video"/)
+    expect(markup).toMatch(/accept="[^"]*\.png[^"]*"[^>]*data-canvas-resource-picker="image"/)
+    expect(markup).toMatch(/accept="[^"]*\.mp4[^"]*"[^>]*data-canvas-resource-picker="video"/)
     expect(markup).not.toMatch(/data-canvas-resource-picker="image"[^>]*multiple/)
     expect(markup).not.toMatch(/data-canvas-resource-picker="video"[^>]*multiple/)
     expect(markup).toContain('data-canvas-resource-picker="upload"')
     expect(markup).toContain('data-canvas-resource-picker="relink"')
     expect(markup).toMatch(/data-canvas-resource-picker="upload"[^>]*multiple=""/)
     expect(markup).not.toMatch(/data-canvas-resource-picker="relink"[^>]*multiple/)
+  })
+
+  test("rejects a local relink whose file cluster does not match the node kind", () => {
+    const relinked: Array<{ file: File; nodeId: string }> = []
+    const image = new File(["image"], "hero.png", { type: "image/png" })
+    const video = new File(["video"], "clip.mp4", { type: "video/mp4" })
+    const audio = new File(["audio"], "take.wav", { type: "audio/wav" })
+    const text = new File(["note"], "notes.md", { type: "text/markdown" })
+    const archive = new File(["zip"], "archive.zip", { type: "application/zip" })
+
+    expect(handleCanvasResourceRelinkSelection("image-node", [video], () => relinked.push({ file: video, nodeId: "image-node" }), "image")).toBe(
+      "incompatible",
+    )
+    expect(
+      handleCanvasResourceRelinkSelection(
+        "image-node",
+        [new File(["clip"], "clip.mp4")],
+        () => relinked.push({ file: video, nodeId: "image-node" }),
+        "image",
+      ),
+    ).toBe("incompatible")
+    expect(handleCanvasResourceRelinkSelection("video-node", [image], () => relinked.push({ file: image, nodeId: "video-node" }), "video")).toBe(
+      "incompatible",
+    )
+    expect(handleCanvasResourceRelinkSelection("audio-node", [video], () => relinked.push({ file: video, nodeId: "audio-node" }), "audio")).toBe(
+      "incompatible",
+    )
+    expect(handleCanvasResourceRelinkSelection("text-node", [image], () => relinked.push({ file: image, nodeId: "text-node" }), "text")).toBe(
+      "incompatible",
+    )
+    expect(handleCanvasResourceRelinkSelection("file-node", [image], () => relinked.push({ file: image, nodeId: "file-node" }), "file")).toBe(
+      "incompatible",
+    )
+    expect(
+      handleCanvasResourceRelinkSelection(
+        "file-node",
+        [archive],
+        (nodeId, file) => relinked.push({ file, nodeId }),
+        "file",
+      ),
+    ).toBe("selected")
+    expect(
+      handleCanvasResourceRelinkSelection(
+        "audio-node",
+        [audio],
+        (nodeId, file) => relinked.push({ file, nodeId }),
+        "audio",
+      ),
+    ).toBe("selected")
+    expect(
+      handleCanvasResourceRelinkSelection(
+        "text-node",
+        [text],
+        (nodeId, file) => relinked.push({ file, nodeId }),
+        "text",
+      ),
+    ).toBe("selected")
+    expect(relinked).toEqual([
+      { file: archive, nodeId: "file-node" },
+      { file: audio, nodeId: "audio-node" },
+      { file: text, nodeId: "text-node" },
+    ])
   })
 
   test("replaces only transient resource state without changing document metadata", () => {
@@ -1349,6 +1476,32 @@ describe("CanvasEditor resource mutation", () => {
     expect((additions[0] as { sources: Array<{ sourceId: unknown }> }).sources[0]?.sourceId).toBeString()
   })
 
+  test("routes context-menu image creation through the pending empty-card mutation boundary", async () => {
+    const additions: unknown[] = []
+    renderEditor(
+      createCanvasServices({
+        mutation: {
+          async add(input) {
+            additions.push(input)
+            return { createdNodeIds: ["image"], warnings: [] }
+          },
+        },
+      }),
+    )
+
+    expect(contextMenuActions.get("Add Image")).toBeFunction()
+    contextMenuActions.get("Add Image")?.()
+    await new Promise<void>((resolve) => setTimeout(resolve, 0))
+
+    expect(additions).toHaveLength(1)
+    expect(additions[0]).toMatchObject({
+      files: [],
+      pending: { kind: "image", label: "Image" },
+      sources: [],
+    })
+    expect((additions[0] as { files: unknown[] }).files).toHaveLength(0)
+  })
+
   test("routes a drop through resource mutation and preserves the viewport", async () => {
     const additions: unknown[] = []
     renderEditor(
@@ -1388,21 +1541,21 @@ describe("CanvasEditor resource mutation", () => {
 
   test("fits only after the authoritative tidy command commits", async () => {
     const initialDocument = createCanvasDocument({
-        edges: [{ id: "edge", source: "first", target: "second" }],
-        id: "canvas-layout",
-        nodes: [
-          createTextNode({
-            id: "first",
-            metadata: {},
-            position: { x: 400, y: 200 },
-            resourceState: { status: "ready" },
-          }),
-          createTextNode({ id: "second", metadata: {}, position: { x: 0, y: 0 }, resourceState: { status: "ready" } }),
-        ],
-      })
+      edges: [{ id: "edge", source: "first", target: "second" }],
+      id: "canvas-layout",
+      nodes: [
+        createTextNode({
+          id: "first",
+          metadata: {},
+          position: { x: 400, y: 200 },
+          resourceState: { status: "ready" },
+        }),
+        createTextNode({ id: "second", metadata: {}, position: { x: 0, y: 0 }, resourceState: { status: "ready" } }),
+      ],
+    })
     renderEditor(createCanvasServices(), {
       initialDocument,
-      executeCommand: async () => ({ document: initialDocument } as never),
+      executeCommand: async () => ({ document: initialDocument }) as never,
     })
 
     expect(buttonActions.get("Tidy canvas")).toBeFunction()
@@ -1714,7 +1867,7 @@ describe("CanvasEditor external drag mode", () => {
     expect(buttonActions.get("Drag to Other Apps")).toBeUndefined()
   })
 
-  test("does not prepare until command-shift is held for a visible drag source", () => {
+  test("leaves command-shift activation to the host shortcut scope", () => {
     const prepare = mock(
       () =>
         new Promise<{
@@ -1730,25 +1883,9 @@ describe("CanvasEditor external drag mode", () => {
         visible: () => true,
       },
     })
-    const preventDefault = mock(() => undefined)
-    const stopPropagation = mock(() => undefined)
-
     expect(prepare).not.toHaveBeenCalled()
-    expect(keyDownOnCanvas).toBeFunction()
-    keyDownOnCanvas?.({
-      altKey: false,
-      ctrlKey: false,
-      key: "Shift",
-      metaKey: true,
-      preventDefault,
-      shiftKey: true,
-      stopPropagation,
-      target: null,
-    })
-
-    expect(prepare).toHaveBeenCalledTimes(1)
-    expect(preventDefault).not.toHaveBeenCalled()
-    expect(stopPropagation).not.toHaveBeenCalled()
+    expect(keyDownOnCanvas).toBeUndefined()
+    expect(prepare).not.toHaveBeenCalled()
   })
 
   test("holds without preparing when the current selection is not eligible", () => {
@@ -1761,20 +1898,7 @@ describe("CanvasEditor external drag mode", () => {
         visible: () => false,
       },
     })
-    const preventDefault = mock(() => undefined)
-
-    keyDownOnCanvas?.({
-      altKey: false,
-      ctrlKey: false,
-      key: "Shift",
-      metaKey: true,
-      preventDefault,
-      shiftKey: true,
-      stopPropagation: () => undefined,
-      target: null,
-    })
-
+    expect(keyDownOnCanvas).toBeUndefined()
     expect(prepare).not.toHaveBeenCalled()
-    expect(preventDefault).not.toHaveBeenCalled()
   })
 })

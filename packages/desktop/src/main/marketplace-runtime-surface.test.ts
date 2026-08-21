@@ -1,9 +1,6 @@
 import { describe, expect, test } from "bun:test"
 
-import {
-  parsePluginRuntimeSurface,
-  projectRegistryPackageRuntimeSurface,
-} from "./marketplace-runtime-surface"
+import { parsePluginRuntimeSurface, projectRegistryPackageRuntimeProjection } from "./marketplace-runtime-surface"
 
 function manifest(overrides: Record<string, unknown> = {}) {
   return {
@@ -35,7 +32,7 @@ describe("Marketplace runtime-surface projection", () => {
   ] as const)("projects canonical v8 manifests to %s", (expected, value) => {
     expect(parsePluginRuntimeSurface(value).runtimeSurface).toBe(expected)
     expect(
-      projectRegistryPackageRuntimeSurface({
+      projectRegistryPackageRuntimeProjection({
         delivery: {
           kind: "artifact",
           sha256: "a".repeat(64),
@@ -46,8 +43,52 @@ describe("Marketplace runtime-surface projection", () => {
         kind: "plugin",
         manifest: value,
         version: "1.0.0",
-      }),
+      }).runtimeSurface,
     ).toBe(expected)
+  })
+
+  test("derives bounded categories from the validated Plugin contribution surface", () => {
+    const value = manifest({
+      contributes: {
+        generation: {
+          models: [],
+          tools: [
+            {
+              acceptedInputs: [],
+              description: "Create an image",
+              id: "image.create",
+              output: "image",
+              title: "Create image",
+            },
+            {
+              acceptedInputs: [],
+              description: "Create a video",
+              id: "video.create",
+              output: "video",
+              title: "Create video",
+            },
+          ],
+        },
+        service: { actions: [] },
+        skills: [{ name: "runtime-helper", path: "skills/runtime-helper" }],
+      },
+      runtime: { command: "runtime-fixture", type: "mcp-stdio" },
+    })
+    expect(parsePluginRuntimeSurface(value).pluginCategories).toEqual(["service", "video", "image", "skill"])
+    expect(
+      projectRegistryPackageRuntimeProjection({
+        delivery: {
+          kind: "artifact",
+          sha256: "a".repeat(64),
+          size: 1,
+          url: "https://github.com/acme/plugins/releases/download/runtime-surface-fixture-v1.0.0/plugin.zip",
+        },
+        id: "runtime-surface-fixture",
+        kind: "plugin",
+        manifest: value,
+        version: "1.0.0",
+      }).pluginCategories,
+    ).toEqual(["service", "video", "image", "skill"])
   })
 
   test.each([
@@ -71,7 +112,7 @@ describe("Marketplace runtime-surface projection", () => {
 
   test("keeps Skill and validated MCP display policy independent of Plugin manifests", () => {
     expect(
-      projectRegistryPackageRuntimeSurface({
+      projectRegistryPackageRuntimeProjection({
         delivery: {
           kind: "artifact",
           sha256: "b".repeat(64),
@@ -81,10 +122,23 @@ describe("Marketplace runtime-surface projection", () => {
         id: "skill",
         kind: "skill",
         version: "1.0.0",
-      }),
+      }).pluginCategories,
+    ).toEqual([])
+    expect(
+      projectRegistryPackageRuntimeProjection({
+        delivery: {
+          kind: "artifact",
+          sha256: "b".repeat(64),
+          size: 1,
+          url: "https://github.com/acme/plugins/releases/download/skill-v1.0.0/skill.zip",
+        },
+        id: "skill",
+        kind: "skill",
+        version: "1.0.0",
+      }).runtimeSurface,
     ).toBe("none")
     expect(
-      projectRegistryPackageRuntimeSurface({
+      projectRegistryPackageRuntimeProjection({
         delivery: {
           companions: [],
           extension: {
@@ -110,7 +164,7 @@ describe("Marketplace runtime-surface projection", () => {
         id: "io.example/canvas-tool",
         kind: "mcp-server",
         version: "1.0.0",
-      }),
+      }).runtimeSurface,
     ).toBe("agent-and-convax")
   })
 })

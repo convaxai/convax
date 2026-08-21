@@ -1,11 +1,29 @@
 # Plugin SDK Package Contract
 
 `@convax/plugin-sdk` is the headless, independently publishable source of truth for
-the current Convax Plugin package contract.
+the admitted Convax Plugin package contracts.
 
 ## Owns
 
-- The current Plugin manifest schema and every portable contribution declaration.
+- The closed `convax.plugin/8` manifest schema, the additive
+  `convax.plugin/9` manifest schema, their generic discriminated parser, and every
+  portable contribution declaration. V8 stays byte- and semantics-compatible: its
+  optional singleton `contributes.service`, Plugin-level generation/LLM/runtime,
+  validation order, and error behavior must not be projected through or changed by
+  v9.
+- V9 retains the v8 non-Service contribution plane and one top-level immutable
+  runtime artifact. Its optional `services` array contains 1–16 service profiles;
+  each profile has a Plugin-local id, display strings, possibly empty actions,
+  optional generation, optional LLM, and static runtime args appended to the base
+  runtime args. A Service never has to provide generation or LLM, and either
+  contribution remains independently optional. Its id must differ from the owning
+  Plugin id, which is reserved for the top-level runtime projection. A present `services` collection is
+  executable: runtime must exist exactly when any Service, top-level generation or
+  LLM, or capability export exists; runtime alone remains invalid.
+- Service-local generation tool/model ids are unique only inside one service and
+  may repeat in another service. Agent/Canvas tool references and capability
+  exports continue to resolve only against top-level generation and the base
+  runtime; v9 adds no service selector to those declarations.
 - Bounded `i18n` resources, canonical locale/message-key validation, reserved
   metadata keys, localized contribution text, and the one deterministic fallback
   algorithm. Desktop may project a locale but must not fork this resolution logic.

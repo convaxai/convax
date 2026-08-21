@@ -2,7 +2,7 @@ import { Button, cn } from "@convax/ui"
 import { Bot, Cloud, LoaderCircle, RefreshCw } from "lucide-react"
 import { useEffect, useId, useRef, useState } from "react"
 
-import type { PluginServiceStatus } from "../plugin-service-contracts"
+import { pluginServiceTargetKey, type PluginServiceStatus, type PluginServiceTarget } from "../plugin-service-contracts"
 import type { WebPluginServiceAction } from "../plugin-contracts"
 import { appMessage, type AppLocale } from "./app-language"
 import { ServiceDetail, PluginServiceSignOutConfirmation } from "./plugin-service-detail"
@@ -121,8 +121,8 @@ export function ServicesSurface({
   className?: string
   initialServiceId?: string
   locale: AppLocale
-  onAction(pluginId: string, action: WebPluginServiceAction): void
-  onCheckout?(pluginId: string, planKey: string): void
+  onAction(target: PluginServiceTarget, action: WebPluginServiceAction): void
+  onCheckout?(target: PluginServiceTarget, planKey: string): void
   onInstallServices?: () => void
   onRefresh(): void
   snapshot: ServiceCatalogSnapshot
@@ -250,18 +250,20 @@ export function ServicesSurface({
           </nav>
           <ServiceDetail
             busy={
-              selectedService.kind === "plugin" && snapshot.action?.pluginId === selectedService.pluginId
-                ? snapshot.action.action
+              selectedService.kind === "plugin"
+                ? snapshot.actions?.find(
+                    ({ target }) => pluginServiceTargetKey(target) === pluginServiceTargetKey(selectedService.target),
+                  )?.action
                 : undefined
             }
             key={selectedService.serviceId}
             labelledBy={`${generatedId}-service-tab-${snapshot.services.indexOf(selectedService)}`}
             locale={locale}
             onAction={(action) => {
-              if (selectedService.kind === "plugin") onAction(selectedService.pluginId, action)
+              if (selectedService.kind === "plugin") onAction(selectedService.target, action)
             }}
             onCheckout={(planKey) => {
-              if (selectedService.kind === "plugin") onCheckout?.(selectedService.pluginId, planKey)
+              if (selectedService.kind === "plugin") onCheckout?.(selectedService.target, planKey)
             }}
             panelId={panelId}
             service={selectedService}

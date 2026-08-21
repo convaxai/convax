@@ -1,6 +1,7 @@
 import type { AgentResource } from "@convax/agent-runtime"
 import type { GenerationOutputModality, GenerationToolInput, GenerationToolSummary } from "../generation-contracts"
 import { createAgentCanvasInstructions, type AgentActiveCanvas } from "../agent-canvas-context"
+import { pluginServiceTargetKey, type PluginServiceTarget } from "../plugin-service-contracts"
 
 export const agentGenerationOutputs = ["image", "video", "audio"] as const
 
@@ -15,6 +16,7 @@ export interface AgentGenerationServiceGroup {
   id: string
   models: readonly GenerationToolSummary[]
   name: string
+  target: PluginServiceTarget
 }
 
 export function isGenerationModelTool(tool: GenerationToolSummary) {
@@ -33,13 +35,23 @@ export function groupAgentGenerationToolsByService(
   tools: readonly GenerationToolSummary[],
   output: AgentGenerationOutput,
 ): readonly AgentGenerationServiceGroup[] {
-  const services = new Map<string, { id: string; models: GenerationToolSummary[]; name: string }>()
+  const services = new Map<
+    string,
+    { id: string; models: GenerationToolSummary[]; name: string; target: PluginServiceTarget }
+  >()
   for (const tool of agentGenerationToolsForOutput(tools, output)) {
-    const service = services.get(tool.pluginId)
+    const target = { pluginId: tool.pluginId, serviceId: tool.serviceId }
+    const targetKey = pluginServiceTargetKey(target)
+    const service = services.get(targetKey)
     if (service) {
       service.models.push(tool)
     } else {
-      services.set(tool.pluginId, { id: tool.pluginId, models: [tool], name: tool.pluginName })
+      services.set(targetKey, {
+        id: target.serviceId === target.pluginId ? target.pluginId : targetKey,
+        models: [tool],
+        name: tool.pluginName,
+        target,
+      })
     }
   }
   return [...services.values()]

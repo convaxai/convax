@@ -4,8 +4,10 @@ import fs from "node:fs/promises"
 import path from "node:path"
 
 import { requireWebPluginId } from "../plugin-contracts"
+import { pluginServiceTargetKey, requirePluginServiceId, type PluginServiceTarget } from "../plugin-service-contracts"
 
-export const pluginServiceAuthorizationCheckpointSchema = "convax.plugin-service-authorization-checkpoint/2" as const
+export const pluginServiceAuthorizationCheckpointSchema = "convax.plugin-service-authorization-checkpoint/3" as const
+const legacyPluginServiceAuthorizationCheckpointSchema = "convax.plugin-service-authorization-checkpoint/2" as const
 
 const maximumCheckpointBytes = 64 * 1024
 const maximumCookieNames = 32
@@ -23,10 +25,9 @@ export type PluginServiceAuthorizationAction = "authorize" | "reauthorize"
  * and the install-authorized executable bytes. It must never be a renderer
  * supplied identifier.
  */
-export interface PluginServiceAuthorizationCheckpointBinding {
+export interface PluginServiceAuthorizationCheckpointBinding extends PluginServiceTarget {
   cookieNames: readonly string[]
   cookieOrigin: string
-  pluginId: string
   serviceIdentity: string
   snapshotDigest: string
 }
@@ -45,8 +46,7 @@ export interface PluginServiceAuthorizationCheckpoint extends PluginServiceAutho
   schema: typeof pluginServiceAuthorizationCheckpointSchema
 }
 
-export interface PluginServiceAuthorizationCheckpointIdentity {
-  pluginId: string
+export interface PluginServiceAuthorizationCheckpointIdentity extends PluginServiceTarget {
   serviceIdentity: string
   snapshotDigest: string
 }
@@ -108,14 +108,25 @@ function requireServiceIdentity(value: unknown) {
   return value
 }
 
+function normalizeTarget(value: PluginServiceTarget): PluginServiceTarget {
+  const input = strictRecord(value)
+  requireExactKeys(input, ["pluginId", "serviceId"])
+  if (typeof input.pluginId !== "string") throw checkpointError()
+  return {
+    pluginId: requireWebPluginId(input.pluginId),
+    serviceId: requirePluginServiceId(input.serviceId),
+  }
+}
+
 function normalizeIdentity(
   value: PluginServiceAuthorizationCheckpointIdentity,
 ): PluginServiceAuthorizationCheckpointIdentity {
   const input = strictRecord(value)
-  requireExactKeys(input, ["pluginId", "serviceIdentity", "snapshotDigest"])
+  requireExactKeys(input, ["pluginId", "serviceId", "serviceIdentity", "snapshotDigest"])
   if (typeof input.pluginId !== "string") throw checkpointError()
   return {
     pluginId: requireWebPluginId(input.pluginId),
+    serviceId: requirePluginServiceId(input.serviceId),
     serviceIdentity: requireServiceIdentity(input.serviceIdentity),
     snapshotDigest: requireServiceIdentity(input.snapshotDigest),
   }
@@ -202,18 +213,19 @@ function normalizeBinding(
   value: PluginServiceAuthorizationCheckpointBinding,
 ): PluginServiceAuthorizationCheckpointBinding {
   const input = strictRecord(value)
-  requireExactKeys(input, ["cookieNames", "cookieOrigin", "pluginId", "serviceIdentity", "snapshotDigest"])
+  requireExactKeys(input, ["cookieNames", "cookieOrigin", "pluginId", "serviceId", "serviceIdentity", "snapshotDigest"])
   if (typeof input.pluginId !== "string") throw checkpointError()
   return {
     cookieNames: requireCookieNames(input.cookieNames),
     cookieOrigin: requireCanonicalHttpsOrigin(input.cookieOrigin),
     pluginId: requireWebPluginId(input.pluginId),
+    serviceId: requirePluginServiceId(input.serviceId),
     serviceIdentity: requireServiceIdentity(input.serviceIdentity),
     snapshotDigest: requireServiceIdentity(input.snapshotDigest),
   }
 }
 
-function normalizeCheckpoint(value: unknown): PluginServiceAuthorizationCheckpoint {
+function normalizeCheckpoint(value: unknown, legacy = false): PluginServiceAuthorizationCheckpoint {
   const input = strictRecord(value)
   requireExactKeys(input, [
     "action",
@@ -223,11 +235,13 @@ function normalizeCheckpoint(value: unknown): PluginServiceAuthorizationCheckpoi
     "cookies",
     "pluginId",
     "schema",
+    ...(legacy ? [] : ["serviceId"]),
     "serviceIdentity",
     "snapshotDigest",
   ])
   if (
-    input.schema !== pluginServiceAuthorizationCheckpointSchema ||
+    input.schema !==
+      (legacy ? legacyPluginServiceAuthorizationCheckpointSchema : pluginServiceAuthorizationCheckpointSchema) ||
     (input.action !== "authorize" && input.action !== "reauthorize")
   ) {
     throw checkpointError()
@@ -237,6 +251,7 @@ function normalizeCheckpoint(value: unknown): PluginServiceAuthorizationCheckpoi
     cookieNames: requireCookieNames(input.cookieNames),
     cookieOrigin: requireCanonicalHttpsOrigin(input.cookieOrigin),
     pluginId: requireWebPluginId(input.pluginId),
+    serviceId: legacy ? requirePluginServiceId(input.pluginId) : requirePluginServiceId(input.serviceId),
     serviceIdentity: requireServiceIdentity(input.serviceIdentity),
     snapshotDigest: requireServiceIdentity(input.snapshotDigest),
   }
@@ -255,6 +270,7 @@ function sameBinding(
 ) {
   return (
     checkpoint.pluginId === binding.pluginId &&
+    checkpoint.serviceId === binding.serviceId &&
     checkpoint.serviceIdentity === binding.serviceIdentity &&
     checkpoint.snapshotDigest === binding.snapshotDigest &&
     checkpoint.cookieOrigin === binding.cookieOrigin &&
@@ -315,7 +331,37 @@ async function inspectCheckpointTarget(filePath: string) {
   }
 }
 
-async function readCheckpointFile(filePath: string) {
+function checkpointFileName(target: PluginServiceTarget) {
+  return `${target.pluginId}--${target.serviceId}.json`
+}
+
+function legacyCheckpointFileName(pluginId: string) {
+  return `${pluginId}.json`
+}
+
+interface CheckpointFileDescriptor {
+  legacy: boolean
+  target: PluginServiceTarget
+}
+
+function checkpointFileDescriptor(fileName: string): CheckpointFileDescriptor | null {
+  if (!fileName.endsWith(".json")) return null
+  const baseName = fileName.slice(0, -".json".length)
+  const separator = baseName.indexOf("--")
+  try {
+    if (separator < 0) {
+      const pluginId = requireWebPluginId(baseName)
+      return { legacy: true, target: { pluginId, serviceId: requirePluginServiceId(pluginId) } }
+    }
+    const pluginId = requireWebPluginId(baseName.slice(0, separator))
+    const serviceId = requirePluginServiceId(baseName.slice(separator + 2))
+    return { legacy: false, target: { pluginId, serviceId } }
+  } catch {
+    return null
+  }
+}
+
+async function readCheckpointFile(filePath: string, legacy = false) {
   const before = await inspectCheckpointTarget(filePath)
   if (!before) return null
   if (before.size < 1 || before.size > maximumCheckpointBytes) throw checkpointError()
@@ -339,7 +385,7 @@ async function readCheckpointFile(filePath: string) {
       throw checkpointError()
     }
     try {
-      return normalizeCheckpoint(JSON.parse(text) as unknown)
+      return normalizeCheckpoint(JSON.parse(text) as unknown, legacy)
     } catch {
       throw checkpointError()
     }
@@ -354,9 +400,12 @@ async function readCheckpointFile(filePath: string) {
 async function publishCheckpoint(root: string, checkpoint: PluginServiceAuthorizationCheckpoint) {
   const serialized = `${JSON.stringify(checkpoint)}\n`
   if (Buffer.byteLength(serialized, "utf8") > maximumCheckpointBytes) throw checkpointError()
-  const target = path.join(root, `${checkpoint.pluginId}.json`)
+  const target = path.join(root, checkpointFileName(checkpoint))
   const prior = await inspectCheckpointTarget(target)
-  const temporaryPath = path.join(root, `.checkpoint-${checkpoint.pluginId}-${randomUUID()}.tmp`)
+  const temporaryPath = path.join(
+    root,
+    `.checkpoint-${checkpoint.pluginId}--${checkpoint.serviceId}-${randomUUID()}.tmp`,
+  )
   let handle: Awaited<ReturnType<typeof fs.open>> | undefined
   try {
     const noFollow = typeof fsConstants.O_NOFOLLOW === "number" ? fsConstants.O_NOFOLLOW : 0
@@ -404,38 +453,68 @@ async function publishCheckpoint(root: string, checkpoint: PluginServiceAuthoriz
   }
 }
 
+async function removeCheckpointFile(filePath: string) {
+  try {
+    const info = await fs.lstat(filePath)
+    if (!info.isFile() && !info.isSymbolicLink()) throw checkpointError()
+    // unlink removes a tampered symlink itself and never follows its target.
+    await fs.unlink(filePath)
+  } catch (error) {
+    if (isNodeError(error, "ENOENT")) return
+    if (error instanceof PluginServiceAuthorizationCheckpointError) throw error
+    throw checkpointError(false)
+  }
+}
+
+async function readTargetCheckpoint(root: string, target: PluginServiceTarget) {
+  const currentPath = path.join(root, checkpointFileName(target))
+  const current = await readCheckpointFile(currentPath)
+  if (current) return { checkpoint: current, filePath: currentPath, legacy: false }
+  if (target.serviceId !== target.pluginId) return null
+  const legacyPath = path.join(root, legacyCheckpointFileName(target.pluginId))
+  const legacy = await readCheckpointFile(legacyPath, true)
+  return legacy ? { checkpoint: legacy, filePath: legacyPath, legacy: true } : null
+}
+
 async function sweepCheckpointRoot(
   root: string,
-  current: ReadonlyMap<string, PluginServiceAuthorizationCheckpointIdentity | null>,
+  current: ReadonlyMap<string, PluginServiceAuthorizationCheckpointIdentity>,
+  retainUnknownPluginIds: ReadonlySet<string>,
   now: number,
 ) {
   const retained: PluginServiceAuthorizationCheckpointSummary[] = []
-  for (const entry of await fs.readdir(root, { withFileTypes: true })) {
+  const entries = await fs.readdir(root, { withFileTypes: true })
+  const currentFileTargets = new Set(
+    entries.flatMap((entry) => {
+      const descriptor = checkpointFileDescriptor(entry.name)
+      return descriptor && !descriptor.legacy ? [pluginServiceTargetKey(descriptor.target)] : []
+    }),
+  )
+  for (const entry of entries) {
     const candidate = path.join(root, entry.name)
-    if (!entry.isFile() || entry.isSymbolicLink() || !entry.name.endsWith(".json")) {
+    const descriptor = checkpointFileDescriptor(entry.name)
+    if (!entry.isFile() || entry.isSymbolicLink() || !descriptor) {
       await fs.rm(candidate, { force: true, recursive: true }).catch(() => undefined)
       continue
     }
-    const pluginId = entry.name.slice(0, -".json".length)
-    let normalizedPluginId: string | undefined
-    try {
-      normalizedPluginId = requireWebPluginId(pluginId)
-    } catch {
-      // A malformed file name cannot identify an installed Plugin.
+    const targetKey = pluginServiceTargetKey(descriptor.target)
+    if (descriptor.legacy && currentFileTargets.has(targetKey)) {
+      await fs.rm(candidate, { force: true }).catch(() => undefined)
+      continue
     }
-    if (!normalizedPluginId || !current.has(normalizedPluginId)) {
+    const expectedIdentity = current.get(targetKey)
+    if (!expectedIdentity && !retainUnknownPluginIds.has(descriptor.target.pluginId)) {
       await fs.rm(candidate, { force: true }).catch(() => undefined)
       continue
     }
     try {
-      const checkpoint = await readCheckpointFile(candidate)
-      const expectedIdentity = current.get(normalizedPluginId)
+      const checkpoint = await readCheckpointFile(candidate, descriptor.legacy)
       if (
         !checkpoint ||
-        checkpoint.pluginId !== normalizedPluginId ||
-        (expectedIdentity !== null &&
-          (!expectedIdentity ||
-            checkpoint.serviceIdentity !== expectedIdentity.serviceIdentity ||
+        checkpoint.pluginId !== descriptor.target.pluginId ||
+        checkpoint.serviceId !== descriptor.target.serviceId ||
+        (expectedIdentity &&
+          (checkpoint.serviceIdentity !== expectedIdentity.serviceIdentity ||
             checkpoint.snapshotDigest !== expectedIdentity.snapshotDigest)) ||
         checkpointIsExpired(checkpoint, now) ||
         checkpoint.cookies.every(({ expiresAt }) => expiresAt !== undefined && expiresAt <= now)
@@ -446,19 +525,22 @@ async function sweepCheckpointRoot(
           action: checkpoint.action,
           capturedAt: checkpoint.capturedAt,
           pluginId: checkpoint.pluginId,
+          serviceId: checkpoint.serviceId,
           serviceIdentity: checkpoint.serviceIdentity,
           snapshotDigest: checkpoint.snapshotDigest,
         })
       }
     } catch (error) {
       if (error instanceof PluginServiceAuthorizationCheckpointError && error.invalid) {
-        // Corrupt, tampered, or legacy secret state is never recovered. A
+        // Corrupt or tampered secret state is never recovered. A
         // transient I/O failure is retained for the next maintenance pass.
         await fs.rm(candidate, { force: true }).catch(() => undefined)
       }
     }
   }
-  return retained.sort((left, right) => left.pluginId.localeCompare(right.pluginId))
+  return retained.sort(
+    (left, right) => left.pluginId.localeCompare(right.pluginId) || left.serviceId.localeCompare(right.serviceId),
+  )
 }
 
 /**
@@ -495,6 +577,9 @@ export class PluginServiceAuthorizationCheckpointStore {
       const root = await requirePrivateRoot(this.#rootPath, true)
       if (!root) throw checkpointError()
       await publishCheckpoint(root, checkpoint)
+      if (checkpoint.serviceId === checkpoint.pluginId) {
+        await removeCheckpointFile(path.join(root, legacyCheckpointFileName(checkpoint.pluginId)))
+      }
       return checkpoint
     })
   }
@@ -504,22 +589,23 @@ export class PluginServiceAuthorizationCheckpointStore {
     return this.#serialized(async () => {
       const root = await requirePrivateRoot(this.#rootPath, false)
       if (!root) return null
-      const target = path.join(root, `${binding.pluginId}.json`)
-      const checkpoint = await readCheckpointFile(target)
-      if (!checkpoint) return null
+      const stored = await readTargetCheckpoint(root, binding)
+      if (!stored) return null
+      const { checkpoint, filePath, legacy } = stored
       if (!sameBinding(checkpoint, binding)) throw checkpointError()
       if (checkpointIsExpired(checkpoint, this.#now())) {
-        await fs.rm(target, { force: true })
+        await removeCheckpointFile(filePath)
         return null
       }
       const cookies = checkpoint.cookies.filter(({ expiresAt }) => expiresAt === undefined || expiresAt > this.#now())
       if (!cookies.length) {
-        await fs.rm(target, { force: true })
+        await removeCheckpointFile(filePath)
         return null
       }
       if (cookies.length !== checkpoint.cookies.length) {
         const reduced = { ...checkpoint, cookies }
         await publishCheckpoint(root, reduced)
+        if (legacy) await removeCheckpointFile(filePath)
         return reduced
       }
       return checkpoint
@@ -532,11 +618,12 @@ export class PluginServiceAuthorizationCheckpointStore {
     return this.#serialized(async (): Promise<PluginServiceAuthorizationCheckpointSummary | null> => {
       const root = await requirePrivateRoot(this.#rootPath, false)
       if (!root) return null
-      const target = path.join(root, `${identity.pluginId}.json`)
-      const checkpoint = await readCheckpointFile(target)
-      if (!checkpoint) return null
+      const stored = await readTargetCheckpoint(root, identity)
+      if (!stored) return null
+      const { checkpoint, filePath } = stored
       if (
         checkpoint.pluginId !== identity.pluginId ||
+        checkpoint.serviceId !== identity.serviceId ||
         checkpoint.serviceIdentity !== identity.serviceIdentity ||
         checkpoint.snapshotDigest !== identity.snapshotDigest
       ) {
@@ -546,49 +633,53 @@ export class PluginServiceAuthorizationCheckpointStore {
         checkpointIsExpired(checkpoint, this.#now()) ||
         checkpoint.cookies.every(({ expiresAt }) => expiresAt !== undefined && expiresAt <= this.#now())
       ) {
-        await fs.rm(target, { force: true })
+        await removeCheckpointFile(filePath)
         return null
       }
       return {
         action: checkpoint.action,
         capturedAt: checkpoint.capturedAt,
         pluginId: checkpoint.pluginId,
+        serviceId: checkpoint.serviceId,
         serviceIdentity: checkpoint.serviceIdentity,
         snapshotDigest: checkpoint.snapshotDigest,
       }
     })
   }
 
-  async remove(pluginIdInput: string) {
-    const pluginId = requireWebPluginId(pluginIdInput)
+  async remove(targetInput: PluginServiceTarget | string) {
+    const target = typeof targetInput === "string" ? null : normalizeTarget(targetInput)
+    const pluginId = target ? target.pluginId : requireWebPluginId(targetInput as string)
     await this.#serialized(async () => {
       const root = await requirePrivateRoot(this.#rootPath, false)
       if (!root) return
-      const target = path.join(root, `${pluginId}.json`)
-      try {
-        const info = await fs.lstat(target)
-        if (!info.isFile() && !info.isSymbolicLink()) throw checkpointError()
-        // unlink removes a tampered symlink itself and never follows its target.
-        await fs.unlink(target)
-      } catch (error) {
-        if (isNodeError(error, "ENOENT")) return
-        if (error instanceof PluginServiceAuthorizationCheckpointError) throw error
-        throw checkpointError(false)
+      if (target) {
+        await removeCheckpointFile(path.join(root, checkpointFileName(target)))
+        if (target.serviceId === target.pluginId) {
+          await removeCheckpointFile(path.join(root, legacyCheckpointFileName(target.pluginId)))
+        }
+        return
+      }
+      for (const entry of await fs.readdir(root, { withFileTypes: true })) {
+        const descriptor = checkpointFileDescriptor(entry.name)
+        if (descriptor?.target.pluginId === pluginId) {
+          await removeCheckpointFile(path.join(root, entry.name))
+        }
       }
     })
   }
 
   /** Removes uninstalled, expired, corrupt, and stray recovery state without launching sidecars. */
   async sweep(installedPluginIds: readonly string[]) {
-    const installed = new Map<string, null>()
+    const installed = new Set<string>()
     for (const input of installedPluginIds) {
       const pluginId = requireWebPluginId(input)
       if (installed.has(pluginId)) throw checkpointError()
-      installed.set(pluginId, null)
+      installed.add(pluginId)
     }
     return this.#serialized(async () => {
       const root = await requirePrivateRoot(this.#rootPath, false)
-      return root ? sweepCheckpointRoot(root, installed, this.#now()) : []
+      return root ? sweepCheckpointRoot(root, new Map(), installed, this.#now()) : []
     })
   }
 
@@ -602,21 +693,24 @@ export class PluginServiceAuthorizationCheckpointStore {
     currentInputs: readonly PluginServiceAuthorizationCheckpointIdentity[],
     retainUnknownPluginIds: readonly string[] = [],
   ) {
-    const current = new Map<string, PluginServiceAuthorizationCheckpointIdentity | null>()
+    const current = new Map<string, PluginServiceAuthorizationCheckpointIdentity>()
+    const exactPluginIds = new Set<string>()
     for (const input of currentInputs) {
       const identity = normalizeIdentity(input)
-      const { pluginId } = identity
-      if (current.has(pluginId)) throw checkpointError()
-      current.set(pluginId, identity)
+      const key = pluginServiceTargetKey(identity)
+      if (current.has(key)) throw checkpointError()
+      current.set(key, identity)
+      exactPluginIds.add(identity.pluginId)
     }
+    const retainUnknown = new Set<string>()
     for (const input of retainUnknownPluginIds) {
       const pluginId = requireWebPluginId(input)
-      if (current.has(pluginId)) throw checkpointError()
-      current.set(pluginId, null)
+      if (exactPluginIds.has(pluginId) || retainUnknown.has(pluginId)) throw checkpointError()
+      retainUnknown.add(pluginId)
     }
     return this.#serialized(async () => {
       const root = await requirePrivateRoot(this.#rootPath, false)
-      return root ? sweepCheckpointRoot(root, current, this.#now()) : []
+      return root ? sweepCheckpointRoot(root, current, retainUnknown, this.#now()) : []
     })
   }
 

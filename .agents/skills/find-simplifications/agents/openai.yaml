@@ -1,0 +1,6 @@
+interface:
+  display_name: "Find Simplifications"
+  short_description: "Find evidence-backed Convax simplifications"
+  default_prompt: "Use $find-simplifications to audit Convax and propose a safe, evidence-backed simplification."
+policy:
+  allow_implicit_invocation: true

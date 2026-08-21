@@ -4,20 +4,24 @@ import {
   ArrowRight,
   Bot,
   Check,
+  ChevronRight,
   CreditCard,
   FolderKanban,
   LockKeyhole,
   PanelsTopLeft,
   RefreshCw,
+  Rocket,
   Sparkles,
   X,
 } from "lucide-react"
-import { useEffect, useMemo, useState, type ReactNode } from "react"
+import { useCallback, useEffect, useMemo, useState, useSyncExternalStore, type ReactNode } from "react"
 
+import type { PluginServiceTarget } from "../plugin-service-contracts"
 import type { WebPluginServiceAction } from "../plugin-contracts"
 import { appMessage } from "./app-language"
 import {
   completeConvaxOnboarding,
+  deferConvaxOnboarding,
   isConvaxOnboardingAccountConnected,
   isConvaxOnboardingPaidPlan,
   nextConvaxOnboardingProgress,
@@ -33,12 +37,15 @@ import { ProjectHome } from "./project-home"
 import type { ServiceCatalogSnapshot } from "./service-catalog-controller"
 
 export interface ConvaxOnboardingProps {
+  forceOpen?: boolean
   locale?: "en" | "zh-CN"
+  onDismiss?: () => void
   onEnterProject: (projectId: string) => Promise<boolean | void>
+  onProgressChange?: (progress: ConvaxOnboardingProgress) => void
   onProjectSelectionStart?: () => void
   onRefreshServices: () => Promise<void>
-  onServiceAction: (pluginId: string, action: WebPluginServiceAction) => Promise<void>
-  onServiceCheckout: (pluginId: string, planKey: string) => Promise<void>
+  onServiceAction: (target: PluginServiceTarget, action: WebPluginServiceAction) => Promise<void>
+  onServiceCheckout: (target: PluginServiceTarget, planKey: string) => Promise<void>
   projectController: ProjectController
   reducedMotion?: boolean
   serviceSnapshot: ServiceCatalogSnapshot
@@ -70,6 +77,9 @@ const copy = {
     continuePlan: "Continue with current plan",
     credits: "{value} {unit} available",
     dataBoundary: "Signing in does not upload, sync, or share a local Project.",
+    defer: "Do this later",
+    finish: "Finish setup",
+    finishDescription: "Your account and plan are ready. Finish setup and return to your current Project.",
     free: "Free",
     freeDescription: "Local Projects remain available. Connected AI usage follows the current Free credits.",
     liveCheckout: "See the current price and exact benefits in the secure browser Checkout.",
@@ -87,6 +97,11 @@ const copy = {
     signIn: "Sign in or create a Convax account",
     signInAction: "Sign in",
     start: "Start",
+    taskAccount: "Next: Sign in",
+    taskPlan: "Next: Choose a plan",
+    taskReady: "Next: Start a Project",
+    taskReadyActive: "Next: Finish setup",
+    taskResume: "Resume onboarding",
     subscribe: "Subscribe to {plan}",
     subtitle: "Welcome to Convax",
     title: "Start with your real work",
@@ -116,6 +131,9 @@ const copy = {
     continuePlan: "继续使用当前套餐",
     credits: "剩余 {value} {unit}",
     dataBoundary: "登录不会自动上传、同步或共享本地 Project。",
+    defer: "暂时跳过",
+    finish: "完成设置",
+    finishDescription: "账号和套餐已经准备好。完成设置后返回当前 Project。",
     free: "Free",
     freeDescription: "本地 Project 始终可用；联网 AI 能力按当前 Free Credits 使用。",
     liveCheckout: "实时价格与准确权益将在安全的浏览器 Checkout 中显示。",
@@ -133,6 +151,11 @@ const copy = {
     signIn: "登录或注册 Convax 账号",
     signInAction: "登录",
     start: "开始",
+    taskAccount: "下一步：登录",
+    taskPlan: "下一步：选择套餐",
+    taskReady: "下一步：开始一个 Project",
+    taskReadyActive: "下一步：完成设置",
+    taskResume: "继续 Onboarding",
     subscribe: "订阅 {plan}",
     subtitle: "欢迎使用 Convax",
     title: "从真实工作开始",
@@ -146,7 +169,7 @@ function formatMessage(template: string, values: Record<string, string | number>
   return Object.entries(values).reduce((message, [key, value]) => message.replace(`{${key}}`, String(value)), template)
 }
 
-function OnboardingProgress({ locale, step }: { locale: "en" | "zh-CN"; step: 1 | 2 }) {
+function OnboardingProgress({ locale, step }: { locale: "en" | "zh-CN"; step: 1 | 2 | 3 }) {
   const labels = copy[locale]
   const steps = [labels.account, labels.plan, labels.start]
   return (
@@ -172,13 +195,15 @@ function OnboardingProgress({ locale, step }: { locale: "en" | "zh-CN"; step: 1 
 function OnboardingShell({
   children,
   locale,
+  onDefer,
   reducedMotion,
   step,
 }: {
   children: ReactNode
   locale: "en" | "zh-CN"
+  onDefer: () => void
   reducedMotion: boolean
-  step: 1 | 2
+  step: 1 | 2 | 3
 }) {
   return (
     <main
@@ -197,8 +222,80 @@ function OnboardingShell({
           <OnboardingProgress locale={locale} step={step} />
         </header>
         {children}
+        <footer className="convax-onboarding__footer">
+          <button className="convax-onboarding__defer" onClick={onDefer} type="button">
+            <span>{copy[locale].defer}</span>
+            <X aria-hidden="true" />
+          </button>
+        </footer>
       </section>
     </main>
+  )
+}
+
+export interface ConvaxOnboardingTaskCardProps {
+  activeProject?: boolean
+  locale?: "en" | "zh-CN"
+  onResume: () => void
+  placement?: "floating" | "sidebar"
+  progress: ConvaxOnboardingProgress
+  serviceSnapshot: ServiceCatalogSnapshot
+}
+
+export function ConvaxOnboardingTaskCard({
+  activeProject = false,
+  locale = "en",
+  onResume,
+  placement = "sidebar",
+  progress,
+  serviceSnapshot,
+}: ConvaxOnboardingTaskCardProps) {
+  const labels = copy[locale]
+  const resolution = resolveConvaxOnboardingService(serviceSnapshot)
+  const route = resolveConvaxOnboardingRoute(progress, resolution)
+  if (route === "complete") return null
+  const completedSteps = route === "account" ? 0 : route === "plan" ? 1 : 2
+  const taskLabel =
+    route === "account"
+      ? labels.taskAccount
+      : route === "plan"
+        ? labels.taskPlan
+        : activeProject
+          ? labels.taskReadyActive
+          : labels.taskReady
+
+  return (
+    <button
+      aria-label={`${labels.taskResume}: ${taskLabel}`}
+      className="convax-onboarding-task"
+      data-convax-onboarding-task="true"
+      data-placement={placement}
+      onClick={onResume}
+      type="button"
+    >
+      <span aria-hidden="true" className="convax-onboarding-task__icon">
+        <Rocket />
+      </span>
+      <span className="convax-onboarding-task__content">
+        <span className="convax-onboarding-task__title">
+          <strong>{taskLabel}</strong>
+          <ChevronRight aria-hidden="true" />
+        </span>
+        <span className="convax-onboarding-task__progress-row">
+          <span
+            aria-label={locale === "zh-CN" ? `已完成 ${completedSteps}/3` : `${completedSteps} of 3 steps completed`}
+            aria-valuemax={3}
+            aria-valuemin={0}
+            aria-valuenow={completedSteps}
+            className="convax-onboarding-task__track"
+            role="progressbar"
+          >
+            <span style={{ width: `${(completedSteps / 3) * 100}%` }} />
+          </span>
+          <small>{completedSteps}/3</small>
+        </span>
+      </span>
+    </button>
   )
 }
 
@@ -211,8 +308,11 @@ function Notice({ children, tone = "neutral" }: { children: ReactNode; tone?: "d
 }
 
 export function ConvaxOnboarding({
+  forceOpen = false,
   locale = "en",
+  onDismiss,
   onEnterProject,
+  onProgressChange,
   onProjectSelectionStart,
   onRefreshServices,
   onServiceAction,
@@ -224,15 +324,32 @@ export function ConvaxOnboarding({
 }: ConvaxOnboardingProps) {
   const labels = copy[locale]
   const [progress, setProgress] = useState<ConvaxOnboardingProgress>(() => readConvaxOnboardingProgress(storage))
+  const [resumeRequested, setResumeRequested] = useState(false)
   const [authorizationAttempted, setAuthorizationAttempted] = useState(false)
   const [localError, setLocalError] = useState<string | null>(null)
   const resolution = useMemo(() => resolveConvaxOnboardingService(serviceSnapshot), [serviceSnapshot])
   const route = resolveConvaxOnboardingRoute(progress, resolution)
   const service = resolution.kind === "available" ? resolution.service : undefined
+  const projectSnapshot = useSyncExternalStore(
+    projectController.subscribe,
+    projectController.getSnapshot,
+    projectController.getSnapshot,
+  )
+  const activeProject = projectSnapshot.projects.find((project) => project.id === projectSnapshot.activeProjectId)
 
-  const persist = (next: ConvaxOnboardingProgress) => {
-    writeConvaxOnboardingProgress(storage, next)
-    setProgress(next)
+  const persist = useCallback(
+    (next: ConvaxOnboardingProgress) => {
+      writeConvaxOnboardingProgress(storage, next)
+      setProgress(next)
+      onProgressChange?.(next)
+    },
+    [onProgressChange, storage],
+  )
+
+  const defer = () => {
+    persist(deferConvaxOnboarding(progress))
+    setResumeRequested(false)
+    onDismiss?.()
   }
 
   useEffect(() => {
@@ -243,7 +360,7 @@ export function ConvaxOnboarding({
         ? "plan"
         : progress.step
     if (desiredStep !== progress.step) persist(nextConvaxOnboardingProgress(progress, desiredStep))
-  }, [progress, service])
+  }, [persist, progress, service])
 
   if (route === "complete") {
     return (
@@ -257,10 +374,63 @@ export function ConvaxOnboarding({
     )
   }
 
+  if (progress.deferred && !forceOpen && !resumeRequested) {
+    return (
+      <div className="convax-onboarding-deferred" data-convax-onboarding-deferred="true">
+        <ProjectHome
+          controller={projectController}
+          locale={locale}
+          onEnterProject={onEnterProject}
+          onSelectionStart={onProjectSelectionStart}
+          reducedMotion={reducedMotion}
+        />
+        <ConvaxOnboardingTaskCard
+          activeProject={Boolean(activeProject)}
+          locale={locale}
+          onResume={() => setResumeRequested(true)}
+          placement="floating"
+          progress={progress}
+          serviceSnapshot={serviceSnapshot}
+        />
+      </div>
+    )
+  }
+
   if (route === "ready" && service?.status) {
     const account =
       service.status.account.availability === "available" ? service.status.account.displayName : service.name
     const plan = service.status.plan.availability === "available" ? service.status.plan.name : labels.free
+    if (activeProject) {
+      return (
+        <OnboardingShell locale={locale} onDefer={defer} reducedMotion={reducedMotion} step={3}>
+          <div className="convax-onboarding__centered" data-convax-onboarding-ready="true">
+            <div aria-hidden="true" className="convax-onboarding__hero-icon">
+              <Check />
+            </div>
+            <p className="convax-onboarding__eyebrow">{labels.start}</p>
+            <h1>{labels.finish}</h1>
+            <p>{labels.finishDescription}</p>
+            <div className="convax-onboarding__actions">
+              <Button
+                onClick={async () => {
+                  setLocalError(null)
+                  try {
+                    const entered = await onEnterProject(activeProject.id)
+                    if (entered !== false) persist(completeConvaxOnboarding(progress))
+                  } catch (error) {
+                    setLocalError(error instanceof Error ? error.message : String(error))
+                  }
+                }}
+              >
+                <Check />
+                {labels.finish}
+              </Button>
+            </div>
+            {localError ? <Notice tone="danger">{localError}</Notice> : null}
+          </div>
+        </OnboardingShell>
+      )
+    }
     return (
       <ProjectHome
         controller={projectController}
@@ -277,8 +447,9 @@ export function ConvaxOnboarding({
     )
   }
 
-  const catalogAction = serviceSnapshot.action
-  const pendingAction = catalogAction && catalogAction.pluginId === service?.pluginId ? catalogAction.action : undefined
+  const pendingAction = serviceSnapshot.actions?.find(
+    ({ target }) => target.pluginId === service?.target.pluginId && target.serviceId === service.target.serviceId,
+  )?.action
   const authorizationPending = pendingAction === "authorize" || pendingAction === "reauthorize"
   const visibleError =
     localError ?? service?.error ?? (resolution.kind === "unavailable" ? resolution.error : undefined)
@@ -305,14 +476,14 @@ export function ConvaxOnboarding({
       setAuthorizationAttempted(true)
       setLocalError(null)
       try {
-        await onServiceAction(service.pluginId, authorizeAction)
+        await onServiceAction(service.target, authorizeAction)
       } catch (error) {
         setLocalError(error instanceof Error ? error.message : String(error))
       }
     }
 
     return (
-      <OnboardingShell locale={locale} reducedMotion={reducedMotion} step={1}>
+      <OnboardingShell locale={locale} onDefer={defer} reducedMotion={reducedMotion} step={1}>
         {authorizationPending && service ? (
           <div className="convax-onboarding__centered" data-convax-onboarding-browser-pending="true">
             <div aria-hidden="true" className="convax-onboarding__hero-icon">
@@ -324,7 +495,7 @@ export function ConvaxOnboarding({
             <div className="convax-onboarding__actions">
               <Button
                 disabled={!service.actions.includes("authorization.cancel")}
-                onClick={() => void onServiceAction(service.pluginId, "authorization.cancel")}
+                onClick={() => void onServiceAction(service.target, "authorization.cancel")}
                 variant="outline"
               >
                 <X />
@@ -428,7 +599,7 @@ export function ConvaxOnboarding({
   const runCheckout = async (planKey: string) => {
     setLocalError(null)
     try {
-      await onServiceCheckout(service.pluginId, planKey)
+      await onServiceCheckout(service.target, planKey)
     } catch (error) {
       setLocalError(error instanceof Error ? error.message : String(error))
     }
@@ -437,7 +608,7 @@ export function ConvaxOnboarding({
   const continueWithFree = () => persist(nextConvaxOnboardingProgress(progress, "ready"))
 
   return (
-    <OnboardingShell locale={locale} reducedMotion={reducedMotion} step={2}>
+    <OnboardingShell locale={locale} onDefer={defer} reducedMotion={reducedMotion} step={2}>
       <div className="convax-onboarding__plan-heading">
         <p className="convax-onboarding__eyebrow">{labels.plan}</p>
         <h1>{labels.planDescription}</h1>

@@ -52,7 +52,7 @@ function deferred<T>() {
 }
 
 describe("Agent conversation activity", () => {
-  test("keeps an accessible activity status without visible OpenCode loading copy", () => {
+  test("keeps activity status screen-reader-only without a standalone loader", () => {
     const idle = renderToStaticMarkup(
       <AgentRuntimeStatus runtimeBusy={false} stopping={false} submitting={false} />,
     )
@@ -69,7 +69,10 @@ describe("Agent conversation activity", () => {
     expect(idle).not.toContain("Response in progress")
     expect(idle).not.toContain("Stopping response")
     expect(idle).not.toContain("<svg")
+    expect(idle).toContain('class="sr-only"')
     expect(running).toContain('aria-live="polite"')
+    expect(running).toContain('aria-atomic="true"')
+    expect(running).toContain('role="status"')
     expect(running).toContain('data-agent-runtime-status="running"')
     expect(running).toContain('class="sr-only"')
     expect(running).toContain("Response in progress")
@@ -79,6 +82,9 @@ describe("Agent conversation activity", () => {
     expect(stopping).toContain("Stopping response")
     expect(running).not.toContain("OpenCode is working")
     expect(submitting).not.toContain("OpenCode")
+    expect(running).not.toContain("<svg")
+    expect(submitting).not.toContain("<svg")
+    expect(stopping).not.toContain("<svg")
   })
 
   test("keeps streaming delivery visible without making the busy response its own live region", () => {
@@ -730,6 +736,7 @@ describe("Agent composer source contract", () => {
     expect(source).toContain("key={`${conversationScope}:${sessionId}:${turn.id}`}")
     expect(source).toContain('aria-label={responseStopping ? "Stopping response" : "Stop response"}')
     expect(source).toContain("disabled={responseStopping}")
+    expect(source).toContain("onClick={() => void abort()}")
     expect(source).toContain('import "./agent-panel.css"')
     expect(source).toContain("loading && !sessionState")
     expect(source).toContain('label="Loading conversation…"')
@@ -764,8 +771,31 @@ describe("Agent composer source contract", () => {
     )
     expect(styles).toContain("--agent-composer-radius: 24px")
     expect(styles).toContain("--agent-message-enter-duration: 150ms")
-    expect(styles).toContain('.agent-composer-frame[data-agent-composer-state="running"]::before')
+    expect(source).toContain("BeamSurface,")
+    expect(source).toContain("BeamButton,")
+    expect(source).toMatch(
+      /<BeamSurface\s+beam=\{[\s\S]*?responseStopping \|\| runtimeBusy \|\| submitting \? "rotate" : "idle"[\s\S]*?focusBeam[\s\S]*?tone=\{responseStopping \? "warning" : "spectrum"\}/,
+    )
+    expect(source).toMatch(
+      /<BeamButton\s+aria-label=\{responseStopping \? "Stopping response" : "Stop response"\}[\s\S]*?beam="pulse-inner"[\s\S]*?tone=\{responseStopping \? "warning" : "spectrum"\}/,
+    )
+    expect(source).toMatch(
+      /<BeamButton\s+aria-label="Send message"[\s\S]*?beam=\{submitting \? "pulse-inner" : "idle"\}[\s\S]*?tone="spectrum"/,
+    )
+    expect(source).toContain("data-agent-composer-disabled")
+    expect(source).toContain("data-agent-composer-has-content")
+    expect(source).toContain("data-agent-composer-state")
+    expect(styles).toContain(".agent-composer-frame:focus-within")
+    expect(styles).toContain('.agent-composer-frame[data-agent-composer-disabled="true"]')
+    expect(styles.match(/\.agent-composer-frame\[data-agent-composer-disabled="true"\]\s*\{[^}]*\}/)?.[0]).not.toContain(
+      "opacity",
+    )
+    expect(source).toContain('dropActive && "bg-interactive-selected ring-2 ring-primary/40"')
+    expect(source).not.toContain('dropActive && "bg-primary/5')
     expect(styles).toContain("@media (prefers-reduced-motion: reduce)")
+    expect(styles).not.toContain(".agent-composer-frame::before")
+    expect(styles).not.toContain("@keyframes agent-composer-edge")
+    expect(styles).not.toContain("@keyframes agent-composer-submit")
     expect(styles).not.toContain("transition: all")
   })
 

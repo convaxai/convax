@@ -26,6 +26,14 @@ describe("Desktop Project startup wiring", () => {
     expect(projectHomeSource).not.toContain("controller.initialize()")
   })
 
+  test("keeps deferred onboarding as an explicit bottom-left resume task", () => {
+    expect(indexSource).toContain("readConvaxOnboardingProgress(localStorage)")
+    expect(indexSource).toContain("showDeferredOnboardingTask")
+    expect(indexSource).toContain("<ConvaxOnboardingTaskCard")
+    expect(indexSource).toContain('data-convax-onboarding-overlay="true"')
+    expect(indexSource).toContain("onDismiss={() => setConvaxOnboardingOverlayOpen(false)}")
+  })
+
   test("restores an available Project through the existing workspace coordinator", () => {
     expect(indexSource).toContain('desktopSurface.kind !== "home"')
     expect(indexSource).toContain("workspaceEntryCoordinator")
@@ -35,14 +43,13 @@ describe("Desktop Project startup wiring", () => {
     expect(indexSource).not.toContain("openDesktopHome")
   })
 
-  test("packaged smoke seeds a Project without bypassing collaboration authority", () => {
-    expect(packagedSmokeSource).toContain("the packaged local Project authority recovery surface")
-    expect(packagedSmokeSource).toContain("OS-backed replica signing vault is unavailable")
-    expect(packagedSmokeSource).toContain("The packaged Desktop exposed a Canvas without admitted local authority")
+  test("packaged smoke exercises current local authority without Team bootstrap", () => {
+    expect(packagedSmokeSource).toContain("the packaged Project's current local authority and initial Canvas")
+    expect(packagedSmokeSource).toContain('document.querySelector(".convax-canvas")')
+    expect(packagedSmokeSource).not.toContain("safeStorage")
+    expect(packagedSmokeSource).not.toContain("secure-vault-unavailable")
     expect(packagedSmokeSource).toContain("showed first-run onboarding despite having a seeded Project")
-    expect(packagedSmokeSource).not.toContain(
-      'await waitFor(() => document.querySelector(".convax-canvas"), "the packaged Canvas")',
-    )
+    expect(packagedSmokeSource).toContain("delete environment.CONVAX_COLLABORATION_CONTROL_RUNTIME")
     expect(packagedSmokeSource).not.toContain("the packaged Home or Canvas")
     expect(packagedSmokeSource).not.toContain("the seeded Project entry")
   })

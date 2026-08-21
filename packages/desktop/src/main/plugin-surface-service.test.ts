@@ -1,12 +1,9 @@
 import { describe, expect, mock, test } from "bun:test"
 import type { PortableBoundedValueSchemaV1 } from "@convax/plugin-sdk"
 
-import { webPluginManifestSchemaV8 } from "../plugin-contracts"
+import { webPluginManifestSchemaV8, webPluginManifestSchemaV9 } from "../plugin-contracts"
 import { PluginSurfaceService } from "./plugin-surface-service"
-import {
-  PluginStateSchemaAuthorityV1,
-  type PluginStateSchemaRuntimePort,
-} from "./plugin-state-schema-authority"
+import { PluginStateSchemaAuthorityV1, type PluginStateSchemaRuntimePort } from "./plugin-state-schema-authority"
 
 const schema = Object.freeze({
   type: "object" as const,
@@ -58,7 +55,7 @@ describe("PluginSurfaceService", () => {
       plugins: {
         acquireActivePlugin: mock(async () => ({
           identity,
-          plugin: installedPlugin(schema),
+          plugin: installedPlugin(schema, webPluginManifestSchemaV9),
           release: mock(() => undefined),
         })),
         assertCurrentActivePlugin,
@@ -157,9 +154,12 @@ describe("PluginSurfaceService", () => {
   })
 })
 
-function installedPlugin(stateSchema: PortableBoundedValueSchemaV1 | undefined) {
+function installedPlugin(
+  stateSchema: PortableBoundedValueSchemaV1 | undefined,
+  manifestSchema: typeof webPluginManifestSchemaV8 | typeof webPluginManifestSchemaV9 = webPluginManifestSchemaV8,
+) {
   return {
-    schema: webPluginManifestSchemaV8,
+    schema: manifestSchema,
     hostApi: { required: [], optional: [] },
     id: identity.pluginId,
     name: "Surface Plugin",

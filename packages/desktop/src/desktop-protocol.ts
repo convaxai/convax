@@ -1,12 +1,11 @@
 import type { CanvasResourceSource } from "@convax/canvas/application"
 import type { BoundedOperationReceipt } from "@convax/canvas/collaboration"
 import type { CanvasDocument, CanvasPoint } from "@convax/canvas/core"
-import type { CanvasTextResourceService } from "@convax/canvas"
 import type { Digest, Id128 } from "@convax/collaboration"
 import type { CanvasSessionProjectionDto } from "./canvas-session-contracts"
 
 export const desktopProtocolChannel = "desktop:protocol-version"
-export const desktopProtocolVersion = "convax.desktop-ipc/39"
+export const desktopProtocolVersion = "convax.desktop-ipc/43"
 export const canvasResourceIpcChannel = "canvas:resource-add"
 export const canvasResourceHydrateStaleIpcChannel = "canvas:resource-hydrate-stale"
 export const canvasResourceLocalFileRegisterIpcChannel = "canvas:resource-local-file-register"
@@ -15,7 +14,19 @@ export const canvasResourceRelinkIpcChannel = "canvas:resource-relink"
 export const canvasResourceSaveEditableCopyIpcChannel = "canvas:resource-save-editable-copy"
 export const canvasTextResourceIpcChannel = "canvas:text-resource-save"
 
-export type CanvasTextResourceClient = CanvasTextResourceService
+export interface CanvasTextResourceClient {
+  save(
+    input: {
+      canvasId: string
+      content: string
+      contentRevision: string
+      nodeId: string
+      projectId: string
+      sessionId: Id128
+    },
+    signal: AbortSignal,
+  ): Promise<{ contentRevision: string }>
+}
 
 export type CanvasResourceProjectionDelivery =
   | Readonly<{

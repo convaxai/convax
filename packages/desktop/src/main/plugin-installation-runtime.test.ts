@@ -9,9 +9,12 @@ import { parsePluginCapabilityDeclaration, type PluginCapabilityDeclaration } fr
 import { PluginInstallationClosureStore } from "./plugin-installation-closure-store"
 import { planPluginCapabilityTopology } from "./plugin-capability-binding-plan"
 import {
+  activePluginPointerSchema,
   ActivePluginSetRevisionConflictError,
+  legacyActivePluginSetSnapshotSchema,
   PluginInstallationSnapshotStore,
   pluginSnapshotCanonicalDigest,
+  pluginSnapshotCanonicalJson,
 } from "./plugin-installation-snapshots"
 import {
   PluginExecutionSetupRequiredError,
@@ -235,11 +238,50 @@ describe("PluginInstallationRuntime", () => {
     if (!companionPath) throw new Error("Expected an active companion")
     expect(await fs.readFile(companionPath, "utf8")).toBe("native:alpha")
     expect(handle.descriptor.authorizations.companionExecutionDigest).toMatch(/^[a-f0-9]{64}$/)
+    expect(handle.installationActivationId).toMatch(/^[a-f0-9]{64}$/)
 
     handle.release()
     handle.release()
     expect(handle.released).toBe(true)
     await expect(handle.resolveAsset("index.html")).rejects.toThrow("lease has been released")
+  })
+
+  test("runs an existing v8 Plugin from a byte-exact legacy v1 ActiveSet", async () => {
+    const { root, runtime } = await fixture()
+    const published = await runtime.publish(0, candidate("alpha", { companion: true, companionAuthorized: true }))
+    const current = await new PluginInstallationSnapshotStore(path.join(root, "state")).readActive()
+    if (!current.activeSet) throw new Error("Expected an active Plugin set")
+    const legacyDescriptor = {
+      capabilityTopology: current.activeSet.descriptor.capabilityTopology,
+      plugins: published.plugins.map(({ identity }) => ({
+        pluginId: identity.pluginId,
+        snapshotDigest: identity.snapshotDigest,
+      })),
+      schema: legacyActivePluginSetSnapshotSchema,
+    }
+    const legacyDigest = pluginSnapshotCanonicalDigest(legacyDescriptor)
+    await fs.writeFile(
+      path.join(root, "state", "active-sets", `${legacyDigest}.json`),
+      `${pluginSnapshotCanonicalJson(legacyDescriptor)}\n`,
+      { mode: 0o400 },
+    )
+    await fs.writeFile(
+      path.join(root, "state", "active-pointer.json"),
+      `${pluginSnapshotCanonicalJson({
+        activeSetDigest: legacyDigest,
+        revision: 2,
+        schema: activePluginPointerSchema,
+      })}\n`,
+      { mode: 0o600 },
+    )
+
+    const reopened = new PluginInstallationRuntime(root)
+    const active = await reopened.readActive()
+    expect(active).toMatchObject({ activeSetDigest: legacyDigest, revision: 2 })
+    const handle = await reopened.acquireActivePlugin("alpha")
+    expect(handle.installationActivationId).toBeUndefined()
+    expect(await handle.resolveCompanion()).toMatch(/\/closures\//)
+    handle.release()
   })
 
   test("rejects an LLM snapshot without the current explicit provider protocol", async () => {
@@ -307,6 +349,7 @@ describe("PluginInstallationRuntime", () => {
     await runtime.publish(0, candidate("alpha", { companion: true }))
 
     const handle = await runtime.acquireActivePlugin("alpha")
+    const installationActivationId = handle.installationActivationId
     await expect(handle.resolveCompanion()).rejects.toBeInstanceOf(PluginExecutionSetupRequiredError)
     handle.release()
 
@@ -318,7 +361,34 @@ describe("PluginInstallationRuntime", () => {
     if (!companion) throw new Error("Expected an authorized immutable companion")
     expect(await fs.readFile(companion, "utf8")).toBe("native:alpha")
     expect(authorizedHandle.identity.snapshotDigest).not.toBe(handle.identity.snapshotDigest)
+    expect(authorizedHandle.installationActivationId).toBe(installationActivationId)
     authorizedHandle.release()
+  })
+
+  test("publishes one atomic per-install activation and never rotates it for unrelated Plugins", async () => {
+    const { runtime } = await fixture()
+    await runtime.publish(0, candidate("alpha", { companion: true, companionAuthorized: true }))
+    const first = await runtime.acquireActivePlugin("alpha")
+    const firstActivation = first.installationActivationId
+    first.release()
+
+    await runtime.publish(1, candidate("bravo"))
+    const afterUnrelated = await runtime.acquireActivePlugin("alpha")
+    expect(afterUnrelated.installationActivationId).toBe(firstActivation)
+    afterUnrelated.release()
+
+    await runtime.publish(2, candidate("alpha", { companion: true, companionAuthorized: true }))
+    const republished = await runtime.acquireActivePlugin("alpha")
+    expect(republished.installationActivationId).toMatch(/^[a-f0-9]{64}$/)
+    expect(republished.installationActivationId).not.toBe(firstActivation)
+    const republishedActivation = republished.installationActivationId
+    republished.release()
+
+    await runtime.uninstall(3, "alpha")
+    await runtime.publish(4, candidate("alpha", { companion: true, companionAuthorized: true }))
+    const reinstalled = await runtime.acquireActivePlugin("alpha")
+    expect(reinstalled.installationActivationId).not.toBe(republishedActivation)
+    reinstalled.release()
   })
 
   test("derives static Plugin authorization from the exact capability contract and package bytes", async () => {
@@ -446,8 +516,12 @@ describe("PluginInstallationRuntime", () => {
     const published = await snapshots.compareAndSwapActiveSet(0, {
       capabilityTopology: topologyResult.topology,
       plugins: [
-        { pluginId: "legacy", snapshotDigest: legacy.snapshot.digest },
-        { pluginId: "legacy-other", snapshotDigest: other.snapshot.digest },
+        { activationId: sha256("legacy activation"), pluginId: "legacy", snapshotDigest: legacy.snapshot.digest },
+        {
+          activationId: sha256("legacy-other activation"),
+          pluginId: "legacy-other",
+          snapshotDigest: other.snapshot.digest,
+        },
       ],
     })
 
@@ -508,7 +582,7 @@ describe("PluginInstallationRuntime", () => {
     })
     await expect(
       wrongPluginRuntime.publishRetiredHostApiRecovery(
-      1,
+        1,
         { ...candidate("legacy", { version: "2.0.0" }), sourceIdentity: replacementSource },
         recovery.plugins[0]!,
       ),

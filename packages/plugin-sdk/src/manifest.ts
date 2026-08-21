@@ -39,8 +39,13 @@ import {
   validatePortableSkillToolReferences,
   type PortablePluginSkillContribution,
 } from "./skills"
+import {
+  parsePortablePluginServiceContributionsV9,
+  type PortablePluginServiceContributionV9,
+} from "./service-contributions-v9"
 
 export const portablePluginManifestV8Schema = "convax.plugin/8" as const
+export const portablePluginManifestV9Schema = "convax.plugin/9" as const
 export const portablePluginManifestFileName = "manifest.json" as const
 
 export const portablePluginCapabilities = [
@@ -96,6 +101,8 @@ export interface PortablePluginContributions {
   readonly llm?: PortablePluginLlmContribution
   readonly pet?: PortablePluginPetContribution
   readonly service?: PortablePluginServiceContribution
+  /** Type-level discriminator only; convax.plugin/8 remains closed and never admits this key. */
+  readonly services?: never
   readonly skills?: readonly PortablePluginSkillContribution[]
 }
 
@@ -113,6 +120,36 @@ export interface PortablePluginManifestV8 {
   readonly schema: typeof portablePluginManifestV8Schema
   readonly version: string
 }
+
+export interface PortablePluginContributionsV9 {
+  readonly agent?: PortablePluginAgentContribution
+  readonly capabilities?: PluginCapabilityDeclaration
+  readonly canvas?: PortablePluginCanvasContribution
+  readonly generation?: PortablePluginGenerationContribution
+  readonly llm?: PortablePluginLlmContribution
+  readonly pet?: PortablePluginPetContribution
+  readonly services?: readonly PortablePluginServiceContributionV9[]
+  /** Type-level discriminator only; convax.plugin/9 never admits the v8 singleton key. */
+  readonly service?: never
+  readonly skills?: readonly PortablePluginSkillContribution[]
+}
+
+export interface PortablePluginManifestV9 {
+  readonly capabilities: readonly PortablePluginCapability[]
+  readonly contributes: PortablePluginContributionsV9
+  readonly description: string
+  readonly entry?: string
+  readonly hooks?: string
+  readonly hostApi: PluginApiDeclaration<string>
+  readonly id: string
+  readonly i18n?: PortablePluginI18n
+  readonly name: string
+  readonly runtime?: PortablePluginMcpStdioRuntime
+  readonly schema: typeof portablePluginManifestV9Schema
+  readonly version: string
+}
+
+export type PortablePluginManifest = PortablePluginManifestV8 | PortablePluginManifestV9
 
 export interface ParsePortablePluginManifestV8Options {
   /**
@@ -164,6 +201,48 @@ function validateCanvasEnvelope(input: {
   }
   if (entry !== undefined && !hostApi.required.includes("host.context.get")) {
     throw new TypeError("convax.plugin/8 Web Plugins must require host.context.get")
+  }
+  if (
+    (canvas?.commands !== undefined || canvas?.menus !== undefined || canvas?.toolbar !== undefined) &&
+    canvas.renderer === undefined
+  ) {
+    throw new TypeError("Canvas UI commands require a sandboxed Canvas renderer")
+  }
+  if (capabilities.includes("generation.execute") && canvas?.renderer === undefined) {
+    throw new TypeError("generation.execute requires a sandboxed Canvas surface")
+  }
+  if (
+    canvas &&
+    canvas.renderer === undefined &&
+    !canvas.selectionActions?.length &&
+    !canvas.commands?.length &&
+    !canvas.menus?.length &&
+    !canvas.toolbar?.length
+  ) {
+    throw new TypeError("Canvas contributions must declare a renderer, selection actions, or UI commands")
+  }
+  if (
+    canvas?.selectionActions?.some(
+      (action) => "action" in action && action.action.type === "materialize-own-plugin-node",
+    ) &&
+    canvas.renderer === undefined
+  ) {
+    throw new TypeError("materialize-own-plugin-node requires the contributing Plugin renderer")
+  }
+}
+
+function validateCanvasEnvelopeV9(input: {
+  capabilities: readonly PortablePluginCapability[]
+  canvas?: PortablePluginCanvasContribution
+  entry?: string
+  hostApi: PluginApiDeclaration<string>
+}) {
+  const { capabilities, canvas, entry, hostApi } = input
+  if ((entry !== undefined) !== (canvas?.renderer !== undefined)) {
+    throw new TypeError("Plugin entry and Canvas renderer must appear together")
+  }
+  if (entry !== undefined && !hostApi.required.includes("host.context.get")) {
+    throw new TypeError("convax.plugin/9 Web Plugins must require host.context.get")
   }
   if (
     (canvas?.commands !== undefined || canvas?.menus !== undefined || canvas?.toolbar !== undefined) &&
@@ -277,10 +356,7 @@ export function parsePortablePluginManifestV8(
     rawContributions.generation === undefined
       ? undefined
       : parsePortablePluginGenerationContribution(rawContributions.generation)
-  const llm =
-    rawContributions.llm === undefined
-      ? undefined
-      : parsePortablePluginLlmContribution(rawContributions.llm)
+  const llm = rawContributions.llm === undefined ? undefined : parsePortablePluginLlmContribution(rawContributions.llm)
   const pet = rawContributions.pet === undefined ? undefined : parsePortablePluginPetContribution(rawContributions.pet)
   const service =
     rawContributions.service === undefined
@@ -376,6 +452,194 @@ export function parsePluginManifestV8<const Manifest extends PortablePluginManif
 export function parsePluginManifestV8(value: unknown): PortablePluginManifestV8
 export function parsePluginManifestV8(value: unknown): PortablePluginManifestV8 {
   return parsePortablePluginManifestV8(value, { hostApiMode: "authoring" })
+}
+
+/**
+ * Canonical authoring and runtime parser for convax.plugin/9. The v8 parser is
+ * intentionally separate so released singleton-Service manifests keep their
+ * exact closed grammar and normalized representation.
+ */
+export function parsePortablePluginManifestV9(
+  value: unknown,
+  options: ParsePortablePluginManifestV8Options = {},
+): PortablePluginManifestV9 {
+  const input = portableRecord(value, "Plugin manifest")
+  assertPortableKeys(
+    input,
+    [
+      "capabilities",
+      "contributes",
+      "description",
+      "entry",
+      "hooks",
+      "hostApi",
+      "id",
+      "i18n",
+      "name",
+      "runtime",
+      "schema",
+      "version",
+    ],
+    "Plugin manifest",
+  )
+  if (input.schema !== portablePluginManifestV9Schema) {
+    throw new TypeError("Plugin manifest must use convax.plugin/9")
+  }
+  if (!Object.prototype.hasOwnProperty.call(input, "hostApi")) {
+    throw new TypeError("convax.plugin/9 must declare hostApi explicitly")
+  }
+  const hostApi =
+    options.hostApiMode === "authoring"
+      ? parsePluginApiDeclaration(input.hostApi)
+      : parseRuntimePluginApiDeclaration(input.hostApi)
+  const i18n = input.i18n === undefined ? undefined : parsePortablePluginI18n(input.i18n)
+  if (i18n !== undefined && !hostApi.required.includes("host.locale.get")) {
+    throw new TypeError("Plugins that declare i18n must require host.locale.get")
+  }
+  const capabilities = parseCapabilities(input.capabilities)
+  const id = parsePortablePluginId(input.id)
+  const rawContributions = portableRecord(input.contributes, "Plugin contributions")
+  assertPortableKeys(
+    rawContributions,
+    ["agent", "canvas", "capabilities", "generation", "llm", "pet", "services", "skills"],
+    "Plugin contributions",
+  )
+  const { entry, hooks } = parseEntryAndHooks(input)
+  const canvas =
+    rawContributions.canvas === undefined ? undefined : parsePortablePluginCanvasContribution(rawContributions.canvas)
+  validateCanvasEnvelopeV9({ capabilities, canvas, entry, hostApi })
+
+  const agent =
+    rawContributions.agent === undefined ? undefined : parsePortablePluginAgentContribution(rawContributions.agent)
+  const interPluginCapabilities =
+    rawContributions.capabilities === undefined
+      ? undefined
+      : parsePluginCapabilityDeclaration(rawContributions.capabilities)
+  const generation =
+    rawContributions.generation === undefined
+      ? undefined
+      : parsePortablePluginGenerationContribution(rawContributions.generation)
+  const llm = rawContributions.llm === undefined ? undefined : parsePortablePluginLlmContribution(rawContributions.llm)
+  const pet = rawContributions.pet === undefined ? undefined : parsePortablePluginPetContribution(rawContributions.pet)
+  const skills = parsePortablePluginSkills(rawContributions.skills, hostApi)
+  const runtime = input.runtime === undefined ? undefined : parsePortablePluginRuntime(input.runtime)
+  const services =
+    rawContributions.services === undefined
+      ? undefined
+      : parsePortablePluginServiceContributionsV9(rawContributions.services, runtime, id)
+  const hasExecutableContribution =
+    generation !== undefined ||
+    llm !== undefined ||
+    services !== undefined ||
+    Boolean(interPluginCapabilities?.exports.length)
+
+  if ((runtime !== undefined) !== hasExecutableContribution) {
+    if (interPluginCapabilities?.exports.length && runtime === undefined) {
+      throw new TypeError("Plugin capability exports require a verified mcp-stdio runtime")
+    }
+    throw new TypeError("convax.plugin/9 runtime and executable contribution must appear together")
+  }
+  if (interPluginCapabilities?.exports.length && runtime === undefined) {
+    throw new TypeError("Plugin capability exports require a verified mcp-stdio runtime")
+  }
+  validatePetEnvelope(capabilities, pet, runtime)
+  validatePortableToolReferences({
+    agent,
+    generation,
+    selectionActions: canvas?.selectionActions,
+  })
+  validatePortableSkillToolReferences(skills, agent)
+
+  const projectCanvasCapabilities = new Set<PortablePluginCapability>(portablePluginProjectCanvasCapabilities)
+  const hasProjectCanvasCapability = capabilities.some((capability) => projectCanvasCapabilities.has(capability))
+  if (
+    canvas?.renderer === undefined &&
+    !canvas?.selectionActions?.length &&
+    !hasExecutableContribution &&
+    hooks === undefined &&
+    !capabilities.includes("generation.execute") &&
+    !hasProjectCanvasCapability &&
+    pet === undefined &&
+    (interPluginCapabilities?.exports.length ?? 0) === 0 &&
+    agent?.mcp === undefined
+  ) {
+    throw new TypeError("convax.plugin/9 must declare a Plugin capability beyond owned Skills")
+  }
+
+  return deepFreezePortable({
+    capabilities,
+    contributes: {
+      ...(agent === undefined ? {} : { agent }),
+      ...(interPluginCapabilities === undefined ? {} : { capabilities: interPluginCapabilities }),
+      ...(canvas === undefined ? {} : { canvas }),
+      ...(generation === undefined ? {} : { generation }),
+      ...(llm === undefined ? {} : { llm }),
+      ...(pet === undefined ? {} : { pet }),
+      ...(services === undefined ? {} : { services }),
+      ...(skills === undefined ? {} : { skills }),
+    },
+    description: portableText(input.description, "Plugin description", 2_000),
+    ...(entry === undefined ? {} : { entry }),
+    ...(hooks === undefined ? {} : { hooks }),
+    hostApi,
+    id,
+    ...(i18n === undefined ? {} : { i18n }),
+    name: portableText(input.name, "Plugin name", 120),
+    ...(runtime === undefined ? {} : { runtime }),
+    schema: portablePluginManifestV9Schema,
+    version: parsePortablePluginVersion(input.version),
+  })
+}
+
+export type ParsedPortablePluginManifestV9<Manifest extends PortablePluginManifestV9> = Omit<
+  PortablePluginManifestV9,
+  "contributes" | "hostApi"
+> & {
+  readonly contributes: Omit<PortablePluginContributionsV9, "capabilities"> & {
+    readonly capabilities?: Manifest["contributes"] extends {
+      readonly capabilities: infer Capabilities extends PluginCapabilityDeclaration
+    }
+      ? Capabilities
+      : never
+  }
+  readonly hostApi: Manifest["hostApi"]
+}
+
+export function parsePluginManifestV9<const Manifest extends PortablePluginManifestV9>(
+  value: Manifest,
+): ParsedPortablePluginManifestV9<Manifest>
+export function parsePluginManifestV9(value: unknown): PortablePluginManifestV9
+export function parsePluginManifestV9(value: unknown): PortablePluginManifestV9 {
+  return parsePortablePluginManifestV9(value, { hostApiMode: "authoring" })
+}
+
+export function parsePortablePluginManifest(
+  value: unknown,
+  options: ParsePortablePluginManifestV8Options = {},
+): PortablePluginManifest {
+  const input = portableRecord(value, "Plugin manifest")
+  if (input.schema === portablePluginManifestV8Schema) {
+    return parsePortablePluginManifestV8(value, options)
+  }
+  if (input.schema === portablePluginManifestV9Schema) {
+    return parsePortablePluginManifestV9(value, options)
+  }
+  throw new TypeError("Plugin manifest must use convax.plugin/8 or convax.plugin/9")
+}
+
+export type ParsedPortablePluginManifest<Manifest extends PortablePluginManifest> =
+  Manifest extends PortablePluginManifestV8
+    ? ParsedPortablePluginManifestV8<Manifest>
+    : Manifest extends PortablePluginManifestV9
+      ? ParsedPortablePluginManifestV9<Manifest>
+      : never
+
+export function parsePluginManifest<const Manifest extends PortablePluginManifest>(
+  value: Manifest,
+): ParsedPortablePluginManifest<Manifest>
+export function parsePluginManifest(value: unknown): PortablePluginManifest
+export function parsePluginManifest(value: unknown): PortablePluginManifest {
+  return parsePortablePluginManifest(value, { hostApiMode: "authoring" })
 }
 
 // Historical source-level exports retained while ownership lives in primitives.

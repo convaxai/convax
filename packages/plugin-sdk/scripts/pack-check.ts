@@ -80,7 +80,7 @@ try {
   await Bun.write(
     join(consumerRoot, "index.ts"),
     [
-      'import { parsePluginCapabilityDeclaration, parsePluginManifestV8, parsePortablePluginCanvasUiContribution, renderPluginCapabilityReference, type PortablePluginManifestV8 } from "@convax/plugin-sdk"',
+      'import { parsePluginCapabilityDeclaration, parsePluginManifest, parsePluginManifestV8, parsePortablePluginCanvasUiContribution, renderPluginCapabilityReference, type PortablePluginManifest, type PortablePluginManifestV8 } from "@convax/plugin-sdk"',
       'import { createPluginHostClient, pluginHostProtocolV8, type PluginHostMessagePort } from "@convax/plugin-sdk/client"',
       'import { connectPetHost, petHostProtocol, type PetHostClient } from "@convax/plugin-sdk/pet-client"',
       "const declaration = parsePluginCapabilityDeclaration({ exports: [], imports: { required: [], optional: [] } })",
@@ -88,6 +88,8 @@ try {
       "void parsePortablePluginCanvasUiContribution({ commands: [], menus: [], toolbar: [] })",
       'const manifest: PortablePluginManifestV8 = parsePluginManifestV8({ capabilities: [], contributes: { canvas: { renderer: { create: true } } }, description: "External consumer", entry: "index.html", hostApi: { major: 3, optional: [], required: ["host.context.get"] }, id: "external-consumer", name: "External Consumer", schema: "convax.plugin/8", version: "1.0.0" })',
       "void manifest",
+      'const multiServiceManifest: PortablePluginManifest = parsePluginManifest({ capabilities: [], contributes: { services: [{ actions: [], description: "First service", generation: { models: [{ name: "Image Model", tool: "image.generate" }], tools: [{ acceptedInputs: [], description: "Generate image", id: "image.generate", output: "image", title: "Generate image" }] }, id: "first-service", name: "First Service", runtime: { args: ["--provider=first"] } }, { actions: [], description: "Second service", generation: { models: [{ name: "Image Model", tool: "image.generate" }], tools: [{ acceptedInputs: [], description: "Generate image", id: "image.generate", output: "image", title: "Generate image" }] }, id: "second-service", name: "Second Service", runtime: { args: ["--provider=second"] } }] }, description: "External multi-Service consumer", hostApi: { major: 3, optional: [], required: [] }, id: "external-multi-service", name: "External Multi Service", runtime: { command: "external-mcp", type: "mcp-stdio" }, schema: "convax.plugin/9", version: "1.0.0" })',
+      "void multiServiceManifest",
       "declare const port: PluginHostMessagePort",
       "const client = createPluginHostClient({ manifest, port })",
       "void client.closed",

@@ -1,9 +1,15 @@
 import { createHash, randomUUID } from "node:crypto"
 import fs from "node:fs/promises"
 import path from "node:path"
+import { isDeepStrictEqual } from "node:util"
 
 import type { GenerationToolSummary } from "../generation-contracts"
-import { parseWebPluginManifest, webPluginManifestSchemaV8, type InstalledWebPluginSummary } from "../plugin-contracts"
+import {
+  parseWebPluginManifest,
+  webPluginManifestSchemaV8,
+  webPluginManifestSchemaV9,
+  type InstalledWebPluginSummary,
+} from "../plugin-contracts"
 import type { ActivePluginRuntimeIdentity } from "./plugin-installation-runtime"
 import { pluginSnapshotCanonicalDigest, type PluginSnapshotByteIdentity } from "./plugin-installation-snapshots"
 
@@ -169,11 +175,26 @@ function parseRecord(value: unknown): GenerationRecoveryRuntimeRecord {
     value.executionBindingDigest,
     "Pinned generation recovery execution binding",
   )
-  const tool = structuredClone(value.tool) as unknown as GenerationToolSummary
+  const rawTool = structuredClone(value.tool) as unknown as GenerationToolSummary & { serviceId?: string }
+  const tool: GenerationToolSummary = {
+    ...rawTool,
+    serviceId: rawTool.serviceId ?? plugin.id,
+  }
+  const declaredTool =
+    plugin.schema === webPluginManifestSchemaV8
+      ? tool.serviceId === plugin.id && plugin.contributes.generation?.tools.some(({ id }) => id === tool.toolId)
+      : plugin.schema === webPluginManifestSchemaV9
+        ? (tool.serviceId === plugin.id && plugin.contributes.generation?.tools.some(({ id }) => id === tool.toolId)) ||
+          plugin.contributes.services?.some(
+            (service) =>
+              service.id === tool.serviceId && service.generation?.tools.some(({ id }) => id === tool.toolId),
+          )
+        : false
   if (
     tool.recovery !== "long-running-operation" ||
     tool.pluginId !== plugin.id ||
-    plugin.schema !== webPluginManifestSchemaV8 ||
+    !/^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(tool.serviceId) ||
+    !declaredTool ||
     !plugin.hostApi ||
     plugin.runtime?.type !== "mcp-stdio" ||
     plugin.id !== pluginIdentity.pluginId ||
@@ -256,7 +277,7 @@ export class GenerationRecoveryRuntimeStore {
       const target = path.join(root, validated.executionBindingDigest)
       try {
         const existing = await this.open(validated.executionBindingDigest)
-        if (JSON.stringify(existing) !== JSON.stringify(validated)) {
+        if (!isDeepStrictEqual(existing, validated)) {
           throw new Error("Pinned generation recovery execution binding already has another record")
         }
         return existing
@@ -281,7 +302,7 @@ export class GenerationRecoveryRuntimeStore {
           await fs.rm(temporary, { force: true, recursive: true })
         }
         const published = await this.open(validated.executionBindingDigest)
-        if (JSON.stringify(published) !== JSON.stringify(validated)) {
+        if (!isDeepStrictEqual(published, validated)) {
           throw new Error("Pinned generation recovery execution binding already has another record")
         }
         return published

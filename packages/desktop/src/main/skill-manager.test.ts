@@ -31,8 +31,9 @@ async function fixture(
   }
   const mutations = new DesktopSkillMutationCoordinator()
   const refreshSkills = mock(async () => undefined)
+  const listSkills = mock(async () => globalSkills)
   const runtime = {
-    listSkills: mock(async () => globalSkills),
+    listSkills,
     refreshSkills,
   }
   const presentations = includePresentation
@@ -76,7 +77,7 @@ async function fixture(
     ownership,
     mutations,
   )
-  return { globalSkills, manager, mutations, ownership, refreshSkills, root, store }
+  return { globalSkills, listSkills, manager, mutations, ownership, refreshSkills, root, store }
 }
 
 describe("DesktopSkillManager", () => {
@@ -91,6 +92,24 @@ describe("DesktopSkillManager", () => {
       expect(setup.refreshSkills).not.toHaveBeenCalled()
     } finally {
       unsubscribe()
+      await rm(setup.root, { force: true, recursive: true })
+    }
+  })
+
+  test("installs cold-start Marketplace bytes without observing or refreshing OpenCode", async () => {
+    const setup = await fixture([{ location: "/global/storyboard/SKILL.md", name: "storyboard" }])
+    try {
+      await expect(
+        setup.manager.installFromFilesAtStartup(
+          { "SKILL.md": skill("storyboard"), "references/guide.md": "# Guide" },
+          "storyboard",
+        ),
+      ).resolves.toMatchObject({ name: "storyboard" })
+
+      expect(setup.listSkills).not.toHaveBeenCalled()
+      expect(setup.refreshSkills).not.toHaveBeenCalled()
+      expect(await setup.store.inspect("storyboard")).toMatchObject({ name: "storyboard" })
+    } finally {
       await rm(setup.root, { force: true, recursive: true })
     }
   })
@@ -358,6 +377,7 @@ describe("DesktopSkillManager", () => {
       await writeFile(join(source, "SKILL.md"), skill("storyboard"))
       const attempts = [
         () => setup.manager.installManagedAtStartup(source),
+        () => setup.manager.installFromFilesAtStartup({ "SKILL.md": skill("storyboard") }, "storyboard"),
         () => setup.manager.importFromDirectory(source),
         () => setup.manager.installFromFiles({ "SKILL.md": skill("storyboard") }),
         () => setup.manager.installCatalogSkill("storyboard"),

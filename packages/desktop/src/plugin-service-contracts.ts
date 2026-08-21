@@ -48,9 +48,11 @@ export interface PluginServiceSummary {
   actions: readonly WebPluginServiceAction[]
   capabilities: readonly ServiceCapability[]
   description: string
+  llmProviderIds: readonly string[]
   models: readonly ServiceModelSummary[]
   pluginId: string
   pluginName: string
+  serviceId: string
   version: string
 }
 
@@ -113,6 +115,7 @@ export type PluginServiceUsageHistory =
 
 export interface PluginServiceTarget {
   pluginId: string
+  serviceId: string
 }
 
 export interface PluginServiceCheckoutTarget extends PluginServiceTarget {
@@ -130,6 +133,22 @@ export interface PluginServiceClient {
   onDidChange(listener: () => void): () => void
   reauthorize(input: PluginServiceTarget): Promise<PluginServiceStatus>
   signOut(input: PluginServiceTarget): Promise<PluginServiceStatus>
+}
+
+const pluginServiceIdPattern = /^[a-z0-9]+(?:-[a-z0-9]+)*$/
+
+export function isPluginServiceId(value: unknown): value is string {
+  return typeof value === "string" && value.length <= 80 && pluginServiceIdPattern.test(value)
+}
+
+export function requirePluginServiceId(value: unknown) {
+  if (!isPluginServiceId(value)) throw new Error("Plugin service id must use kebab-case")
+  return value
+}
+
+/** Unambiguous process-neutral identity for maps and operation de-duplication. */
+export function pluginServiceTargetKey(target: PluginServiceTarget) {
+  return JSON.stringify([target.pluginId, target.serviceId])
 }
 
 const states = new Set<unknown>(["connected", "disconnected", "attention", "unknown"])

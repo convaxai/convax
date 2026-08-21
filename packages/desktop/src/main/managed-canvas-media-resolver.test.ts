@@ -5,6 +5,9 @@ import path from "node:path"
 
 import { createCanvasDocument, createMediaNode } from "@convax/canvas"
 import type { CanvasApplicationService } from "@convax/canvas/application"
+import { canvasProjectionResourceMetadataKey, type CanvasResourceRef } from "@convax/canvas/collaboration"
+import { encodeBase64url, ordinarySha256, parseId128, parseProjectId } from "@convax/collaboration"
+import { parseProjectIndexResourceReference, projectIndexResourceReferenceDigest } from "@convax/project"
 import { projectResourceReferenceKey, type ProjectResourceReference } from "@convax/project/canvas"
 
 import { ManagedCanvasMediaResolver } from "./managed-canvas-media-resolver"
@@ -50,6 +53,59 @@ function applicationFor(document: ReturnType<typeof audioDocument>): Pick<Canvas
   return { query: mock(async () => ({ nodes: [], projection: document })) }
 }
 
+function noCurrentResources() {
+  return { queryCurrentResources: mock(async () => []) }
+}
+
+function canonicalImageFixture(bytes: Uint8Array) {
+  const projectId = parseProjectId("project-one")
+  const projectEpoch = parseId128(encodeBase64url(new Uint8Array(16).fill(1)))
+  const digest = ordinarySha256(bytes)
+  const fileId = `pf_${"a".repeat(64)}`
+  const reference = parseProjectIndexResourceReference({
+    blob: {
+      algorithm: "sha256",
+      byteLength: String(bytes.byteLength),
+      digest,
+      format: "convax.blob-ref",
+      mime: "image/png",
+    },
+    canonicalUri: `convax-project://${projectId}/epochs/${projectEpoch}/entries/${fileId}?blob=sha256%3A${digest}`,
+    entryFileId: fileId,
+    familyPrimaryFileId: fileId,
+    format: "convax.project-resource-reference",
+    projectEpoch,
+    projectId,
+    versionId: `pv_${"b".repeat(64)}`,
+    versionRecordDigest: ordinarySha256(new TextEncoder().encode(`version:${digest}`)),
+  })
+  const resource: CanvasResourceRef = {
+    byteLength: reference.blob.byteLength,
+    contentDigest: reference.blob.digest,
+    format: "convax.canvas-resource-ref",
+    mediaClass: "image",
+    mime: reference.blob.mime,
+    ownerProofDigest: projectIndexResourceReferenceDigest(reference),
+    uri: reference.canonicalUri,
+  }
+  const image = createMediaNode({
+    id: "image-1",
+    position: { x: 0, y: 0 },
+    resource: {
+      id: "image-resource",
+      kind: "image",
+      metadata: { [canvasProjectionResourceMetadataKey]: resource },
+      name: "Current image",
+      state: { status: "ready", url: "convax-asset://project/image" },
+    },
+  })
+  return {
+    document: createCanvasDocument({ id: "canvas-1", nodes: [image], title: "Canvas" }),
+    projectId,
+    reference,
+  }
+}
+
 describe("ManagedCanvasMediaResolver", () => {
   test("resolves a validated managed audio file with an immutable native identity", async () => {
     const { asset } = await setupAsset("soundtrack.mp3", Buffer.from("ID3\u0004\u0000\u0000"))
@@ -58,6 +114,7 @@ describe("ManagedCanvasMediaResolver", () => {
     const resolver = new ManagedCanvasMediaResolver({
       assets: { resolve: mock(async () => asset) },
       application: applicationFor(document),
+      currentResources: noCurrentResources(),
       projects: {
         readFileInfo: mock(async () => {
           throw new Error("Managed assets must not use Project file info")
@@ -102,6 +159,7 @@ describe("ManagedCanvasMediaResolver", () => {
     const resolver = new ManagedCanvasMediaResolver({
       assets: { resolve: mock(async () => linked) },
       application: applicationFor(linkedDocument),
+      currentResources: noCurrentResources(),
       projects: {
         readFileInfo: mock(async () => {
           throw new Error("Managed assets must not use Project file info")
@@ -128,6 +186,7 @@ describe("ManagedCanvasMediaResolver", () => {
     const forgedResolver = new ManagedCanvasMediaResolver({
       assets: { resolve: mock(async () => forged.asset) },
       application: applicationFor(forgedDocument),
+      currentResources: noCurrentResources(),
       projects: {
         readFileInfo: mock(async () => {
           throw new Error("Managed assets must not use Project file info")
@@ -147,5 +206,99 @@ describe("ManagedCanvasMediaResolver", () => {
         },
       ),
     ).rejects.toThrow("content does not match")
+  })
+
+  test("resolves a canonical Canvas resource through the current ProjectIndex projection", async () => {
+    const bytes = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a])
+    const { asset } = await setupAsset("current.png", bytes)
+    const fixture = canonicalImageFixture(bytes)
+    const current = [
+      {
+        materializedPath: "Media/current.png",
+        reference: fixture.reference,
+        storageClass: "project-file" as const,
+      },
+    ]
+    const queryCurrentResources = mock(async () => current)
+    const resolver = new ManagedCanvasMediaResolver({
+      assets: {
+        resolve: mock(async () => {
+          throw new Error("Project files must not use managed asset paths")
+        }),
+      },
+      application: applicationFor(fixture.document),
+      currentResources: { queryCurrentResources },
+      projects: {
+        readFileInfo: mock(async () => ({
+          kind: "file" as const,
+          mimeType: "image/png",
+          name: "current.png",
+          path: "Media/current.png",
+          size: bytes.byteLength,
+        })),
+        resolveEntryPath: mock(async () => asset),
+      },
+    })
+
+    const [resolved] = await resolver.resolve(
+      { canvasId: "canvas-1", nodeIds: ["image-1"], scopeId: fixture.projectId },
+      {
+        allowedKinds: new Set(["image"]),
+        allowedKindsDescription: "media",
+        operationLabel: "external drag",
+      },
+    )
+
+    expect(resolved).toMatchObject({
+      kind: "image",
+      mimeType: "image/png",
+      name: "current.png",
+      resourcePath: "Media/current.png",
+    })
+    expect(queryCurrentResources).toHaveBeenCalledTimes(2)
+  })
+
+  test("rejects a canonical resource when ProjectIndex ownership changes during preparation", async () => {
+    const bytes = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a])
+    const { asset } = await setupAsset("stale.png", bytes)
+    const fixture = canonicalImageFixture(bytes)
+    const current = [
+      {
+        materializedPath: "Media/stale.png",
+        reference: fixture.reference,
+        storageClass: "project-file" as const,
+      },
+    ]
+    let queries = 0
+    const resolver = new ManagedCanvasMediaResolver({
+      assets: { resolve: mock(async () => asset) },
+      application: applicationFor(fixture.document),
+      currentResources: {
+        queryCurrentResources: mock(async () =>
+          ++queries === 1 ? current : [{ ...current[0]!, materializedPath: "Media/replaced.png" }],
+        ),
+      },
+      projects: {
+        readFileInfo: mock(async () => ({
+          kind: "file" as const,
+          mimeType: "image/png",
+          name: "stale.png",
+          path: "Media/stale.png",
+          size: bytes.byteLength,
+        })),
+        resolveEntryPath: mock(async () => asset),
+      },
+    })
+
+    await expect(
+      resolver.resolve(
+        { canvasId: "canvas-1", nodeIds: ["image-1"], scopeId: fixture.projectId },
+        {
+          allowedKinds: new Set(["image"]),
+          allowedKindsDescription: "media",
+          operationLabel: "external drag",
+        },
+      ),
+    ).rejects.toThrow("Project resource changed")
   })
 })

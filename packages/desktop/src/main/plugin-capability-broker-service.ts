@@ -93,7 +93,7 @@ function waitForSignal<Value>(promise: Promise<Value>, signal?: AbortSignal): Pr
 }
 
 /**
- * Main composition boundary for v8 Plugin-to-Plugin calls.
+ * Main composition boundary for released Plugin-to-Plugin calls.
  *
  * This service is deliberately separate from the Plugin Host API Catalog
  * dispatcher. The caller arrives as an exact capability/3 principal, provider

@@ -1,9 +1,9 @@
 import { expect, mock, test } from "bun:test"
 
-import type { InstalledWebPluginSummary } from "../plugin-contracts"
+import type { WebPluginManifestV8 } from "../plugin-contracts"
 import { authorizeMarketplacePluginSetup } from "./marketplace-plugin-setup-authorization"
 
-function plugin(overrides: Partial<InstalledWebPluginSummary> = {}): InstalledWebPluginSummary {
+function plugin(overrides: Partial<WebPluginManifestV8> = {}): WebPluginManifestV8 {
   return {
     capabilities: [],
     contributes: {
@@ -45,27 +45,7 @@ test("automatic product-lock setup authorizes only an exact managed Tool compani
   expect(authorizeHook).not.toHaveBeenCalled()
 })
 
-test("automatic product-lock setup admits a Service projection without performing a Service action", async () => {
-  const authorizeTool = mock(async () => "a".repeat(64))
-  const authorizeHook = mock(async () => "b".repeat(64))
-
-  await expect(
-    authorizeMarketplacePluginSetup(
-      plugin({
-        contributes: {
-          ...plugin().contributes,
-          service: { actions: ["authorize", "checkout"] },
-        },
-      }),
-      "automatic-product-lock",
-      { authorizeHook, authorizeTool },
-    ),
-  ).resolves.toMatch(/^[a-f0-9]{64}$/)
-  expect(authorizeTool).toHaveBeenCalledWith(expect.anything(), { requireManaged: true })
-  expect(authorizeHook).not.toHaveBeenCalled()
-})
-
-test("automatic product-lock setup rejects Hook and extra Plugin authority", async () => {
+test("automatic product-lock setup rejects Hook, Service, and extra Plugin authority", async () => {
   const dependencies = {
     authorizeHook: async () => null,
     authorizeTool: async () => "a".repeat(64),
@@ -75,36 +55,19 @@ test("automatic product-lock setup rejects Hook and extra Plugin authority", asy
   ).rejects.toThrow("Hook")
   await expect(
     authorizeMarketplacePluginSetup(
-      plugin({ capabilities: ["canvas.document.read"] }),
-      "automatic-product-lock",
-      dependencies,
-    ),
-  ).rejects.toThrow("capabilities")
-  await expect(
-    authorizeMarketplacePluginSetup(
       plugin({
         contributes: {
           ...plugin().contributes,
-          capabilities: {
-            exports: [
-              {
-                docs: {
-                  request: "One bounded request.",
-                  response: "One bounded response.",
-                  summary: "Read example",
-                },
-                id: "example.read",
-                inputSchema: { additionalProperties: false, properties: {}, required: [], type: "object" },
-                operation: "example.read",
-                outputSchema: { additionalProperties: false, properties: {}, required: [], type: "object" },
-                sideEffect: "read",
-                version: "1.0.0",
-              },
-            ],
-            imports: { optional: [], required: [] },
-          },
+          service: { actions: ["authorize"] },
         },
       }),
+      "automatic-product-lock",
+      dependencies,
+    ),
+  ).rejects.toThrow("Service")
+  await expect(
+    authorizeMarketplacePluginSetup(
+      plugin({ capabilities: ["canvas.document.read"] }),
       "automatic-product-lock",
       dependencies,
     ),

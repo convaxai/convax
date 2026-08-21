@@ -1,3 +1,5 @@
+import type { PluginServiceTarget } from "../plugin-service-contracts"
+
 export const pluginServiceExternalAuthorizationRequestSchema = "convax.plugin-service-external-authorization/1" as const
 export const pluginServiceExternalAuthorizationCompletionSchema =
   "convax.plugin-service-external-authorization-completion/1" as const
@@ -92,11 +94,11 @@ export function parsePluginServiceExternalAuthorizationRequest(
 
 export interface PluginServiceExternalAuthorizationBroker {
   authorize(
-    pluginId: string,
+    target: PluginServiceTarget,
     request: PluginServiceExternalAuthorizationRequest,
     options: { signal?: AbortSignal },
   ): Promise<PluginServiceExternalAuthorizationCompletion>
-  disposePlugin(pluginId: string): Promise<void>
+  disposePlugin(target: PluginServiceTarget): Promise<void>
 }
 
 /**
@@ -108,7 +110,7 @@ export class DefaultPluginServiceExternalAuthorizationBroker implements PluginSe
   constructor(private readonly openExternal: (url: string) => Promise<void>) {}
 
   async authorize(
-    _pluginId: string,
+    _target: PluginServiceTarget,
     request: PluginServiceExternalAuthorizationRequest,
     options: { signal?: AbortSignal },
   ): Promise<PluginServiceExternalAuthorizationCompletion> {
@@ -121,7 +123,7 @@ export class DefaultPluginServiceExternalAuthorizationBroker implements PluginSe
     }
   }
 
-  async disposePlugin(_pluginId: string): Promise<void> {}
+  async disposePlugin(_target: PluginServiceTarget): Promise<void> {}
 }
 
 function abortError(message: string) {

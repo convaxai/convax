@@ -13,7 +13,7 @@ import {
   webPluginAssetScheme,
   type WebPluginAssetRuntimeIdentity,
 } from "../plugin-asset-contract"
-import type { WebPluginPetContribution } from "../plugin-contracts"
+import { isSupportedWebPluginManifestSchema, type WebPluginPetContribution } from "../plugin-contracts"
 
 export { webPluginAssetScheme } from "../plugin-asset-contract"
 
@@ -246,7 +246,11 @@ function declaresAuthorizedHostApi(
   },
   apiId: PluginApiId,
 ) {
-  if (plugin.schema !== "convax.plugin/8" || !plugin.hostApi || !isPluginApiDeclared(plugin.hostApi, apiId)) {
+  if (
+    !isSupportedWebPluginManifestSchema(plugin.schema) ||
+    !plugin.hostApi ||
+    !isPluginApiDeclared(plugin.hostApi, apiId)
+  ) {
     return false
   }
   const grant = getPluginApiDefinition(apiId).grant
@@ -263,7 +267,7 @@ function declaresAuthorizedPetAssetSurface(
   },
   relativePath: string,
 ) {
-  if (plugin.schema !== "convax.plugin/8" || !plugin.capabilities.includes("pet.custom.manage")) {
+  if (!isSupportedWebPluginManifestSchema(plugin.schema) || !plugin.capabilities.includes("pet.custom.manage")) {
     return false
   }
   const contribution = plugin.contributes?.pet

@@ -1,4 +1,5 @@
 import { createContext, type ReactNode, useCallback, useContext, useMemo, useSyncExternalStore } from "react"
+import type { CanvasUiLocale } from "./copy"
 import type { CanvasFileRendererRegistry } from "./file-renderer-registry"
 import type { CanvasNodeEntryPhase } from "./motion"
 import type { CanvasSelectionContext } from "./selection-context"
@@ -21,9 +22,12 @@ export interface CanvasNodeEntryPresentation {
 
 export interface CanvasEditorController {
   document: CanvasDocument
+  /** Host scope that owns the document; empty for independent Canvas consumers. */
+  scopeId?: string
   /** @deprecated Use useCanvasNodeEntryPresentation for reactive node-local presentation. */
   enteringNodeIds: ReadonlySet<string>
   hydrating: boolean
+  locale?: CanvasUiLocale
   reducedMotion: boolean
   selection: CanvasSelection
   selectionContext: CanvasSelectionContext

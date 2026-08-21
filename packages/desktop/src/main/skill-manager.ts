@@ -183,6 +183,25 @@ export class DesktopSkillManager {
     })
   }
 
+  /**
+   * Installs immutable Marketplace bytes during cold-start provisioning without
+   * observing or launching the lazy OpenCode runtime.
+   */
+  async installFromFilesAtStartup(
+    files: Readonly<Record<string, string | Uint8Array>>,
+    expectedName?: string,
+  ) {
+    return this.mutate(async () => {
+      const installed = await this.store.installFromFiles(
+        files,
+        expectedName === undefined ? {} : { expectedName },
+      )
+      await this.assertStandaloneInstallAllowed(installed)
+      this.emit()
+      return this.summary(installed)
+    })
+  }
+
   async importFromDirectory(sourceDirectory: string, directory = this.defaultDirectory) {
     const inspection = await inspectAgentSkillDirectory(sourceDirectory)
     const files = Object.fromEntries(inspection.files.map((file) => [file.path, file.content]))

@@ -8,7 +8,6 @@ import {
   requireWebPluginRelativePath,
   toInstalledWebPluginSummary,
   webPluginManifestFileName,
-  webPluginManifestSchemaV8,
   type InstalledWebPluginSummary,
 } from "../plugin-contracts"
 import { assertSelfContainedHookModule } from "./plugin-hook-module-validator"
@@ -62,9 +61,6 @@ function manifestFromFiles(files: Readonly<Record<string, string | Uint8Array>>)
   const plugin = toInstalledWebPluginSummary(
     parseWebPluginManifest(JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(bytes(document)))),
   )
-  if (plugin.schema !== webPluginManifestSchemaV8) {
-    throw new Error(`Plugin installation requires ${webPluginManifestSchemaV8}: ${plugin.id}`)
-  }
   return plugin
 }
 

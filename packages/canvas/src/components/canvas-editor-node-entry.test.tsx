@@ -19,13 +19,10 @@ import type { CanvasEditorHandle } from "./canvas-editor"
 let renderedNodes: CanvasNode[] = []
 let renderNodes = true
 let connect: ((connection: Connection) => void) | undefined
-let connectStart:
-  | ((event: MouseEvent, params: { handleId: string | null; nodeId: string | null }) => void)
-  | undefined
-let connectEnd:
-  | ((event: MouseEvent, state: { fromNode?: { id: string }; isValid: boolean }) => void)
-  | undefined
+let connectStart: ((event: MouseEvent, params: { handleId: string | null; nodeId: string | null }) => void) | undefined
+let connectEnd: ((event: MouseEvent, state: { fromNode?: { id: string }; isValid: boolean }) => void) | undefined
 let nodesChange: ((changes: readonly { id: string; selected: boolean; type: "select" }[]) => void) | undefined
+let moveStart: ((event?: MouseEvent) => void) | undefined
 const setViewport = mock(async (_viewport: unknown, _options?: { duration?: number }) => undefined)
 
 function Passthrough(props: { children?: ReactNode }) {
@@ -39,6 +36,8 @@ function animationEvent(name: string) {
 }
 
 void mock.module("@convax/ui", () => ({
+  BeamButton: (props: { children?: ReactNode }) => <button>{props.children}</button>,
+  BeamSurface: Passthrough,
   Button: ({
     asChild: _asChild,
     children,
@@ -163,6 +162,7 @@ void mock.module("@xyflow/react", () => ({
     onConnect?: (connection: Connection) => void
     onConnectEnd?: (event: MouseEvent, state: { fromNode?: { id: string }; isValid: boolean }) => void
     onConnectStart?: (event: MouseEvent, params: { handleId: string | null; nodeId: string | null }) => void
+    onMoveStart?: (event?: MouseEvent) => void
     onNodesChange?: (changes: readonly { id: string; selected: boolean; type: "select" }[]) => void
     onPaneContextMenu?: (event: { clientX: number; clientY: number }) => void
   }) => {
@@ -170,6 +170,7 @@ void mock.module("@xyflow/react", () => ({
     connect = props.onConnect
     connectStart = props.onConnectStart
     connectEnd = props.onConnectEnd
+    moveStart = props.onMoveStart
     nodesChange = props.onNodesChange
     return (
       <div
@@ -241,17 +242,22 @@ void mock.module("@xyflow/react", () => ({
     zoomOut: async () => undefined,
     zoomTo: async () => undefined,
   }),
+  useStoreApi: () => ({
+    getState: () => ({}),
+    setState: () => undefined,
+    subscribe: () => () => undefined,
+  }),
   useViewport: () => ({ x: 0, y: 0, zoom: 1 }),
 }))
 
 const [
   { CanvasEditor },
   { CanvasNodeChrome },
-  { createAgentNode, createCanvasDocument, createMediaNode, createTextNode },
+  { createAgentNode, createCanvasDocument, createMediaNode, createTextNode, isCanvasEmptyMediaNodeData },
   { createCanvasNodeRegistry },
   { createCanvasServices },
   { createCanvasViewRegistry },
-  { CANVAS_MOTION_DURATION },
+  { CANVAS_MOTION_DURATION, CANVAS_NODE_ENTRY_FINISH_GRACE },
 ] = await Promise.all([
   import("./canvas-editor"),
   import("./builtin-node"),
@@ -896,7 +902,89 @@ test("centers an outline reveal without replaying the node-entry animation", asy
   }
 })
 
-test("places a top-toolbar-created node in a visible gap and focuses it before entry presentation", async () => {
+test("lets the latest rapid node focus supersede unresolved camera motion", async () => {
+  const restoreWindow = installTestWindow()
+  const viewRegistry = createCanvasViewRegistry()
+  const neverFinishes = new Promise<void>(() => undefined)
+  let smoothMotionCount = 0
+  let root: Root | undefined
+  renderNodes = true
+  setViewport.mockImplementation(async (_viewport, options?: { duration?: number }) => {
+    if ((options?.duration ?? 0) <= 0) return
+    smoothMotionCount += 1
+    if (smoothMotionCount === 1) await neverFinishes
+  })
+
+  try {
+    const container = document.createElement("div")
+    document.body.append(container)
+    root = createRoot(container)
+    await act(async () => {
+      root?.render(
+        <CanvasEditor
+          initialDocument={createCanvasDocument({
+            id: "rapid-focus",
+            nodes: [
+              createMediaNode({
+                id: "focus-a",
+                position: { x: 20, y: 40 },
+                resource: { id: "focus-a", kind: "image", metadata: {}, state: { status: "ready" } },
+              }),
+              createMediaNode({
+                id: "focus-b",
+                position: { x: 1_200, y: 640 },
+                resource: { id: "focus-b", kind: "image", metadata: {}, state: { status: "ready" } },
+              }),
+            ],
+          })}
+          nodeRegistry={createTestRegistry()}
+          services={createCanvasServices()}
+          viewId="main"
+          viewRegistry={viewRegistry}
+          viewScopeId="project-a"
+        />,
+      )
+    })
+    const canvas = container.querySelector<HTMLElement>(".convax-canvas")!
+    Object.defineProperty(canvas, "getBoundingClientRect", {
+      configurable: true,
+      value: () => ({ bottom: 600, height: 600, left: 0, right: 800, top: 0, width: 800 }),
+    })
+
+    const request = (nodeId: string) =>
+      viewRegistry.execute({
+        command: { animation: "smooth", fit: "center", nodeIds: [nodeId], select: true, type: "nodes.reveal" },
+        expectedDocumentId: "rapid-focus",
+        expectedScopeId: "project-a",
+        viewId: "main",
+      })
+    let firstSettled = false
+    const first = request("focus-a").finally(() => {
+      firstSettled = true
+    })
+    await act(async () => {
+      await Promise.resolve()
+      await Promise.resolve()
+    })
+
+    let secondResult!: Awaited<ReturnType<typeof request>>
+    await act(async () => {
+      secondResult = await request("focus-b")
+    })
+    expect(smoothMotionCount).toBe(2)
+    expect(firstSettled).toBeTrue()
+    expect(secondResult.snapshot.selectedNodeIds).toEqual(["focus-b"])
+
+    await first
+  } finally {
+    setViewport.mockReset()
+    setViewport.mockImplementation(async () => undefined)
+    if (root) await act(async () => root?.unmount())
+    await restoreWindow()
+  }
+})
+
+test("places, focuses, and presents a top-toolbar-created empty node", async () => {
   const restoreWindow = installTestWindow()
   const initial = createCanvasDocument({
     id: "header-create-focus",
@@ -911,14 +999,7 @@ test("places a top-toolbar-created node in a visible gap and focuses it before e
   let authoritative = initial
   const session = new NodeEntryCanvasSession(initial)
   let requestedAnchor: { x: number; y: number } | undefined
-  let resolveCamera!: () => void
-  const cameraFinished = new Promise<void>((resolve) => {
-    resolveCamera = resolve
-  })
   let root: Root | undefined
-  setViewport.mockImplementation(async (_viewport, options) => {
-    if ((options?.duration ?? 0) > 0) await cameraFinished
-  })
 
   try {
     const container = document.createElement("div")
@@ -988,23 +1069,86 @@ test("places a top-toolbar-created node in a visible gap and focuses it before e
     ).toBeFalse()
     expect(setViewport.mock.calls.some((call) => call[1]?.duration === 400)).toBeTrue()
     expect(
-      container.querySelector('[data-id="header-created"] .convax-node')?.hasAttribute("data-canvas-node-entering"),
-    ).toBeFalse()
-    expect(
-      container.querySelector('[data-id="header-created"] .convax-node')?.getAttribute("data-canvas-node-entry-phase"),
-    ).toBe("pending-focus")
-
-    await act(async () => {
-      resolveCamera()
-      await Promise.resolve()
-      await Promise.resolve()
-    })
-    expect(
       container.querySelector('[data-id="header-created"] .convax-node')?.getAttribute("data-canvas-node-entering"),
     ).toBe("true")
     expect(
       container.querySelector('[data-id="header-created"] .convax-node')?.getAttribute("data-canvas-node-entry-phase"),
     ).toBe("entering")
+  } finally {
+    setViewport.mockReset()
+    setViewport.mockImplementation(async () => undefined)
+    if (root) await act(async () => root?.unmount())
+    await restoreWindow()
+  }
+})
+
+test("starts top-toolbar text focus from the optimistic node before the host mutation settles", async () => {
+  const restoreWindow = installTestWindow()
+  const session = new NodeEntryCanvasSession(createCanvasDocument({ id: "optimistic-text-focus" }))
+  let requestedAnchor: { x: number; y: number } | undefined
+  let resolveMutation: ((value: { createdNodeIds: readonly string[]; warnings: readonly string[] }) => void) | undefined
+  let root: Root | undefined
+  renderNodes = true
+  setViewport.mockClear()
+
+  try {
+    const container = document.createElement("div")
+    document.body.append(container)
+    root = createRoot(container)
+    await act(async () => {
+      root?.render(
+        <CanvasEditor
+          nodeRegistry={createTestRegistry()}
+          services={createCanvasServices({
+            mutation: {
+              add: async (input) => {
+                requestedAnchor = input.anchor
+                return new Promise((resolve) => {
+                  resolveMutation = resolve
+                })
+              },
+            },
+          })}
+          session={session}
+          viewScopeId="optimistic-text-focus"
+        />,
+      )
+    })
+    const canvas = container.querySelector<HTMLElement>(".convax-canvas")!
+    Object.defineProperty(canvas, "getBoundingClientRect", {
+      configurable: true,
+      value: () => ({ bottom: 800, height: 800, left: 0, right: 1200, top: 0, width: 1200 }),
+    })
+
+    await act(async () => {
+      container.querySelector<HTMLButtonElement>('button[aria-label="Add node"]')?.click()
+      await Promise.resolve()
+    })
+    await act(async () => {
+      container.querySelector<HTMLButtonElement>('button[aria-label="Add Text"]')?.click()
+      await Promise.resolve()
+      await Promise.resolve()
+    })
+
+    expect(requestedAnchor).toBeDefined()
+    expect(session.getProjection().nodes).toEqual([])
+    expect(renderedNodes).toHaveLength(1)
+    expect(renderedNodes[0]?.id.startsWith("ghost-resource:")).toBeTrue()
+    expect(setViewport.mock.calls.some((call) => call[1]?.duration === 400)).toBeTrue()
+
+    const authoritative = createTextNode({
+      id: "authoritative-text",
+      metadata: {},
+      position: requestedAnchor!,
+      resourceState: { status: "ready", text: "" },
+    })
+    await act(async () => {
+      session.publish({ ...session.getProjection(), nodes: [authoritative] })
+      resolveMutation?.({ createdNodeIds: [authoritative.id], warnings: [] })
+      await Promise.resolve()
+      await Promise.resolve()
+    })
+    expect(renderedNodes.map((node) => node.id)).toEqual(["authoritative-text"])
   } finally {
     setViewport.mockReset()
     setViewport.mockImplementation(async () => undefined)
@@ -1196,10 +1340,11 @@ test("hides a deleted node immediately and restores it when the authoritative co
   let resolveCommand: (() => void) | undefined
   let rejectCommand: ((error: Error) => void) | undefined
   const executeCommand = mock(
-    () => new Promise<void>((resolve, reject) => {
-      resolveCommand = resolve
-      rejectCommand = reject
-    }),
+    () =>
+      new Promise<void>((resolve, reject) => {
+        resolveCommand = resolve
+        rejectCommand = reject
+      }),
   )
   const notify = mock(() => undefined)
 
@@ -1223,8 +1368,8 @@ test("hides a deleted node immediately and restores it when the authoritative co
       nodesChange?.([{ id: node.id, selected: true, type: "select" }])
       await Promise.resolve()
     })
-    const deleteButton = [...container.querySelectorAll<HTMLButtonElement>("button")].find(
-      (button) => button.textContent?.includes("Delete"),
+    const deleteButton = [...container.querySelectorAll<HTMLButtonElement>("button")].find((button) =>
+      button.textContent?.includes("Delete"),
     )
     expect(deleteButton).toBeDefined()
     await act(async () => {
@@ -1250,8 +1395,8 @@ test("hides a deleted node immediately and restores it when the authoritative co
       nodesChange?.([{ id: node.id, selected: true, type: "select" }])
       await Promise.resolve()
     })
-    const retryDeleteButton = [...container.querySelectorAll<HTMLButtonElement>("button")].find(
-      (button) => button.textContent?.includes("Delete"),
+    const retryDeleteButton = [...container.querySelectorAll<HTMLButtonElement>("button")].find((button) =>
+      button.textContent?.includes("Delete"),
     )
     await act(async () => {
       retryDeleteButton?.click()
@@ -1295,12 +1440,12 @@ test("does not offer non-atomic Agent creation from click-to-connect", async () 
     const textOption = [...(connectionMenu?.querySelectorAll<HTMLButtonElement>('button[role="menuitem"]') ?? [])].find(
       (button) => button.textContent?.includes("Text"),
     )
-    const imageOption = [...(connectionMenu?.querySelectorAll<HTMLButtonElement>('button[role="menuitem"]') ?? [])].find(
-      (button) => button.textContent?.includes("Image"),
-    )
-    const videoOption = [...(connectionMenu?.querySelectorAll<HTMLButtonElement>('button[role="menuitem"]') ?? [])].find(
-      (button) => button.textContent?.includes("Video"),
-    )
+    const imageOption = [
+      ...(connectionMenu?.querySelectorAll<HTMLButtonElement>('button[role="menuitem"]') ?? []),
+    ].find((button) => button.textContent?.includes("Image"))
+    const videoOption = [
+      ...(connectionMenu?.querySelectorAll<HTMLButtonElement>('button[role="menuitem"]') ?? []),
+    ].find((button) => button.textContent?.includes("Video"))
     expect(connectionMenu).toBeDefined()
     expect(agentOption).toBeUndefined()
     expect(textOption).toBeDefined()
@@ -1327,15 +1472,8 @@ test("focuses a text node created after dragging a connection to empty canvas", 
   })
   let authoritative = initial
   const session = new NodeEntryCanvasSession(initial)
-  let resolveCamera!: () => void
-  const cameraFinished = new Promise<void>((resolve) => {
-    resolveCamera = resolve
-  })
   let root: Root | undefined
   renderNodes = true
-  setViewport.mockImplementation(async (_viewport, options) => {
-    if ((options?.duration ?? 0) > 0) await cameraFinished
-  })
 
   try {
     const container = document.createElement("div")
@@ -1389,8 +1527,8 @@ test("focuses a text node created after dragging a connection to empty canvas", 
       await Promise.resolve()
     })
 
-    const textOption = [...container.querySelectorAll<HTMLButtonElement>('button[role="menuitem"]')].find(
-      (button) => button.textContent?.includes("Text"),
+    const textOption = [...container.querySelectorAll<HTMLButtonElement>('button[role="menuitem"]')].find((button) =>
+      button.textContent?.includes("Text"),
     )
     expect(textOption).toBeDefined()
     await act(async () => {
@@ -1401,14 +1539,6 @@ test("focuses a text node created after dragging a connection to empty canvas", 
 
     const created = container.querySelector<HTMLElement>('[data-id="drag-created-text"] .convax-node')
     expect(setViewport.mock.calls.some((call) => call[1]?.duration === 400)).toBeTrue()
-    expect(created?.hasAttribute("data-canvas-node-entering")).toBeFalse()
-    expect(created?.dataset.canvasNodeEntryPhase).toBe("pending-focus")
-
-    await act(async () => {
-      resolveCamera()
-      await Promise.resolve()
-      await Promise.resolve()
-    })
     expect(created?.dataset.canvasNodeEntering).toBe("true")
     expect(created?.dataset.canvasNodeEntryPhase).toBe("entering")
   } finally {
@@ -1419,7 +1549,7 @@ test("focuses a text node created after dragging a connection to empty canvas", 
   }
 })
 
-test("focuses a picker-created image before entry and clears a held external-drag hint", async () => {
+test("applies the host-routed external drag hold and clears it before picker-created image entry", async () => {
   const restoreWindow = installTestWindow()
   const initial = createCanvasDocument({ id: "picker-create-entry" })
   let authoritative = initial
@@ -1429,6 +1559,7 @@ test("focuses a picker-created image before entry and clears a held external-dra
     resolveCamera = resolve
   })
   const prepare = mock(async () => ({ dispose: () => undefined, start: () => undefined }))
+  const editorRef = createRef<CanvasEditorHandle>()
   let root: Root | undefined
   renderNodes = true
   setViewport.mockImplementation(async (_viewport, options) => {
@@ -1442,11 +1573,11 @@ test("focuses a picker-created image before entry and clears a held external-dra
     await act(async () => {
       root?.render(
         <CanvasEditor
+          ref={editorRef}
           selectionDragSource={{
             id: "native-files",
             label: "Keep holding Command-Shift",
             prepare,
-            shortcutModifier: "meta",
             visible: () => true,
           }}
           services={createCanvasServices({
@@ -1485,17 +1616,59 @@ test("focuses a picker-created image before entry and clears a held external-dra
       value: () => ({ bottom: 800, height: 800, left: 0, right: 1_200, top: 0, width: 1_200 }),
     })
 
-    const chordDown = new Event("keydown", { bubbles: true })
-    Object.defineProperties(chordDown, {
-      key: { value: "Shift" },
-      metaKey: { value: true },
-      shiftKey: { value: true },
-    })
+    const chordDown = () => {
+      const event = new Event("keydown", { bubbles: true })
+      Object.defineProperties(event, {
+        key: { value: "Shift" },
+        metaKey: { value: true },
+        shiftKey: { value: true },
+      })
+      return event
+    }
     await act(async () => {
-      window.dispatchEvent(chordDown)
+      window.dispatchEvent(chordDown())
+      await Promise.resolve()
+    })
+    expect(prepare).not.toHaveBeenCalled()
+
+    const outsideCanvas = document.createElement("button")
+    document.body.append(outsideCanvas)
+    const noDragSurface = document.createElement("div")
+    noDragSurface.className = "nodrag"
+    const image = document.createElement("img")
+    noDragSurface.append(image)
+    canvas.append(noDragSurface)
+    outsideCanvas.focus()
+    await act(async () => {
+      image.dispatchEvent(new MouseEvent("pointerdown", { bubbles: true, button: 0 }))
+      editorRef.current?.setExternalDragShortcutHeld(true)
+      await Promise.resolve()
+    })
+    expect(document.activeElement).toBe(canvas)
+    expect(prepare).toHaveBeenCalledTimes(1)
+
+    await act(async () => {
+      const focusOut = new Event("focusout", { bubbles: true })
+      Object.defineProperty(focusOut, "relatedTarget", { value: outsideCanvas })
+      canvas.dispatchEvent(focusOut)
+      outsideCanvas.focus()
+      editorRef.current?.setExternalDragShortcutHeld(false)
+      await Promise.resolve()
+    })
+    expect(container.querySelector("[data-canvas-selection-drag-hint]")).toBeNull()
+
+    await act(async () => {
+      window.dispatchEvent(chordDown())
       await Promise.resolve()
     })
     expect(prepare).toHaveBeenCalledTimes(1)
+
+    await act(async () => {
+      canvas.focus()
+      editorRef.current?.setExternalDragShortcutHeld(true)
+      await Promise.resolve()
+    })
+    expect(prepare).toHaveBeenCalledTimes(2)
 
     await act(async () => {
       container.querySelector<HTMLButtonElement>('button[aria-label="Add node"]')?.click()
@@ -1516,7 +1689,7 @@ test("focuses a picker-created image before entry and clears a held external-dra
 
     const created = container.querySelector<HTMLElement>('[data-id="picker-created"] .convax-node')
     expect(container.querySelector("[data-canvas-selection-drag-hint]")).toBeNull()
-    expect(created?.dataset.canvasNodeEntryPhase).toBe("pending-focus")
+    expect(created?.dataset.canvasNodeEntryPhase).toBe("entering")
 
     await act(async () => {
       resolveCamera()
@@ -1533,7 +1706,7 @@ test("focuses a picker-created image before entry and clears a held external-dra
   }
 })
 
-test("runs the context-menu-created text node through the same camera focus and entry sequence as the top toolbar", async () => {
+test("focuses a context-menu-created empty text node at the click point", async () => {
   const restoreWindow = installTestWindow()
   const initial = createCanvasDocument({
     id: "context-create-entry",
@@ -1548,15 +1721,8 @@ test("runs the context-menu-created text node through the same camera focus and 
   let authoritative = initial
   const session = new NodeEntryCanvasSession(initial)
   let requestedAnchor: { x: number; y: number } | undefined
-  let resolveCamera!: () => void
-  const cameraFinished = new Promise<void>((resolve) => {
-    resolveCamera = resolve
-  })
   let root: Root | undefined
   renderNodes = true
-  setViewport.mockImplementation(async (_viewport, options) => {
-    if ((options?.duration ?? 0) > 0) await cameraFinished
-  })
 
   try {
     const container = document.createElement("div")
@@ -1616,18 +1782,7 @@ test("runs the context-menu-created text node through the same camera focus and 
 
     const created = container.querySelector<HTMLElement>('[data-id="context-created"] .convax-node')
     expect(requestedAnchor).toEqual({ x: 960, y: 640 })
-    const focusCall = setViewport.mock.calls.find((call) => call[1]?.duration === 400)
-    expect(focusCall).toBeDefined()
-    expect(focusCall?.[0]).toMatchObject({ zoom: 1.2 })
-    expect(focusCall?.[0]).not.toMatchObject({ x: 0, y: 0 })
-    expect(created?.hasAttribute("data-canvas-node-entering")).toBeFalse()
-    expect(created?.dataset.canvasNodeEntryPhase).toBe("pending-focus")
-
-    await act(async () => {
-      resolveCamera()
-      await Promise.resolve()
-      await Promise.resolve()
-    })
+    expect(setViewport.mock.calls.some((call) => call[1]?.duration === 400)).toBeTrue()
     expect(created?.dataset.canvasNodeEntering).toBe("true")
     expect(created?.dataset.canvasNodeEntryPhase).toBe("entering")
 
@@ -1652,6 +1807,298 @@ test("runs the context-menu-created text node through the same camera focus and 
   } finally {
     setViewport.mockReset()
     setViewport.mockImplementation(async () => undefined)
+    if (root) await act(async () => root?.unmount())
+    await restoreWindow()
+  }
+})
+
+test("keeps a context-menu-created node visible if the user navigates before optimistic focus finishes", async () => {
+  const restoreWindow = installTestWindow()
+  const initial = createCanvasDocument({
+    id: "context-create-interrupt",
+    nodes: [
+      createMediaNode({
+        id: "hydrated",
+        position: { x: 20, y: 40 },
+        resource: { id: "hydrated", kind: "image", metadata: {}, state: { status: "ready" } },
+      }),
+    ],
+  })
+  let authoritative = initial
+  const session = new NodeEntryCanvasSession(initial)
+  const cameraFinished = new Promise<void>(() => undefined)
+  let root: Root | undefined
+  renderNodes = true
+  setViewport.mockImplementation(async (_viewport, options) => {
+    if ((options?.duration ?? 0) > 0) await cameraFinished
+  })
+
+  try {
+    const container = document.createElement("div")
+    document.body.append(container)
+    root = createRoot(container)
+    await act(async () => {
+      root?.render(
+        <CanvasEditor
+          nodeRegistry={createTestRegistry()}
+          services={createCanvasServices({
+            mutation: {
+              async add(input) {
+                authoritative = {
+                  ...authoritative,
+                  nodes: [
+                    ...authoritative.nodes,
+                    createMediaNode({
+                      id: "context-created",
+                      position: input.anchor,
+                      resource: {
+                        id: "context-created",
+                        kind: "image",
+                        metadata: {},
+                        state: { status: "ready" },
+                      },
+                    }),
+                  ],
+                }
+                session.publish(authoritative)
+                return { createdNodeIds: ["context-created"], warnings: [] }
+              },
+            },
+          })}
+          session={session}
+        />,
+      )
+      await Promise.resolve()
+    })
+    const canvas = container.querySelector<HTMLElement>(".convax-canvas")!
+    Object.defineProperty(canvas, "getBoundingClientRect", {
+      configurable: true,
+      value: () => ({ bottom: 800, height: 800, left: 0, right: 1200, top: 0, width: 1200 }),
+    })
+
+    const contextAddImage = [...container.querySelectorAll<HTMLButtonElement>("[data-test-context-menu-item]")].find(
+      (button) => button.textContent?.includes("Add Image"),
+    )
+    expect(contextAddImage).toBeDefined()
+
+    await act(async () => {
+      container
+        .querySelector(".react-flow__pane")
+        ?.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, clientX: 960, clientY: 640 }))
+      await Promise.resolve()
+      contextAddImage?.click()
+      await new Promise<void>((resolve) => setTimeout(resolve, 20))
+      await Promise.resolve()
+    })
+
+    const created = container.querySelector<HTMLElement>('[data-id="context-created"] .convax-node')
+    expect(created?.dataset.canvasNodeEntryPhase).toBe("entering")
+
+    await act(async () => {
+      moveStart?.(new MouseEvent("mousedown"))
+      await Promise.resolve()
+    })
+    expect(created?.dataset.canvasNodeEntryPhase).toBe("entering")
+  } finally {
+    setViewport.mockReset()
+    setViewport.mockImplementation(async () => undefined)
+    if (root) await act(async () => root?.unmount())
+    await restoreWindow()
+  }
+})
+
+test("shows a context-menu-created node immediately if optimistic camera motion never finishes", async () => {
+  const restoreWindow = installTestWindow()
+  const initial = createCanvasDocument({
+    id: "context-create-hang",
+    nodes: [
+      createMediaNode({
+        id: "hydrated",
+        position: { x: 20, y: 40 },
+        resource: { id: "hydrated", kind: "image", metadata: {}, state: { status: "ready" } },
+      }),
+    ],
+  })
+  let authoritative = initial
+  const session = new NodeEntryCanvasSession(initial)
+  const cameraFinished = new Promise<void>(() => undefined)
+  let root: Root | undefined
+  renderNodes = true
+  setViewport.mockImplementation(async (_viewport, options) => {
+    if ((options?.duration ?? 0) > 0) await cameraFinished
+  })
+
+  try {
+    const container = document.createElement("div")
+    document.body.append(container)
+    root = createRoot(container)
+    await act(async () => {
+      root?.render(
+        <CanvasEditor
+          nodeRegistry={createTestRegistry()}
+          services={createCanvasServices({
+            mutation: {
+              async add(input) {
+                authoritative = {
+                  ...authoritative,
+                  nodes: [
+                    ...authoritative.nodes,
+                    createMediaNode({
+                      id: "context-created",
+                      position: input.anchor,
+                      resource: {
+                        id: "context-created",
+                        kind: "image",
+                        metadata: {},
+                        state: { status: "ready" },
+                      },
+                    }),
+                  ],
+                }
+                session.publish(authoritative)
+                return { createdNodeIds: ["context-created"], warnings: [] }
+              },
+            },
+          })}
+          session={session}
+        />,
+      )
+      await Promise.resolve()
+    })
+    const canvas = container.querySelector<HTMLElement>(".convax-canvas")!
+    Object.defineProperty(canvas, "getBoundingClientRect", {
+      configurable: true,
+      value: () => ({ bottom: 800, height: 800, left: 0, right: 1200, top: 0, width: 1200 }),
+    })
+
+    const contextAddImage = [...container.querySelectorAll<HTMLButtonElement>("[data-test-context-menu-item]")].find(
+      (button) => button.textContent?.includes("Add Image"),
+    )
+    expect(contextAddImage).toBeDefined()
+
+    await act(async () => {
+      container
+        .querySelector(".react-flow__pane")
+        ?.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, clientX: 960, clientY: 640 }))
+      await Promise.resolve()
+      contextAddImage?.click()
+      await new Promise<void>((resolve) => setTimeout(resolve, 20))
+      await Promise.resolve()
+    })
+
+    const created = container.querySelector<HTMLElement>('[data-id="context-created"] .convax-node')
+    expect(created?.dataset.canvasNodeEntryPhase).toBe("entering")
+
+    await act(async () => {
+      await new Promise<void>((resolve) =>
+        setTimeout(resolve, CANVAS_MOTION_DURATION.postMutationReveal + CANVAS_NODE_ENTRY_FINISH_GRACE + 20),
+      )
+    })
+    expect(created?.dataset.canvasNodeEntryPhase).toBe("entering")
+    expect(created?.dataset.canvasNodeEntering).toBe("true")
+  } finally {
+    setViewport.mockReset()
+    setViewport.mockImplementation(async () => undefined)
+    if (root) await act(async () => root?.unmount())
+    await restoreWindow()
+  }
+})
+
+test("shows an idle empty image card immediately while the pending create is still in flight", async () => {
+  const restoreWindow = installTestWindow()
+  const initial = createCanvasDocument({
+    id: "empty-card-ghost",
+    nodes: [
+      createMediaNode({
+        id: "hydrated",
+        position: { x: 20, y: 40 },
+        resource: { id: "hydrated", kind: "image", metadata: {}, state: { status: "ready" } },
+      }),
+    ],
+  })
+  let authoritative = initial
+  const session = new NodeEntryCanvasSession(initial)
+  let releaseAdd!: () => void
+  const addHeld = new Promise<void>((resolve) => {
+    releaseAdd = resolve
+  })
+  let root: Root | undefined
+  renderNodes = true
+
+  try {
+    const container = document.createElement("div")
+    document.body.append(container)
+    root = createRoot(container)
+    await act(async () => {
+      root?.render(
+        <CanvasEditor
+          services={createCanvasServices({
+            mutation: {
+              async add(input) {
+                await addHeld
+                authoritative = {
+                  ...authoritative,
+                  nodes: [
+                    ...authoritative.nodes,
+                    createMediaNode({
+                      id: "empty-created",
+                      position: input.anchor,
+                      resource: {
+                        id: "empty-created",
+                        kind: "image",
+                        metadata: {},
+                        state: { status: "ready" },
+                      },
+                    }),
+                  ],
+                }
+                session.publish(authoritative)
+                return { createdNodeIds: ["empty-created"], warnings: [] }
+              },
+            },
+          })}
+          session={session}
+        />,
+      )
+      await Promise.resolve()
+    })
+    const canvas = container.querySelector<HTMLElement>(".convax-canvas")!
+    Object.defineProperty(canvas, "getBoundingClientRect", {
+      configurable: true,
+      value: () => ({ bottom: 800, height: 800, left: 0, right: 1200, top: 0, width: 1200 }),
+    })
+
+    const contextAddImage = [...container.querySelectorAll<HTMLButtonElement>("[data-test-context-menu-item]")].find(
+      (button) => button.textContent?.includes("Add Image"),
+    )
+    expect(contextAddImage).toBeDefined()
+
+    await act(async () => {
+      container
+        .querySelector(".react-flow__pane")
+        ?.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, clientX: 960, clientY: 640 }))
+      await Promise.resolve()
+      contextAddImage?.click()
+      await new Promise<void>((resolve) => setTimeout(resolve, 20))
+      await Promise.resolve()
+    })
+
+    const ghost = renderedNodes.find((node) => node.id.startsWith("ghost-resource:"))
+    expect(ghost).toBeDefined()
+    expect(ghost?.data.status).toBe("idle")
+    expect(isCanvasEmptyMediaNodeData(ghost!.data)).toBeTrue()
+    expect(container.querySelector('[data-canvas-empty-media="image"]')).not.toBeNull()
+    expect(container.querySelector('[data-canvas-persisted-resource-status="pending"]')).toBeNull()
+    expect(container.textContent).not.toContain("正在生成")
+    expect(setViewport.mock.calls.some((call) => call[1]?.duration === 400)).toBeTrue()
+
+    await act(async () => {
+      releaseAdd()
+      await new Promise<void>((resolve) => setTimeout(resolve, 20))
+      await Promise.resolve()
+    })
+    expect(container.querySelector('[data-id="empty-created"]')).not.toBeNull()
+  } finally {
     if (root) await act(async () => root?.unmount())
     await restoreWindow()
   }

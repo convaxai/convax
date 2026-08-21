@@ -480,6 +480,7 @@ const marketplaceClient = {
   confirmUpdate: (input) => ipcRenderer.invoke(marketplaceIpcChannels.confirmUpdate, input),
   disable: (input) => ipcRenderer.invoke(marketplaceIpcChannels.disable, input),
   enable: (input) => ipcRenderer.invoke(marketplaceIpcChannels.enable, input),
+  getCapabilityDetails: (input) => ipcRenderer.invoke(marketplaceIpcChannels.getCapabilityDetails, input),
   importCapability: () => ipcRenderer.invoke(marketplaceIpcChannels.importCapability),
   install: (input) => ipcRenderer.invoke(marketplaceIpcChannels.install, input),
   listCatalog: () => ipcRenderer.invoke(marketplaceIpcChannels.listCatalog),
@@ -490,6 +491,7 @@ const marketplaceClient = {
     ipcRenderer.on(marketplaceIpcChannels.changed, handleChange)
     return () => ipcRenderer.removeListener(marketplaceIpcChannels.changed, handleChange)
   },
+  openCapabilitySource: (input) => ipcRenderer.invoke(marketplaceIpcChannels.openCapabilitySource, input),
   previewMarketplace: (input) => ipcRenderer.invoke(marketplaceIpcChannels.previewMarketplace, input),
   refreshMarketplace: (input) => ipcRenderer.invoke(marketplaceIpcChannels.refreshMarketplace, input),
   removeMarketplace: (input) => ipcRenderer.invoke(marketplaceIpcChannels.removeMarketplace, input),

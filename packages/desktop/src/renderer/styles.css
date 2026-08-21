@@ -406,7 +406,10 @@
 }
 
 .convax-onboarding__surface {
+  display: flex;
+  min-height: 100%;
   width: min(100%, 58rem);
+  flex-direction: column;
   margin: 0 auto;
   animation: convax-onboarding-reveal var(--ui-motion-slow) var(--ui-ease-reveal) both;
 }
@@ -417,6 +420,45 @@
   justify-content: space-between;
   gap: 2rem;
   margin-bottom: clamp(2.25rem, 7vh, 4.75rem);
+}
+
+.convax-onboarding__footer {
+  display: flex;
+  align-items: flex-end;
+  justify-content: flex-start;
+  margin-top: auto;
+  padding-top: clamp(1.5rem, 5vh, 3.5rem);
+}
+
+.convax-onboarding__defer {
+  display: inline-flex;
+  min-height: 2rem;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 0.4rem;
+  border-radius: var(--ui-radius-md);
+  padding: 0.35rem 0.5rem 0.35rem 0.65rem;
+  color: var(--ui-text-tertiary);
+  font-size: 0.7rem;
+  font-weight: 600;
+  outline: none;
+  transition:
+    color var(--ui-motion-fast) ease-out,
+    background var(--ui-motion-fast) ease-out;
+}
+
+.convax-onboarding__defer:hover {
+  color: var(--ui-text-primary);
+  background: var(--ui-interactive-hover);
+}
+
+.convax-onboarding__defer:focus-visible {
+  box-shadow: 0 0 0 2px color-mix(in oklab, var(--ui-focus-ring) 48%, transparent);
+}
+
+.convax-onboarding__defer svg {
+  width: 0.85rem;
+  height: 0.85rem;
 }
 
 .convax-onboarding__progress {
@@ -777,6 +819,138 @@
   font-size: 0.68rem;
 }
 
+.convax-onboarding-deferred {
+  position: relative;
+  width: 100%;
+  height: 100%;
+  min-height: 0;
+}
+
+.convax-onboarding-task {
+  display: grid;
+  width: 100%;
+  min-width: 0;
+  grid-template-columns: auto minmax(0, 1fr);
+  align-items: start;
+  gap: 0.65rem;
+  border: 1px solid color-mix(in oklab, var(--ui-brand) 34%, var(--ui-border-default));
+  border-radius: var(--ui-radius-lg);
+  padding: 0.75rem;
+  color: var(--ui-text-primary);
+  background: color-mix(in oklab, var(--ui-brand) 8%, var(--ui-surface-raised));
+  box-shadow: var(--ui-shadow-low);
+  text-align: left;
+  outline: none;
+  transition:
+    border-color var(--ui-motion-fast) ease-out,
+    background var(--ui-motion-fast) ease-out,
+    transform var(--ui-motion-fast) ease-out;
+}
+
+.convax-onboarding-task:hover {
+  border-color: color-mix(in oklab, var(--ui-brand) 58%, var(--ui-border-default));
+  background: color-mix(in oklab, var(--ui-brand) 12%, var(--ui-surface-raised));
+  transform: translateY(-1px);
+}
+
+.convax-onboarding-task:active {
+  transform: translateY(0);
+}
+
+.convax-onboarding-task:focus-visible {
+  border-color: var(--ui-focus-ring);
+  box-shadow: 0 0 0 2px color-mix(in oklab, var(--ui-focus-ring) 35%, transparent);
+}
+
+.convax-onboarding-task[data-placement="floating"] {
+  position: absolute;
+  z-index: 10;
+  bottom: 1rem;
+  left: 1rem;
+  width: min(18rem, calc(100% - 2rem));
+}
+
+.convax-onboarding-task__icon {
+  display: grid;
+  width: 1.8rem;
+  height: 1.8rem;
+  place-items: center;
+  border-radius: var(--ui-radius-md);
+  color: var(--ui-brand);
+  background: color-mix(in oklab, var(--ui-brand) 13%, var(--ui-surface-inset));
+}
+
+.convax-onboarding-task__icon svg {
+  width: 0.95rem;
+  height: 0.95rem;
+}
+
+.convax-onboarding-task__content {
+  display: grid;
+  min-width: 0;
+  gap: 0.55rem;
+}
+
+.convax-onboarding-task__title {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 0.35rem;
+}
+
+.convax-onboarding-task__title strong {
+  min-width: 0;
+  flex: 1;
+  overflow: hidden;
+  font-size: 0.72rem;
+  font-weight: 650;
+  line-height: 1.35;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.convax-onboarding-task__title svg {
+  width: 0.85rem;
+  height: 0.85rem;
+  flex: 0 0 auto;
+  color: var(--ui-text-tertiary);
+  transition: transform var(--ui-motion-fast) ease-out;
+}
+
+.convax-onboarding-task:hover .convax-onboarding-task__title svg {
+  transform: translateX(2px);
+}
+
+.convax-onboarding-task__progress-row {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.convax-onboarding-task__track {
+  height: 0.3rem;
+  min-width: 0;
+  flex: 1;
+  overflow: hidden;
+  border-radius: var(--ui-radius-pill);
+  background: color-mix(in oklab, var(--ui-brand) 14%, var(--ui-surface-inset));
+}
+
+.convax-onboarding-task__track > span {
+  display: block;
+  height: 100%;
+  border-radius: inherit;
+  background: var(--ui-brand);
+  transition: width var(--ui-motion-normal) var(--ui-ease-reveal);
+}
+
+.convax-onboarding-task__progress-row small {
+  color: var(--ui-text-secondary);
+  font-size: 0.65rem;
+  font-weight: 650;
+  font-variant-numeric: tabular-nums;
+}
+
 @keyframes convax-onboarding-reveal {
   from {
     opacity: 0;
@@ -824,8 +998,12 @@
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .convax-onboarding__surface {
+  .convax-onboarding__surface,
+  .convax-onboarding-task,
+  .convax-onboarding-task__title svg,
+  .convax-onboarding-task__track > span {
     animation: none;
+    transition: none;
   }
 }
 
@@ -833,10 +1011,20 @@
   .convax-onboarding__account-card,
   .convax-onboarding__concepts > div,
   .convax-onboarding__plan-card,
-  .convax-onboarding__notice {
+  .convax-onboarding__notice,
+  .convax-onboarding-task {
     border-color: CanvasText;
     background: Canvas;
     box-shadow: none;
+  }
+
+  .convax-onboarding-task__track {
+    border: 1px solid CanvasText;
+    background: Canvas;
+  }
+
+  .convax-onboarding-task__track > span {
+    background: Highlight;
   }
 }
 

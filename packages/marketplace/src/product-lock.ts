@@ -7,13 +7,9 @@ export type MarketplaceArtifactLock = {
   url: string
 }
 
-export type MarketplacePreinstalledPackagePolicy = {
-  id: string
-  kind: "plugin"
-  marketplaceId: "convax-official"
-  setup: "automatic"
-  targets: Array<`${"darwin" | "linux" | "win32"}-${"arm64" | "x64"}`>
-}
+export type MarketplaceProductTarget = `${"darwin" | "linux" | "win32"}-${"arm64" | "x64"}`
+
+export type MarketplaceProductPackagePurpose = "default-install" | "retired-recovery"
 
 export type MarketplaceRetiredPluginBinding = {
   artifact: {
@@ -26,14 +22,27 @@ export type MarketplaceRetiredPluginBinding = {
   version: string
 }
 
-export type MarketplaceRecoveryArtifactPolicy = {
+type MarketplacePackagedPackagePolicyBase = {
   id: string
-  kind: "plugin"
   marketplaceId: "convax-official"
-  retired: MarketplaceRetiredPluginBinding
-  targets: Array<`${"darwin" | "linux" | "win32"}-${"arm64" | "x64"}`>
-  version: string
+  targets: MarketplaceProductTarget[]
 }
+
+export type MarketplacePackagedPackagePolicy =
+  | (MarketplacePackagedPackagePolicyBase & {
+      kind: "skill"
+      purposes: ["default-install"]
+    })
+  | (MarketplacePackagedPackagePolicyBase & {
+      kind: "plugin"
+      purposes: ["default-install"]
+    })
+  | (MarketplacePackagedPackagePolicyBase & {
+      kind: "plugin"
+      purposes: ["retired-recovery"] | ["default-install", "retired-recovery"]
+      retired: MarketplaceRetiredPluginBinding
+      version: string
+    })
 
 export type MarketplaceProductPolicy = {
   builtin: {
@@ -45,26 +54,44 @@ export type MarketplaceProductPolicy = {
     marketplaceId: "convax-official"
     repository: "convaxai/convax-plugins"
   }
-  preinstalledPackages: MarketplacePreinstalledPackagePolicy[]
-  recoveryArtifacts: MarketplaceRecoveryArtifactPolicy[]
+  packages: MarketplacePackagedPackagePolicy[]
   revision: number
 }
 
-export type MarketplaceLockedPluginPackage = {
+type MarketplaceLockedPackageBase = {
   artifact: MarketplaceArtifactLock
+  id: string
+  marketplaceId: "convax-official"
+  targets: MarketplaceProductTarget[]
+  version: string
+}
+
+type MarketplaceLockedPluginPackageBase = MarketplaceLockedPackageBase & {
   companions: Array<
     MarketplaceArtifactLock & {
       arch: "arm64" | "x64"
       platform: "darwin" | "linux" | "win32"
     }
   >
-  id: string
   kind: "plugin"
-  marketplaceId: "convax-official"
   ownedSkills: MarketplaceArtifactLock[]
-  setup: "explicit"
-  version: string
 }
+
+export type MarketplaceLockedPluginPackage =
+  | (MarketplaceLockedPluginPackageBase & {
+      purposes: ["default-install"]
+    })
+  | (MarketplaceLockedPluginPackageBase & {
+      purposes: ["retired-recovery"] | ["default-install", "retired-recovery"]
+      retired: MarketplaceRetiredPluginBinding
+    })
+
+export type MarketplaceLockedStandaloneSkillPackage = MarketplaceLockedPackageBase & {
+  kind: "skill"
+  purposes: ["default-install"]
+}
+
+export type MarketplaceLockedPackage = MarketplaceLockedPluginPackage | MarketplaceLockedStandaloneSkillPackage
 
 export type MarketplaceProductLock = {
   policy: MarketplaceProductPolicy
@@ -80,19 +107,17 @@ export type MarketplaceProductLock = {
       revision: string
       showcase: MarketplaceArtifactLock
     }
-    packages: MarketplaceLockedPluginPackage[]
+    packages: MarketplaceLockedPackage[]
     policyDigest: string
-    recoveryArtifacts: Array<MarketplaceLockedPluginPackage & { retired: MarketplaceRetiredPluginBinding }>
   }
-  schema: "convax.marketplace-product-lock/2"
+  schema: "convax.marketplace-product-lock/3"
 }
 
 const PACKAGE_ID = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/
 const SEMVER =
   /^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(?:-[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?(?:\+[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?$/
 const TARGET = /^(darwin|linux|win32)-(arm64|x64)$/
-const MAX_PREINSTALLED_PACKAGES = 64
-const MAX_RECOVERY_ARTIFACTS = 64
+const MAX_PACKAGED_PACKAGES = 64
 const MAX_PACKAGE_CLOSURE = 64
 
 export function canonicalProductPolicyDigest(policy: MarketplaceProductPolicy): string {
@@ -169,11 +194,11 @@ function parseArtifact(
   return { name, sha256, size: Number(size), url }
 }
 
-function parseTarget(value: unknown, context: string): MarketplacePreinstalledPackagePolicy["targets"][number] {
+function parseTarget(value: unknown, context: string): MarketplaceProductTarget {
   if (typeof value !== "string" || !TARGET.test(value)) {
     throw new Error(`${context} must be a supported platform-architecture target`)
   }
-  return value as MarketplacePreinstalledPackagePolicy["targets"][number]
+  return value as MarketplaceProductTarget
 }
 
 function parseTargets(value: unknown, context: string) {
@@ -184,29 +209,75 @@ function parseTargets(value: unknown, context: string) {
   if (new Set(targets).size !== targets.length) {
     throw new Error(`${context} must be unique`)
   }
+  if (canonicalJson(targets) !== canonicalJson([...targets].sort())) {
+    throw new Error(`${context} must be in canonical order`)
+  }
   return targets
 }
 
-function parsePreinstalledPolicy(value: unknown, context: string): MarketplacePreinstalledPackagePolicy {
+function parsePurposes(
+  value: unknown,
+  context: string,
+): ["default-install"] | ["retired-recovery"] | ["default-install", "retired-recovery"] {
+  if (!Array.isArray(value)) {
+    throw new Error(`${context} must be a canonical, non-empty purpose array`)
+  }
+  if (canonicalJson(value) === canonicalJson(["default-install"])) return ["default-install"]
+  if (canonicalJson(value) === canonicalJson(["retired-recovery"])) return ["retired-recovery"]
+  if (canonicalJson(value) === canonicalJson(["default-install", "retired-recovery"])) {
+    return ["default-install", "retired-recovery"]
+  }
+  throw new Error(`${context} must contain unique purposes in canonical order`)
+}
+
+function parsePackagedPackagePolicy(value: unknown, context: string): MarketplacePackagedPackagePolicy {
   const entry = record(value, context)
-  exactKeys(entry, ["id", "kind", "marketplaceId", "setup", "targets"], context)
   const id = nonEmptyString(entry.id, `${context}.id`)
-  if (
-    !PACKAGE_ID.test(id) ||
-    entry.marketplaceId !== "convax-official" ||
-    entry.kind !== "plugin" ||
-    entry.setup !== "automatic" ||
-    !Array.isArray(entry.targets)
-  ) {
-    throw new Error(`${context} is not a valid generic automatic Plugin declaration`)
+  const purposes = parsePurposes(entry.purposes, `${context}.purposes`)
+  if (!PACKAGE_ID.test(id) || entry.marketplaceId !== "convax-official") {
+    throw new Error(`${context} is not a valid Official packaged package declaration`)
   }
   const targets = parseTargets(entry.targets, `${context}.targets`)
+
+  if (entry.kind === "skill") {
+    exactKeys(entry, ["id", "kind", "marketplaceId", "purposes", "targets"], context)
+    if (canonicalJson(purposes) !== canonicalJson(["default-install"]) || targets.length !== 0) {
+      throw new Error(`${context} standalone Skill must be portable and may only declare default-install`)
+    }
+    return {
+      id,
+      kind: "skill",
+      marketplaceId: "convax-official",
+      purposes: ["default-install"],
+      targets,
+    }
+  }
+  if (entry.kind !== "plugin") {
+    throw new Error(`${context}.kind must be plugin or skill`)
+  }
+  if (!purposes.some((purpose) => purpose === "retired-recovery")) {
+    exactKeys(entry, ["id", "kind", "marketplaceId", "purposes", "targets"], context)
+    return {
+      id,
+      kind: "plugin",
+      marketplaceId: "convax-official",
+      purposes: ["default-install"],
+      targets,
+    }
+  }
+  exactKeys(entry, ["id", "kind", "marketplaceId", "purposes", "retired", "targets", "version"], context)
+  const version = nonEmptyString(entry.version, `${context}.version`)
+  if (!SEMVER.test(version)) {
+    throw new Error(`${context}.version must be SemVer`)
+  }
   return {
     id,
     kind: "plugin",
     marketplaceId: "convax-official",
-    setup: "automatic",
+    purposes: purposes.length === 1 ? ["retired-recovery"] : ["default-install", "retired-recovery"],
+    retired: parseRetiredPluginBinding(entry.retired, `${context}.retired`),
     targets,
+    version,
   }
 }
 
@@ -244,32 +315,9 @@ function parseRetiredPluginBinding(value: unknown, context: string): Marketplace
   }
 }
 
-function parseRecoveryArtifactPolicy(value: unknown, context: string): MarketplaceRecoveryArtifactPolicy {
-  const entry = record(value, context)
-  exactKeys(entry, ["id", "kind", "marketplaceId", "retired", "targets", "version"], context)
-  const id = nonEmptyString(entry.id, `${context}.id`)
-  const version = nonEmptyString(entry.version, `${context}.version`)
-  if (
-    !PACKAGE_ID.test(id) ||
-    entry.marketplaceId !== "convax-official" ||
-    entry.kind !== "plugin" ||
-    !SEMVER.test(version)
-  ) {
-    throw new Error(`${context} is not a valid retired Plugin recovery declaration`)
-  }
-  return {
-    id,
-    kind: "plugin",
-    marketplaceId: "convax-official",
-    retired: parseRetiredPluginBinding(entry.retired, `${context}.retired`),
-    targets: parseTargets(entry.targets, `${context}.targets`),
-    version,
-  }
-}
-
 export function parseMarketplaceProductPolicy(value: unknown): MarketplaceProductPolicy {
   const input = record(value, "policy")
-  exactKeys(input, ["builtin", "official", "preinstalledPackages", "recoveryArtifacts", "revision"], "policy")
+  exactKeys(input, ["builtin", "official", "packages", "revision"], "policy")
   const builtin = record(input.builtin, "policy.builtin")
   exactKeys(builtin, ["marketplaceId", "repository"], "policy.builtin")
   const official = record(input.official, "policy.official")
@@ -285,28 +333,13 @@ export function parseMarketplaceProductPolicy(value: unknown): MarketplaceProduc
   ) {
     throw new Error("policy source declarations are not the approved product policy")
   }
-  if (!Array.isArray(input.preinstalledPackages) || input.preinstalledPackages.length > MAX_PREINSTALLED_PACKAGES) {
-    throw new Error("policy.preinstalledPackages must be a bounded array")
+  if (!Array.isArray(input.packages) || input.packages.length > MAX_PACKAGED_PACKAGES) {
+    throw new Error("policy.packages must be a bounded array")
   }
-  const preinstalledPackages = input.preinstalledPackages.map((entry, index) =>
-    parsePreinstalledPolicy(entry, `policy.preinstalledPackages[${index}]`),
-  )
-  const identities = preinstalledPackages.map((entry) => `${entry.marketplaceId}\0${entry.kind}\0${entry.id}`)
+  const packages = input.packages.map((entry, index) => parsePackagedPackagePolicy(entry, `policy.packages[${index}]`))
+  const identities = packages.map((entry) => `${entry.marketplaceId}\0${entry.kind}\0${entry.id}`)
   if (new Set(identities).size !== identities.length) {
-    throw new Error("policy.preinstalledPackages identities must be unique")
-  }
-  if (!Array.isArray(input.recoveryArtifacts) || input.recoveryArtifacts.length > MAX_RECOVERY_ARTIFACTS) {
-    throw new Error("policy.recoveryArtifacts must be a bounded array")
-  }
-  const recoveryArtifacts = input.recoveryArtifacts.map((entry, index) =>
-    parseRecoveryArtifactPolicy(entry, `policy.recoveryArtifacts[${index}]`),
-  )
-  const recoveryIdentities = recoveryArtifacts.map((entry) => `${entry.marketplaceId}\0${entry.kind}\0${entry.id}`)
-  if (new Set(recoveryIdentities).size !== recoveryIdentities.length) {
-    throw new Error("policy.recoveryArtifacts identities must be unique")
-  }
-  if (recoveryIdentities.some((identity) => identities.includes(identity))) {
-    throw new Error("policy.recoveryArtifacts must remain disjoint from preinstalledPackages")
+    throw new Error("policy.packages identities must be unique")
   }
   return {
     builtin: {
@@ -318,8 +351,7 @@ export function parseMarketplaceProductPolicy(value: unknown): MarketplaceProduc
       marketplaceId: "convax-official",
       repository: "convaxai/convax-plugins",
     },
-    preinstalledPackages,
-    recoveryArtifacts,
+    packages,
     revision: Number(input.revision),
   }
 }
@@ -348,30 +380,66 @@ function parseBuiltinReservations(value: unknown): MarketplaceProductLock["resol
 function parseResolvedPackage(
   value: unknown,
   index: number,
-  policyEntry: Pick<MarketplacePreinstalledPackagePolicy, "id" | "kind" | "marketplaceId" | "targets">,
+  policyEntry: MarketplacePackagedPackagePolicy,
   context = `resolved.packages[${index}]`,
-): MarketplaceLockedPluginPackage {
+): MarketplaceLockedPackage {
   const input = record(value, context)
-  exactKeys(
-    input,
-    ["artifact", "companions", "id", "kind", "marketplaceId", "ownedSkills", "setup", "version"],
-    context,
-  )
+  const purposes = parsePurposes(input.purposes, `${context}.purposes`)
+  const targets = parseTargets(input.targets, `${context}.targets`)
   if (
     input.marketplaceId !== policyEntry.marketplaceId ||
     input.kind !== policyEntry.kind ||
     input.id !== policyEntry.id ||
-    input.setup !== "explicit" ||
+    canonicalJson(purposes) !== canonicalJson(policyEntry.purposes) ||
+    canonicalJson(targets) !== canonicalJson(policyEntry.targets)
+  ) {
+    throw new Error(`${context} does not match policy.packages`)
+  }
+  const version = nonEmptyString(input.version, `${context}.version`)
+  if (!SEMVER.test(version)) {
+    throw new Error(`${context}.version must be SemVer`)
+  }
+
+  if (policyEntry.kind === "skill") {
+    exactKeys(input, ["artifact", "id", "kind", "marketplaceId", "purposes", "targets", "version"], context)
+    return {
+      artifact: parseArtifact(input.artifact, `${context}.artifact`, {
+        maxSize: 10 * 1024 * 1024,
+        expectedTag: `skill-${policyEntry.id}-v${version}`,
+      }),
+      id: policyEntry.id,
+      kind: "skill",
+      marketplaceId: "convax-official",
+      purposes: ["default-install"],
+      targets,
+      version,
+    }
+  }
+
+  const hasRecoveryPurpose = policyEntry.purposes.some((purpose) => purpose === "retired-recovery")
+  exactKeys(
+    input,
+    [
+      "artifact",
+      "companions",
+      "id",
+      "kind",
+      "marketplaceId",
+      "ownedSkills",
+      "purposes",
+      ...(hasRecoveryPurpose ? ["retired"] : []),
+      "targets",
+      "version",
+    ],
+    context,
+  )
+  if (
     !Array.isArray(input.companions) ||
     input.companions.length > MAX_PACKAGE_CLOSURE ||
     !Array.isArray(input.ownedSkills) ||
     input.ownedSkills.length > MAX_PACKAGE_CLOSURE
   ) {
-    throw new Error(`${context} does not match policy.preinstalledPackages`)
-  }
-  const version = nonEmptyString(input.version, `${context}.version`)
-  if (!SEMVER.test(version)) {
-    throw new Error(`${context}.version must be SemVer`)
+    throw new Error(`${context} must declare a bounded Plugin closure`)
   }
   const releaseTag = `plugin-${policyEntry.id}-v${version}`
   const companions = input.companions.map((value, companionIndex) => {
@@ -404,9 +472,9 @@ function parseResolvedPackage(
   const companionTargets = companions.map(({ platform, arch }) => `${platform}-${arch}`)
   if (
     new Set(companionTargets).size !== companionTargets.length ||
-    canonicalJson([...companionTargets].sort()) !== canonicalJson([...policyEntry.targets].sort())
+    canonicalJson(companionTargets) !== canonicalJson(targets)
   ) {
-    throw new Error(`${context}.companions must exactly close the declared policy targets`)
+    throw new Error(`${context}.companions must exactly close policy.packages targets in canonical order`)
   }
   const ownedSkills = input.ownedSkills.map((entry, skillIndex) =>
     parseArtifact(entry, `${context}.ownedSkills[${skillIndex}]`, {
@@ -416,57 +484,52 @@ function parseResolvedPackage(
   if (new Set(ownedSkills.map(({ url }) => url)).size !== ownedSkills.length) {
     throw new Error(`${context}.ownedSkills must be unique`)
   }
+  const artifact = parseArtifact(input.artifact, `${context}.artifact`, {
+    maxSize: 10 * 1024 * 1024,
+    expectedTag: releaseTag,
+  })
+  if (hasRecoveryPurpose) {
+    if (!("retired" in policyEntry) || policyEntry.version !== version) {
+      throw new Error(`${context}.version does not match policy.packages retired-recovery target`)
+    }
+    const retired = parseRetiredPluginBinding(input.retired, `${context}.retired`)
+    if (canonicalJson(retired) !== canonicalJson(policyEntry.retired)) {
+      throw new Error(`${context}.retired does not match policy.packages`)
+    }
+    return {
+      artifact,
+      companions,
+      id: policyEntry.id,
+      kind: "plugin",
+      marketplaceId: "convax-official",
+      ownedSkills,
+      purposes: policyEntry.purposes.length === 1 ? ["retired-recovery"] : ["default-install", "retired-recovery"],
+      retired,
+      targets,
+      version,
+    }
+  }
   return {
-    artifact: parseArtifact(input.artifact, `${context}.artifact`, {
-      maxSize: 10 * 1024 * 1024,
-      expectedTag: releaseTag,
-    }),
+    artifact,
     companions,
     id: policyEntry.id,
     kind: "plugin",
     marketplaceId: "convax-official",
     ownedSkills,
-    setup: "explicit",
+    purposes: ["default-install"],
+    targets,
     version,
   }
-}
-
-function parseResolvedRecoveryArtifact(
-  value: unknown,
-  index: number,
-  policyEntry: MarketplaceRecoveryArtifactPolicy,
-): MarketplaceProductLock["resolved"]["recoveryArtifacts"][number] {
-  const context = `resolved.recoveryArtifacts[${index}]`
-  const input = record(value, context)
-  exactKeys(
-    input,
-    ["artifact", "companions", "id", "kind", "marketplaceId", "ownedSkills", "retired", "setup", "version"],
-    context,
-  )
-  const retired = parseRetiredPluginBinding(input.retired, `${context}.retired`)
-  if (canonicalJson(retired) !== canonicalJson(policyEntry.retired)) {
-    throw new Error(`${context}.retired does not match policy.recoveryArtifacts`)
-  }
-  const { retired: _retired, ...packageInput } = input
-  const locked = parseResolvedPackage(packageInput, index, policyEntry, context)
-  if (locked.version !== policyEntry.version) {
-    throw new Error(`${context}.version does not match policy.recoveryArtifacts`)
-  }
-  return { ...locked, retired }
 }
 
 export function parseMarketplaceProductLock(value: unknown): MarketplaceProductLock {
   const input = record(value, "marketplaces.lock.json")
   exactKeys(input, ["policy", "resolved", "schema"], "marketplaces.lock.json")
-  if (input.schema !== "convax.marketplace-product-lock/2")
+  if (input.schema !== "convax.marketplace-product-lock/3")
     throw new Error("unsupported Marketplace product lock schema")
   const policy = parseMarketplaceProductPolicy(input.policy)
   const resolved = record(input.resolved, "resolved")
-  exactKeys(
-    resolved,
-    ["builtinBundle", "builtinReservations", "official", "packages", "policyDigest", "recoveryArtifacts"],
-    "resolved",
-  )
+  exactKeys(resolved, ["builtinBundle", "builtinReservations", "official", "packages", "policyDigest"], "resolved")
   const policyDigest = nonEmptyString(resolved.policyDigest, "resolved.policyDigest")
   if (policyDigest !== canonicalProductPolicyDigest(policy)) {
     throw new Error("resolved.policyDigest does not match policy; run the explicit lock refresh")
@@ -478,8 +541,8 @@ export function parseMarketplaceProductLock(value: unknown): MarketplaceProductL
     throw new Error("resolved.official.revision must be a 64-character lowercase content SHA-256")
   }
   const builtinReservations = parseBuiltinReservations(resolved.builtinReservations)
-  if (!Array.isArray(resolved.packages) || resolved.packages.length !== policy.preinstalledPackages.length) {
-    throw new Error("resolved.packages must exactly close policy.preinstalledPackages")
+  if (!Array.isArray(resolved.packages) || resolved.packages.length !== policy.packages.length) {
+    throw new Error("resolved.packages must exactly close policy.packages")
   }
   const resolvedByIdentity = new Map<string, { value: unknown; index: number }>()
   resolved.packages.forEach((entry, index) => {
@@ -488,30 +551,11 @@ export function parseMarketplaceProductLock(value: unknown): MarketplaceProductL
     if (resolvedByIdentity.has(identity)) throw new Error("resolved.packages identities must be unique")
     resolvedByIdentity.set(identity, { value: entry, index })
   })
-  const packages = policy.preinstalledPackages.map((policyEntry) => {
+  const packages = policy.packages.map((policyEntry) => {
     const identity = `${policyEntry.marketplaceId}\0${policyEntry.kind}\0${policyEntry.id}`
     const selected = resolvedByIdentity.get(identity)
-    if (!selected) throw new Error("resolved.packages must exactly close policy.preinstalledPackages")
+    if (!selected) throw new Error("resolved.packages must exactly close policy.packages")
     return parseResolvedPackage(selected.value, selected.index, policyEntry)
-  })
-  if (
-    !Array.isArray(resolved.recoveryArtifacts) ||
-    resolved.recoveryArtifacts.length !== policy.recoveryArtifacts.length
-  ) {
-    throw new Error("resolved.recoveryArtifacts must exactly close policy.recoveryArtifacts")
-  }
-  const recoveryByIdentity = new Map<string, { value: unknown; index: number }>()
-  resolved.recoveryArtifacts.forEach((entry, index) => {
-    const candidate = record(entry, `resolved.recoveryArtifacts[${index}]`)
-    const identity = `${String(candidate.marketplaceId)}\0${String(candidate.kind)}\0${String(candidate.id)}`
-    if (recoveryByIdentity.has(identity)) throw new Error("resolved.recoveryArtifacts identities must be unique")
-    recoveryByIdentity.set(identity, { value: entry, index })
-  })
-  const recoveryArtifacts = policy.recoveryArtifacts.map((policyEntry) => {
-    const identity = `${policyEntry.marketplaceId}\0${policyEntry.kind}\0${policyEntry.id}`
-    const selected = recoveryByIdentity.get(identity)
-    if (!selected) throw new Error("resolved.recoveryArtifacts must exactly close policy.recoveryArtifacts")
-    return parseResolvedRecoveryArtifact(selected.value, selected.index, policyEntry)
   })
   return {
     policy,
@@ -537,8 +581,7 @@ export function parseMarketplaceProductLock(value: unknown): MarketplaceProductL
       },
       packages,
       policyDigest,
-      recoveryArtifacts,
     },
-    schema: "convax.marketplace-product-lock/2",
+    schema: "convax.marketplace-product-lock/3",
   }
 }

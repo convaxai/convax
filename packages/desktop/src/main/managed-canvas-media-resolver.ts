@@ -7,8 +7,19 @@ import {
   type CanvasDocumentRef,
   type CanvasNodeContentGuard,
 } from "@convax/canvas/application"
+import {
+  assertResourceRef,
+  canvasProjectionResourceMetadataKey,
+  type CanvasResourceRef,
+} from "@convax/canvas/collaboration"
+import { parseProjectId } from "@convax/collaboration"
+import type { ProjectIndexCurrentBlobReferencePort } from "@convax/project"
 import type { ProjectFileInfo } from "@convax/project-files/contracts"
-import { getProjectResourceReference, type ProjectResourceReference } from "@convax/project/canvas"
+import {
+  getProjectResourceReference,
+  resolveCurrentProjectResource,
+  type ProjectResourceReference,
+} from "@convax/project/canvas"
 import type { ProjectManagedAssetStore } from "@convax/project/node"
 
 export type ManagedCanvasMediaKind = "audio" | "image" | "video"
@@ -84,6 +95,7 @@ export class ManagedCanvasMediaResolver implements ManagedCanvasMediaResolutionP
     private readonly input: {
       assets: Pick<ProjectManagedAssetStore, "resolve">
       application: Pick<CanvasApplicationService, "query">
+      currentResources: Pick<ProjectIndexCurrentBlobReferencePort, "queryCurrentResources">
       projects: ManagedCanvasMediaProjectPathResolver
     },
   ) {}
@@ -106,7 +118,7 @@ export class ManagedCanvasMediaResolver implements ManagedCanvasMediaResolutionP
       )
     }
     const nodeById = new Map(document.nodes.map((node) => [node.id, node]))
-    const references = request.nodeIds.map((nodeId) => {
+    const selectedNodes = request.nodeIds.map((nodeId) => {
       const node = nodeById.get(nodeId)
       if (!node) throw new ManagedCanvasMediaStaleError(`Selected Canvas node was not found: ${nodeId}`)
       const kind = node.data.kind
@@ -115,13 +127,37 @@ export class ManagedCanvasMediaResolver implements ManagedCanvasMediaResolutionP
           `Only Canvas ${options.allowedKindsDescription} can be used for ${options.operationLabel}: ${nodeId}`,
         )
       }
-      const reference = getProjectResourceReference(node.data.metadata)
-      if (!reference || reference.kind === "project-directory") {
+      const canonicalResource = getCanonicalCanvasResource(node.data.metadata)
+      if (canonicalResource && canonicalResource.mediaClass !== kind) {
         throw new ManagedCanvasMediaResourceUnavailableError(
-          `Canvas media must be stored in the active Project before ${options.operationLabel}: ${node.data.label}`,
+          `Canvas ${kind} does not match its current Project resource: ${nodeId}`,
         )
       }
-      return { expectedTarget: createCanvasNodeContentGuard(node), kind, nodeId, reference }
+      return { canonicalResource, expectedTarget: createCanvasNodeContentGuard(node), kind, nodeId, node }
+    })
+    const canonicalResources = selectedNodes.some(({ canonicalResource }) => canonicalResource !== null)
+      ? await this.input.currentResources.queryCurrentResources({ projectId: parseProjectId(request.scopeId) })
+      : []
+    throwIfAborted(signal)
+    const references = selectedNodes.map(({ canonicalResource, expectedTarget, kind, node, nodeId }) => {
+      const resolution = canonicalResource
+        ? resolveCurrentProjectResource({
+            currentResources: canonicalResources,
+            name: node.data.label || canonicalResource.contentDigest,
+            resource: canonicalResource,
+          })
+        : null
+      const reference = canonicalResource
+        ? resolution?.status === "ready"
+          ? resolution.reference
+          : null
+        : getProjectResourceReference(node.data.metadata)
+      if (!reference || reference.kind === "project-directory") {
+        throw new ManagedCanvasMediaResourceUnavailableError(
+          `Canvas media must be current and available in the active Project before ${options.operationLabel}: ${node.data.label}`,
+        )
+      }
+      return { canonicalResource, expectedTarget, kind, nodeId, reference }
     })
 
     const resolved: ResolvedManagedCanvasMedia[] = []
@@ -166,6 +202,7 @@ export class ManagedCanvasMediaResolver implements ManagedCanvasMediaResolutionP
       )
     }
     await this.recheckCanvasTargets(request, references, options.operationLabel, signal)
+    await this.recheckCurrentResources(request, references, options.operationLabel, signal)
     return resolved
   }
 
@@ -185,6 +222,59 @@ export class ManagedCanvasMediaResolver implements ManagedCanvasMediaResolutionP
       }
     }
   }
+
+  private async recheckCurrentResources(
+    request: ManagedCanvasMediaRequest,
+    expected: readonly {
+      canonicalResource: CanvasResourceRef | null
+      nodeId: string
+      reference: Exclude<ProjectResourceReference, { kind: "project-directory" }>
+    }[],
+    operationLabel: string,
+    signal?: AbortSignal,
+  ) {
+    const canonical = expected.filter(
+      (item): item is typeof item & { canonicalResource: CanvasResourceRef } => item.canonicalResource !== null,
+    )
+    if (canonical.length === 0) return
+    throwIfAborted(signal)
+    const currentResources = await this.input.currentResources.queryCurrentResources({
+      projectId: parseProjectId(request.scopeId),
+    })
+    throwIfAborted(signal)
+    for (const item of canonical) {
+      const resolution = resolveCurrentProjectResource({
+        currentResources,
+        name: item.reference.kind === "managed-asset" ? item.reference.name : item.nodeId,
+        resource: item.canonicalResource,
+      })
+      if (resolution.status !== "ready" || !sameResolvedProjectResource(resolution.reference, item.reference)) {
+        throw new ManagedCanvasMediaStaleError(
+          `Canvas media Project resource changed while preparing ${operationLabel}: ${item.nodeId}`,
+        )
+      }
+    }
+  }
+}
+
+function sameResolvedProjectResource(
+  left: Exclude<ProjectResourceReference, { kind: "project-directory" }>,
+  right: Exclude<ProjectResourceReference, { kind: "project-directory" }>,
+) {
+  if (left.kind !== right.kind) return false
+  if (left.kind === "project-file" && right.kind === "project-file") return left.path === right.path
+  if (left.kind === "managed-asset" && right.kind === "managed-asset") {
+    return left.sha256 === right.sha256 && left.mediaType === right.mediaType
+  }
+  return false
+}
+
+function getCanonicalCanvasResource(metadata: unknown): CanvasResourceRef | null {
+  if (!metadata || typeof metadata !== "object" || Array.isArray(metadata)) return null
+  if (!Object.hasOwn(metadata, canvasProjectionResourceMetadataKey)) return null
+  const value = (metadata as Record<string, unknown>)[canvasProjectionResourceMetadataKey]
+  assertResourceRef(value)
+  return value
 }
 
 function projectResourceLabel(reference: Exclude<ProjectResourceReference, { kind: "project-directory" }>) {

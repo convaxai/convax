@@ -26,6 +26,7 @@ const baseService: Omit<PluginServiceCatalogEntry, "status"> = {
   pluginId: "account-tools",
   serviceId: "plugin:account-tools",
   state: "connected",
+  target: { pluginId: "account-tools", serviceId: "account-tools" },
   version: "1.0.0",
 }
 
@@ -66,6 +67,40 @@ function installTestWindow() {
 }
 
 describe("Plugin Services host UI", () => {
+  test("distinguishes an unauthorized empty model catalog from a connected empty catalog", () => {
+    const unauthorized = renderToStaticMarkup(
+      <PluginServicesSurface
+        locale="zh-CN"
+        onAction={noop}
+        onRefresh={noop}
+        snapshot={{
+          loading: false,
+          services: [
+            {
+              ...baseService,
+              actions: ["authorize"],
+              authentication: "required",
+              models: [],
+              state: "disconnected",
+            },
+          ],
+        }}
+      />,
+    )
+    const connectedWithoutModels = renderToStaticMarkup(
+      <PluginServicesSurface
+        locale="zh-CN"
+        onAction={noop}
+        onRefresh={noop}
+        snapshot={{ loading: false, services: [{ ...baseService, models: [] }] }}
+      />,
+    )
+
+    expect(unauthorized).toContain("暂未授权，授权后加载模型。")
+    expect(unauthorized).not.toContain("小云雀图片")
+    expect(connectedWithoutModels).toContain("暂无可用模型。")
+  })
+
   test("opens a concrete Service target directly", () => {
     const markup = renderToStaticMarkup(
       <PluginServicesSurface
@@ -286,7 +321,7 @@ describe("Plugin Services host UI", () => {
         root?.render(
           <PluginServicesSurface
             locale="en"
-            onAction={(_pluginId, action) => actions.push(action)}
+            onAction={(_target, action) => actions.push(action)}
             onRefresh={noop}
             snapshot={{
               loading: false,
@@ -335,7 +370,7 @@ describe("Plugin Services host UI", () => {
         onAction={noop}
         onRefresh={noop}
         snapshot={{
-          action: { action: "authorize", pluginId: "account-tools" },
+          actions: [{ action: "authorize", target: baseService.target }],
           loading: false,
           services: [
             {

@@ -3,7 +3,7 @@ import type {
   GenerationToolDescription,
   GenerationToolSummary,
 } from "../generation-contracts"
-import type { PluginServiceStatus, PluginServiceSummary } from "../plugin-service-contracts"
+import type { PluginServiceStatus, PluginServiceSummary, PluginServiceTarget } from "../plugin-service-contracts"
 import type {
   GenerationToolExecutionPort,
   InspectedGenerationModel,
@@ -11,7 +11,7 @@ import type {
 } from "./generation-canvas-service"
 
 export interface GenerationPluginServiceAvailabilityPort {
-  getStatus(pluginId: string, signal?: AbortSignal): Promise<PluginServiceStatus>
+  getStatus(target: PluginServiceTarget, signal?: AbortSignal): Promise<PluginServiceStatus>
   listServices(): Promise<readonly PluginServiceSummary[]>
 }
 
@@ -21,6 +21,8 @@ export interface GenerationModelCatalogExpansionPort extends GenerationToolExecu
     tools: readonly GenerationToolSummary[],
     signal?: AbortSignal,
   ): Promise<readonly InspectedGenerationModel[]>
+  /** Null means this tool belongs to a v9 top-level runtime, not a Service profile. */
+  serviceStatusTarget?(tool: GenerationToolSummary): Promise<PluginServiceTarget | null>
 }
 
 function isAvailable(status: PluginServiceStatus) {
@@ -45,13 +47,23 @@ interface GenerationToolCatalogRefresh {
 }
 
 function serviceProvidesModel(service: PluginServiceSummary, tool: GenerationToolSummary) {
-  return service.models.some((model) => model.capability === tool.output && model.id === tool.toolId)
+  return (
+    service.pluginId === tool.pluginId &&
+    service.serviceId === tool.serviceId &&
+    service.models.some((model) => model.capability === tool.output && model.id === tool.toolId)
+  )
+}
+
+function serviceKey(value: Pick<PluginServiceTarget, "pluginId" | "serviceId">) {
+  return JSON.stringify([value.pluginId, value.serviceId])
 }
 
 function belongsToModelFamily(candidate: GenerationToolSummary, base: GenerationToolSummary) {
   return (
     candidate.kind === "model" &&
+    baseGenerationToolId(candidate.id) === base.id &&
     candidate.pluginId === base.pluginId &&
+    candidate.serviceId === base.serviceId &&
     candidate.toolId === base.toolId &&
     candidate.output === base.output &&
     candidate.pluginName === base.pluginName &&
@@ -63,6 +75,14 @@ function belongsToModelFamily(candidate: GenerationToolSummary, base: Generation
     candidate.recovery === base.recovery &&
     JSON.stringify(candidate.acceptedInputs) === JSON.stringify(base.acceptedInputs)
   )
+}
+
+function baseGenerationToolId(selectionId: string) {
+  const marker = ".model-selection-"
+  const markerIndex = selectionId.lastIndexOf(marker)
+  if (markerIndex < 0) return selectionId
+  const digest = selectionId.slice(markerIndex + marker.length)
+  return /^[a-f0-9]{64}$/u.test(digest) ? selectionId.slice(0, markerIndex) : selectionId
 }
 
 function unavailableModelError() {
@@ -109,7 +129,13 @@ export class ServiceAwareGenerationTools implements GenerationToolExecutionPort 
   }
 
   async isPluginAvailable(pluginId: string, signal?: AbortSignal) {
-    const service = (await this.services.listServices()).find((candidate) => candidate.pluginId === pluginId)
+    return this.isServiceAvailable({ pluginId, serviceId: pluginId }, signal)
+  }
+
+  async isServiceAvailable(target: PluginServiceTarget, signal?: AbortSignal) {
+    const service = (await this.services.listServices()).find(
+      (candidate) => candidate.pluginId === target.pluginId && candidate.serviceId === target.serviceId,
+    )
     if (!service) return false
     return this.#isServiceAvailable(service, signal)
   }
@@ -186,8 +212,13 @@ export class ServiceAwareGenerationTools implements GenerationToolExecutionPort 
 
   async #assertModelAvailable(tool: GenerationToolSummary, signal?: AbortSignal) {
     if (tool.kind !== "model") return
+    const target = await this.#serviceStatusTarget(tool)
+    if (!target) return
     const service = (await this.services.listServices()).find(
-      (candidate) => candidate.pluginId === tool.pluginId && serviceProvidesModel(candidate, tool),
+      (candidate) =>
+        candidate.pluginId === target.pluginId &&
+        candidate.serviceId === target.serviceId &&
+        serviceProvidesModel(candidate, tool),
     )
     if (!service || !(await this.#isServiceAvailable(service, signal))) throw unavailableModelError()
   }
@@ -212,17 +243,21 @@ export class ServiceAwareGenerationTools implements GenerationToolExecutionPort 
       }
     }
     const services = await this.services.listServices()
-    const serviceByPluginId = new Map(services.map((service) => [service.pluginId, service]))
-    const modelsByPluginId = new Map<string, GenerationToolSummary[]>()
+    const serviceById = new Map(services.map((service) => [serviceKey(service), service]))
+    const modelsByService = new Map<string, GenerationToolSummary[]>()
     for (const model of models) {
-      const service = serviceByPluginId.get(model.pluginId)
-      if (!service || !serviceProvidesModel(service, model)) continue
-      const grouped = modelsByPluginId.get(model.pluginId) ?? []
+      const target = await this.#serviceStatusTarget(model)
+      const key = target ? `service:${serviceKey(target)}` : `runtime:${model.pluginId}`
+      if (target) {
+        const service = serviceById.get(serviceKey(target))
+        if (!service || !serviceProvidesModel(service, model)) continue
+      }
+      const grouped = modelsByService.get(key) ?? []
       grouped.push(model)
-      modelsByPluginId.set(model.pluginId, grouped)
+      modelsByService.set(key, grouped)
     }
     const inspectedByBaseId = new Map<string, readonly InspectedGenerationModel[]>()
-    const groups = [...modelsByPluginId.values()]
+    const groups = [...modelsByService.values()]
     for (let index = 0; index < groups.length; index += maximumConcurrentCatalogInspections) {
       const batch = groups.slice(index, index + maximumConcurrentCatalogInspections)
       const inspected = await Promise.all(batch.map((tools) => this.#inspectModelCatalog(tools)))
@@ -239,7 +274,12 @@ export class ServiceAwareGenerationTools implements GenerationToolExecutionPort 
         for (const tool of expected) {
           inspectedByBaseId.set(
             tool.id,
-            entries.filter(({ summary }) => summary.pluginId === tool.pluginId && summary.toolId === tool.toolId),
+            entries.filter(
+              ({ summary }) =>
+                summary.pluginId === tool.pluginId &&
+                summary.serviceId === tool.serviceId &&
+                summary.toolId === tool.toolId,
+            ),
           )
         }
       }
@@ -257,6 +297,12 @@ export class ServiceAwareGenerationTools implements GenerationToolExecutionPort 
   #refreshIfStale(snapshot: GenerationToolCatalogSnapshot) {
     if (this.#now() - snapshot.refreshedAt < this.#refreshAfterMs) return
     void this.refresh().catch(() => undefined)
+  }
+
+  #serviceStatusTarget(tool: GenerationToolSummary): Promise<PluginServiceTarget | null> {
+    return this.tools.serviceStatusTarget
+      ? this.tools.serviceStatusTarget(tool)
+      : Promise.resolve({ pluginId: tool.pluginId, serviceId: tool.serviceId })
   }
 
   async #inspectModelCatalog(
@@ -332,7 +378,10 @@ export class ServiceAwareGenerationTools implements GenerationToolExecutionPort 
     const onAvailabilityAbort = () => rejectCanceled(abortReason(controller.signal))
     controller.signal.addEventListener("abort", onAvailabilityAbort, { once: true })
     try {
-      const status = await Promise.race([this.services.getStatus(service.pluginId, controller.signal), canceled])
+      const status = await Promise.race([
+        this.services.getStatus({ pluginId: service.pluginId, serviceId: service.serviceId }, controller.signal),
+        canceled,
+      ])
       return isAvailable(status)
     } catch {
       if (signal?.aborted) throw abortReason(signal)

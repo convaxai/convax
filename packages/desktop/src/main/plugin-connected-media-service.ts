@@ -31,7 +31,7 @@ import {
   type PluginConnectedMediaProbe,
 } from "../plugin-connected-media-contracts"
 import { matchesWebPluginCanvasNodeIdentity } from "../plugin-canvas-node"
-import { webPluginManifestSchemaV8, type InstalledWebPluginSummary } from "../plugin-contracts"
+import { isSupportedWebPluginManifestSchema, type InstalledWebPluginSummary } from "../plugin-contracts"
 import { PluginHostApiError, PluginHostApiResourceUnavailableError } from "../plugin-host-errors"
 import type { CanvasDocumentChangeBus } from "./canvas-document-change-bus"
 import type { PluginConnectedImageInspector } from "./plugin-connected-image-inspector"
@@ -602,7 +602,7 @@ export class PluginConnectedMediaService {
     throwIfAborted(signal)
     if (
       !identity ||
-      identity.plugin.schema !== webPluginManifestSchemaV8 ||
+      !isSupportedWebPluginManifestSchema(identity.plugin.schema) ||
       identity.plugin.version !== request.pluginVersion ||
       !identity.plugin.entry ||
       !hasActivePluginIdentity(identity)

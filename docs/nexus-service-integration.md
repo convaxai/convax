@@ -54,7 +54,6 @@ return URL。AuthX canonical origin 必须显式加入该 Project 的 authorized
 只允许该精确 Portal origin。
 
 ### Application identity 与租户边界
-
 Convax Application 保留现有 AuthX Project
 `project_OKnlkG5kU1lNrOqJs0GFTu4JM2SwNkHz`，其
 `ProjectApplicationPolicy.tenantModel = NONE`。Nexus Console 使用独立的 planned Project

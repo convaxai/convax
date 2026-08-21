@@ -15,11 +15,7 @@ import type {
   PluginHostInvocationLease,
   PluginHostInvocationLeaseClaims,
 } from "../plugin-host-api-main-contracts"
-import type {
-  PluginCanvasChangeEvent,
-  PluginPrincipal,
-  PluginProjectScope,
-} from "../plugin-capability-contracts"
+import type { PluginCanvasChangeEvent, PluginPrincipal, PluginProjectScope } from "../plugin-capability-contracts"
 import type { InstalledPluginPrincipalResolver } from "./plugin-principal-resolver"
 import type { StdioMcpServerRequestContext, StdioMcpServerRequestHandler } from "./stdio-mcp-client"
 
@@ -118,11 +114,12 @@ export async function createToolPluginCanvasMcpBridge(
 
 function toolPluginCompanionApiDefinitions(plugin: InstalledPlugin) {
   if (
-    plugin.schema !== "convax.plugin/8" ||
+    (plugin.schema !== "convax.plugin/8" && plugin.schema !== "convax.plugin/9") ||
     !plugin.hostApi ||
     plugin.runtime?.type !== "mcp-stdio" ||
     (!plugin.contributes.generation?.tools.length &&
-      plugin.contributes.service === undefined &&
+      !("service" in plugin.contributes && plugin.contributes.service !== undefined) &&
+      !("services" in plugin.contributes && (plugin.contributes.services?.length ?? 0) > 0) &&
       !plugin.contributes.capabilities?.exports.length) ||
     !plugin.capabilities.includes("projects.read")
   ) {
@@ -164,9 +161,7 @@ class ToolPluginHostApiMcpConnection implements ToolPluginCanvasMcpBridge {
     this.#connection = connection
     this.#events = events
     this.#operationId = invocationClaims?.operationId
-    this.#methods = new Map(
-      routes.filter(({ host }) => connection.supports(host)).map(({ host, mcp }) => [mcp, host]),
-    )
+    this.#methods = new Map(routes.filter(({ host }) => connection.supports(host)).map(({ host, mcp }) => [mcp, host]))
     events.send = ({ event, subscriptionId }) => {
       if (this.#closed) return
       try {

@@ -131,13 +131,14 @@ describe("WorkspaceShell", () => {
     expect(indexSource).not.toContain("<ProjectSidebarTrigger")
     expect(
       indexSource.match(
-        /footerActions=\{\s*<ApplicationMenu locale=\{locale\} onOpenSettings=\{openSettings\} services=\{serviceCatalogSnapshot\} \/>\s*\}/,
+        /<ApplicationMenu locale=\{locale\} onOpenSettings=\{openSettings\} services=\{serviceCatalogSnapshot\} \/>/g,
       ),
-    ).not.toBeNull()
+    ).toHaveLength(1)
     expect(indexSource.match(/<ApplicationMenu[\s\S]{0,80}\bcompact/)).toBeNull()
     expect(titlebarSource).toContain('from "lucide-react"')
     expect(titlebarSource).not.toContain("onOpenCommands")
-    expect(indexSource).toContain('event.key.toLocaleLowerCase() !== "k"')
+    expect(indexSource).toContain('id: "application.command-palette"')
+    expect(indexSource).toContain('chords: [primaryShortcutChord("k")]')
     expect(indexSource).toContain("leadingActionHostRef={setProjectTitlebarEntryHost}")
     expect(indexSource).toContain("entryPortal={settingsSection ? null : projectTitlebarEntryHost}")
     expect(indexSource).toContain("<AgentDrawerTrigger")

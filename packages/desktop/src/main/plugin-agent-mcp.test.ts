@@ -7,7 +7,11 @@ import {
   pluginAgentMcpServerName,
 } from "./plugin-agent-mcp"
 
-function remotePlugin(id = "remote-editor", oauth: "auto" | "none" = "auto") {
+function remotePlugin(
+  id = "remote-editor",
+  oauth: "auto" | "none" = "auto",
+  schema: "convax.plugin/8" | "convax.plugin/9" = "convax.plugin/8",
+) {
   return parseWebPluginManifest({
     capabilities: [],
     contributes: {
@@ -24,7 +28,7 @@ function remotePlugin(id = "remote-editor", oauth: "auto" | "none" = "auto") {
     hostApi: { major: 3, optional: [], required: [] },
     id,
     name: id,
-    schema: "convax.plugin/8",
+    schema,
     version: "1.0.0",
   })
 }
@@ -63,12 +67,17 @@ describe("installed Plugin Agent MCP mapping", () => {
 
   test("maps explicit OAuth disablement and rejects legacy executable runtimes", () => {
     const withoutOauth = remotePlugin("remote-editor", "none")
+    const v9 = remotePlugin("v9-agent", "auto", "convax.plugin/9")
     const executable = {
       ...remotePlugin("legacy-agent"),
       schema: "convax.plugin/6",
     } as unknown as InstalledWebPluginSummary
 
     expect(installedPluginAgentMcpServer(withoutOauth)?.server.oauth).toBe(false)
+    expect(installedPluginAgentMcpServer(v9)).toMatchObject({
+      name: "plugin_v9_agent",
+      pluginId: "v9-agent",
+    })
     expect(installedPluginAgentMcpServer(executable)).toBeNull()
     expect(installedPluginAgentMcpServers([executable])).toEqual({})
   })

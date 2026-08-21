@@ -116,3 +116,79 @@ test("publishes only an exact source-qualified Marketplace v2 Plugin artifact", 
     }),
   ).rejects.toThrow("artifact identity")
 })
+
+test("uses the cold-start Skill publication path without touching the ordinary runtime path", async () => {
+  const bytes = zip({
+    "SKILL.md": ["---", "name: canvas-storyboard", "description: Storyboard", "---"].join("\n"),
+  })
+  const installFromFiles = mock(async () => ({ name: "ordinary" }))
+  const installFromFilesAtStartup = mock(async () => ({ name: "canvas-storyboard" }))
+  const installer = new MarketplaceArtifactInstaller({
+    skillManager: { installFromFiles, installFromFilesAtStartup } as never,
+    snapshotInstaller: { install: mock(async () => undefined) } as never,
+  })
+  const item = {
+    compatibility: { convax: ">=0.1.0" },
+    delivery: {
+      kind: "artifact",
+      sha256: createHash("sha256").update(bytes).digest("hex"),
+      size: bytes.byteLength,
+      url: "https://github.com/convaxai/convax-plugins/releases/download/skill-canvas-storyboard-v1.0.0/canvas-storyboard.zip",
+    },
+    id: "canvas-storyboard",
+    kind: "skill",
+    presentation: { name: "Canvas Storyboard" },
+    version: "1.0.0",
+    yanked: false,
+  } as RegistryPackage
+
+  await installer.installVerifiedMarketplaceCandidate({ artifactBytes: bytes, item }, { startup: true })
+
+  expect(installFromFilesAtStartup).toHaveBeenCalledWith(expect.any(Object), "canvas-storyboard")
+  expect(installFromFiles).not.toHaveBeenCalled()
+})
+
+test("product-default authorization rejects executable Hook bytes without widening automatic setup", async () => {
+  const manifest = {
+    capabilities: [],
+    contributes: {},
+    description: "Hook fixture",
+    hooks: "hook.mjs",
+    hostApi: { major: 3, optional: [], required: [] },
+    id: "hook-fixture",
+    name: "Hook Fixture",
+    schema: "convax.plugin/8",
+    version: "1.0.0",
+  }
+  const bytes = zip({
+    "hook.mjs": "export const HookFixture = async () => ({})",
+    "manifest.json": JSON.stringify(manifest),
+  })
+  const install = mock(async () => undefined)
+  const installer = new MarketplaceArtifactInstaller({
+    skillManager: { installFromFiles: mock(async () => undefined) } as never,
+    snapshotInstaller: { install } as never,
+  })
+  const item = {
+    compatibility: { convax: "*" },
+    delivery: {
+      kind: "artifact",
+      sha256: createHash("sha256").update(bytes).digest("hex"),
+      size: bytes.byteLength,
+      url: "https://github.com/convaxai/convax-plugins/releases/download/plugin-hook-fixture-v1.0.0/plugin.zip",
+    },
+    id: "hook-fixture",
+    kind: "plugin",
+    manifest,
+    presentation: { name: "Hook Fixture" },
+    version: "1.0.0",
+  } as RegistryPackage
+
+  await expect(
+    installer.installVerifiedMarketplaceCandidate(
+      { artifactBytes: bytes, item, sourceIdentity: "network:official" },
+      { deferExecutionAuthorization: false, productDefaultAuthorization: true },
+    ),
+  ).rejects.toThrow("cannot authorize executable Hook")
+  expect(install).not.toHaveBeenCalled()
+})

@@ -2,8 +2,8 @@
 
 Convax generation is a Plugin tool boundary, not a provider registry. Concrete
 vendors, credentials, model routing and downstream task APIs live in an installed
-`convax.plugin/8` Tool Plugin and its verified companion. Host packages contain no
-vendor class and never branch on Plugin id.
+`convax.plugin/8` or `convax.plugin/9` Tool Plugin and its verified companion. Host
+packages contain no vendor class and never branch on Plugin id.
 
 The portable manifest and contribution parser are owned by
 `@convax/plugin-sdk`. Runtime-call availability and stable Host API documentation
@@ -12,7 +12,7 @@ only.
 
 ## Contributions
 
-A v8 Plugin may combine independent contributions:
+A supported Plugin may combine independent contributions:
 
 - `runtime.type: "mcp-stdio"` binds one bare command to a verified immutable
   companion;
@@ -25,6 +25,23 @@ A v8 Plugin may combine independent contributions:
   Host APIs;
 - `capabilities.exports` may expose exact sidecar operations to other Plugins
   through the Host broker.
+
+V8 remains the closed singleton-Service ABI: its Plugin-level runtime,
+generation, LLM, tool ids and Host-facing ids do not change. V9 keeps those
+top-level contributions on the base runtime and may additionally declare 1–16
+Service profiles. Each Service independently declares zero or more actions,
+optional generation, optional LLM and static args appended to the shared base
+runtime args. A Service is not required to expose LLM or generation. The one
+Service id must differ from the owning Plugin id, which identifies the top-level
+runtime projection. The one
+top-level command and companion binding identify one immutable artifact, but Main
+starts and owns a separate process, lifecycle and private state for each selected
+Service profile. Nested persistent state is additionally scoped by a private
+per-install Plugin incarnation carried atomically by its ActiveSet `/2` reference:
+unrelated ActiveSet changes do not log a Service out, while every explicit
+install/update publication—including exact bytes—receives a fresh incarnation.
+Legacy `/1` remains a byte-exact v8 read format. Pinned LRO recovery may retain the
+old binding until its final owner releases it.
 
 These declarations do not grant each other. An iframe cannot start a process or
 name an arbitrary MCP operation. Agent, UI, Web Plugin and Plugin-to-Plugin callers
@@ -48,6 +65,7 @@ execution authority and never identifies a concrete Plugin.
 ```text
 UI / Agent / Web Plugin / Plugin capability broker
   -> Desktop Main generation adapter
+  -> exact top-level or {Plugin, Service} runtime profile
   -> exact ActiveSet and companion byte lease
   -> tools/list contract validation
   -> staged bounded Project inputs
@@ -58,8 +76,8 @@ UI / Agent / Web Plugin / Plugin capability broker
 
 Main derives Project, Canvas, revision, placement, actor and operation id. It
 revalidates the current scope, selected tool contract, input references,
-cancellation and exact Plugin identity immediately before the external side
-effect and before every Canvas persistence call. Renderer state is never a
+cancellation and exact Plugin plus Service profile immediately before the external
+side effect and before every Canvas persistence call. Renderer state is never a
 correctness prerequisite.
 
 Canvas-delivery selection actions enter the same executor through a bounded
@@ -73,11 +91,21 @@ executions.
 
 ## Tool contract
 
-`tools/list` is authoritative for the current runtime generation. The Host accepts
+`tools/list` is authoritative for the selected runtime profile. The Host accepts
 only bounded closed input/output schemas and matches the exact manifest-declared
-operation. A single explicitly marked top-level selector may represent a dynamic
-generation model id; Main removes it from ordinary controls and binds an opaque
-validated selection immediately before execution.
+operation. V8 generation tool Host ids retain their existing `Plugin/tool` shape;
+v9 service-scoped tools use `Plugin/Service/tool`. Tool and model ids are unique
+within one Service but may repeat in another Service because the profile identity
+disambiguates routing. A single explicitly marked top-level selector may represent
+a dynamic generation model id; Main removes it from ordinary controls and binds an
+opaque validated selection immediately before execution.
+
+Manifest `generation.models` entries declare model families and their owning tools;
+their names are not runtime fallback models. A live unmarked family resolves to its
+one declared static model, while a marked family resolves only to the current
+selector choices in `tools/list.inputSchema`. If the sidecar reports no matching
+tool or a catalog cannot be validated, that family contributes no concrete display
+model until a later refresh succeeds.
 
 Main may project all admitted model families from one exact runtime response into
 one bounded, display-only session snapshot. Startup provisioning and Plugin or
@@ -159,8 +187,8 @@ implementation; the Host does not retain an unbounded completed-call ledger.
 
 ## Security and lifecycle
 
-- install/update consent binds the normalized v8 manifest and exact companion
-  bytes;
+- install/update consent binds the normalized closed v8 or v9 manifest and exact
+  companion bytes;
 - no PATH fallback, shell invocation, mutable package execution or concrete Plugin
   privilege exists;
 - process disposal owns the entire process tree and fails closed where the platform

@@ -10,6 +10,11 @@ or durable domain authority.
 - `WorkbenchController` is the sole source of the active Input/Canvas/file.
   `ProjectCanvasController` owns catalog CRUD only. Do not mirror active selection
   into Project state, component-local state, or browser storage.
+- Keep Canvas's editable-text write-behind store alive across Canvas mounts. An
+  ordinary Canvas Input change starts or joins the old Canvas save and commits
+  navigation without a confirmation dialog or save wait; a Project change drains
+  the store before runtime quiescence. Bind persistence to the originating mounted
+  session rather than reading the later active Canvas from a mutable ref.
 - Keep domain behavior in the owning package's business/application service.
   Renderer coordinators compose public capabilities; React components handle user
   events, subscriptions, and rendering rather than recreating validation,
@@ -48,6 +53,33 @@ or durable domain authority.
   native path from it, accept it through Plugin/UI input, or use it as authority.
 - Workbench owns generic layout transitions. Renderer owns pointer/keyboard wiring,
   concrete viewport budgets, CSS animation, and persistence of user preferences.
+- Compose the scoped shortcut service explicitly in the Renderer root. Surfaces
+  register focus roots and feature bindings through the injected instance; do not
+  create global shortcut singletons or independent global command listeners. The
+  registration contract is `CommandShortcut | HoldShortcut | GestureModifier`.
+  Commands consume one-shot keydowns, holds consume and own release, and gesture
+  modifiers never consume the native event because dragstart or another later
+  pointer gesture observes their transient state. React integration must
+  synchronously commit hold/gesture activation before the activating `keydown`
+  returns; same-gesture pointer input must never observe the previous presentation
+  state. Release still has to remain valid during scope disposal and React teardown. The exact
+  focused scope switches the active feature set, application scope is the only
+  fallback, and nested conversation/node-input scopes isolate Canvas commands.
+  Conflicts use explicit priority then first registration, while scope change,
+  top-level Window blur, document hiding, and unmount release every held feature.
+  Descendant DOM blur inside the active scope is not Window focus loss. A transient
+  `document.activeElement === body` gap while pointer focus is restored inside the
+  same root is rechecked on the next frame; an explicit registered-scope change or
+  a sustained outside-root focus still releases the held feature.
+  Renderer owns one reviewed Canvas feature inventory and routes every command
+  through Canvas's typed `canRunShortcut`/`runShortcut` port. Space and native drag
+  use dedicated held-state ports as `HoldShortcut` and `GestureModifier`
+  respectively; Canvas installs no parallel Window listener and neither state is
+  persisted.
+  Same-root prioritized target matchers make node inputs and
+  `data-canvas-shortcuts="ignore"` surfaces real nested scopes. `document.body` is
+  application-only Portal fallback, while direct body/document-element focus stays
+  ambiguous and Portal focus never inherits stale Canvas scope.
 
 ## Capability surfaces
 
@@ -71,7 +103,10 @@ or durable domain authority.
   empty. Select exactly one account surface from generic authorization plus Checkout
   actions, fail closed on ambiguity, and keep live Service status authoritative for
   account, Plan, Credits, Checkout offers and entitlement. Persist only the bounded
-  presentation step/completion flag; existing Projects bypass the flow.
+  presentation step/completion/deferred flags. Deferral enters the ordinary product
+  without completing onboarding and exposes a bottom-left resume task; only an
+  explicit resume may cover an existing Project. Existing Projects bypass automatic
+  presentation.
 - Seed Agent and generation model pickers from one last-complete strictly validated
   projection across cold windows, retain it while the current catalogs refresh, and
   group models under expandable Service rows. Cache entries are display-only; exact
@@ -80,6 +115,21 @@ or durable domain authority.
   immediately across remounts and cold windows while revalidating it through Main
   at Renderer startup. Persist only bounded renderer-safe fields; never let the
   projection authorize a selection, install, update, setup, or runtime action.
+- Marketplace category filters consume only Main's bounded card projection.
+  `service`, `video`, and `image` select Plugins with those derived categories;
+  `skill` selects first-class Skill cards and must not select a Plugin merely because
+  it owns Skills. Catalog list cards do not repeat category chips. Text search over
+  bounded projected fields composes locally with these filters. Neither operation
+  changes the selected source or triggers capability work. A projection
+  shape change invalidates the disposable display cache and bumps the Desktop
+  protocol; Renderer must never expose current filters over older projected cards.
+- Marketplace details load on demand by capability `{kind,id}` and remain a
+  disposable presentation. Ignore stale responses after another card is selected
+  or the dialog closes; render Skill file previews read-only and render a Showcase
+  image only from Main-verified bytes. Renderer never chooses the representative
+  source or receives a native path, artifact URL, source repository URL, SourceKey,
+  or executable file. Render a GitHub icon only from Main's closed availability
+  marker and return only `{kind,id}` when it is clicked.
 - Keep the Agent generation model as the user-global renderer preference. A Canvas
   card may persist only its own opaque output-tool override through Canvas; card
   changes never update the Agent default in reverse or create a second catalog.
@@ -133,7 +183,19 @@ or durable domain authority.
   unrelated Plugin documents and legacy schemas stay closed.
 - Native media drag-out starts only from an explicit held export gesture. Renderer
   publishes a complete immutable selection and may hold a short-lived opaque ticket;
-  it never stages files or sees the native drag payload.
+  it never stages files or sees the native drag payload. Convax Desktop exposes both
+  the persistent drag-out mode and a `Command-Shift` compatibility chord; the chord
+  is registered in the Canvas focus scope and forwards only held/released state to
+  the Canvas editor handle without consuming the native modifier event. It cannot
+  activate from a conversation, node input, inactive scope, or parallel Canvas-owned
+  window listener. If macOS swallows keyup during a native drag, a fresh non-repeat
+  matching keydown releases the stale logical hold before arming the new one. The
+  armed presentation must be committed before that keydown returns; asynchronous
+  ticket preparation may continue afterward, but the next pointerdown must already
+  see Canvas movement disabled. Key
+  repeat does not restart it. Top-level Window blur releases the shortcut
+  immediately; descendant DOM blur and a transient pointer-created body focus gap
+  inside Canvas do not. Main and preload do not own keyboard-state cleanup.
 
 ## UI behavior
 

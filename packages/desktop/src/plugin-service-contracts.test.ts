@@ -3,8 +3,10 @@ import { describe, expect, test } from "bun:test"
 import {
   parsePluginServiceStatus,
   parsePluginServiceUsageHistory,
+  pluginServiceTargetKey,
   pluginServiceStatusSchema,
   pluginServiceUsageSchema,
+  requirePluginServiceId,
 } from "./plugin-service-contracts"
 
 function status(overrides: Record<string, unknown> = {}) {
@@ -168,6 +170,17 @@ describe("Plugin service usage history", () => {
     )
     expect(() => parsePluginServiceUsageHistory(history([{ amount: 1, occurredAt: "2026-08-03" }]))).toThrow(
       "timestamp is invalid",
+    )
+  })
+})
+
+describe("Plugin ServiceRef", () => {
+  test("requires bounded kebab-case ids and derives an unambiguous composite key", () => {
+    expect(requirePluginServiceId("video-generation")).toBe("video-generation")
+    expect(() => requirePluginServiceId("Video Generation")).toThrow("kebab-case")
+    expect(() => requirePluginServiceId("x".repeat(81))).toThrow("kebab-case")
+    expect(pluginServiceTargetKey({ pluginId: "shortdrama", serviceId: "video-generation" })).not.toBe(
+      pluginServiceTargetKey({ pluginId: "shortdrama-video", serviceId: "generation" }),
     )
   })
 })

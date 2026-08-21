@@ -65,6 +65,43 @@ function Passthrough(props: { children?: ReactNode }) {
 }
 
 mock.module("@convax/ui", () => ({
+  BeamButton: (props: {
+    "aria-label"?: string
+    beam?: string
+    children?: ReactNode
+    className?: string
+    disabled?: boolean
+    onClick?: React.MouseEventHandler<HTMLButtonElement>
+    onPointerDown?: React.PointerEventHandler<HTMLButtonElement>
+    reducedMotion?: boolean
+    tone?: string
+    type?: "button" | "submit" | "reset"
+  }) => (
+    <button
+      aria-label={props["aria-label"]}
+      className={props.className}
+      data-slot="beam-button"
+      data-ui-beam={props.beam ?? "idle"}
+      data-ui-beam-motion={props.reducedMotion === undefined ? undefined : props.reducedMotion ? "reduce" : "animate"}
+      data-ui-beam-tone={props.tone ?? "spectrum"}
+      disabled={props.disabled}
+      onClick={props.onClick}
+      onPointerDown={props.onPointerDown}
+      type={props.type}
+    >
+      {props.children}
+    </button>
+  ),
+  BeamSurface: (props: { beam?: string; children?: ReactNode; className?: string; tone?: string }) => (
+    <div
+      className={props.className}
+      data-slot="beam-surface"
+      data-ui-beam={props.beam ?? "idle"}
+      data-ui-beam-tone={props.tone ?? "spectrum"}
+    >
+      {props.children}
+    </div>
+  ),
   Button: (props: {
     children?: ReactNode
     className?: string
@@ -238,6 +275,7 @@ function rect(left: number, top: number, width: number, height: number) {
 let observedSelection = { edgeIds: [] as string[], nodeIds: [] as string[] }
 let emitConnectedEdgeSelection: (() => void) | undefined
 let emitNodeDimensions: ((nodeId: string, width: number, height: number) => void) | undefined
+let readReactFlowMultiSelectionActive: (() => boolean) | undefined
 let readReactFlowProjection:
   | (() => {
       edgeIds: string[]
@@ -257,6 +295,7 @@ function SelectionProbeNode() {
     edgeIds: [...editor.selection.edgeIds],
     nodeIds: [...editor.selection.nodeIds],
   }
+  readReactFlowMultiSelectionActive = () => store.getState().multiSelectionActive
   emitConnectedEdgeSelection = () =>
     store.getState().triggerEdgeChanges([{ id: "connected", selected: true, type: "select" }])
   return <div />
@@ -359,7 +398,9 @@ test("box-selects connected nodes without feeding controlled selection back into
           <CanvasEditor
             fileRendererRegistry={createCanvasFileRendererRegistry()}
             nodeRegistry={nodeRegistry}
-            onDocumentChange={(next) => { observedDocument = next }}
+            onDocumentChange={(next) => {
+              observedDocument = next
+            }}
             onlyRenderVisibleElements={false}
             services={createCanvasServices()}
             session={session}
@@ -376,6 +417,32 @@ test("box-selects connected nodes without feeding controlled selection back into
     expect(pane).not.toBeNull()
     expect(firstNode).not.toBeNull()
     expect(emitConnectedEdgeSelection).toBeFunction()
+
+    await act(async () => {
+      canvasRoot?.dispatchEvent(
+        new KeyboardEvent("keydown", { bubbles: true, key: "Shift", metaKey: true, shiftKey: true }),
+      )
+    })
+    expect(readReactFlowMultiSelectionActive?.()).toBeFalse()
+    await act(async () => {
+      canvasRoot?.dispatchEvent(
+        new PointerEvent("pointerdown", {
+          bubbles: true,
+          button: 0,
+          isPrimary: true,
+          metaKey: true,
+          pointerId: 99,
+        }),
+      )
+    })
+    expect(readReactFlowMultiSelectionActive?.()).toBeTrue()
+    await act(async () => {
+      window.dispatchEvent(
+        new PointerEvent("pointerup", { bubbles: true, button: 0, isPrimary: true, metaKey: true, pointerId: 99 }),
+      )
+      await new Promise((resolve) => setTimeout(resolve, 0))
+    })
+    expect(readReactFlowMultiSelectionActive?.()).toBeFalse()
 
     focusProbe = document.createElement("input")
     document.body.append(focusProbe)
@@ -406,7 +473,6 @@ test("box-selects connected nodes without feeding controlled selection back into
       document.createElement("video"),
       document.createElement("iframe"),
       editableTarget,
-      noDragTarget,
       shortcutIgnoredTarget,
     ]
     for (const [index, target] of interactiveTargets.entries()) {
@@ -416,6 +482,11 @@ test("box-selects connected nodes without feeding controlled selection back into
       expect(document.activeElement).toBe(focusProbe)
       target.remove()
     }
+    canvasRoot?.append(noDragTarget)
+    focusProbe.focus()
+    pointerDown(noDragTarget, 39)
+    expect(document.activeElement).toBe(canvasRoot)
+    noDragTarget.remove()
     const passiveTarget = document.createElement("div")
     canvasRoot?.append(passiveTarget)
     focusProbe.focus()
@@ -760,17 +831,13 @@ test("projects host undo and redo of a plugin creation group without owning rend
       edgeIds: ["plugin-created-edge"],
       nodes: [{ id: source.id }, { id: created.id }],
     })
-    const canvas = container.querySelector<HTMLElement>(".convax-canvas")
-
     await act(async () => {
-      canvas?.dispatchEvent(new KeyboardEvent("keydown", { bubbles: true, key: "z", metaKey: true }))
-      await Promise.resolve()
+      await session.undo()
     })
     expect(readReactFlowProjection?.()).toMatchObject({ edgeIds: [], nodes: [{ id: source.id }] })
 
     await act(async () => {
-      canvas?.dispatchEvent(new KeyboardEvent("keydown", { bubbles: true, key: "z", metaKey: true, shiftKey: true }))
-      await Promise.resolve()
+      await session.redo()
     })
     expect(readReactFlowProjection?.()).toMatchObject({
       edgeIds: ["plugin-created-edge"],
@@ -1109,6 +1176,9 @@ test("keeps active controls interactive while a failed card stays selectable wit
     const failedOverlay = container.querySelector<HTMLElement>('[data-canvas-file-generation-activity="failed"]')
     expect(activeOverlay).not.toBeNull()
     expect(cancelButton).toBeDefined()
+    expect(cancelButton?.dataset.slot).toBe("beam-button")
+    expect(cancelButton?.getAttribute("data-ui-beam")).toBe("pulse-inner")
+    expect(cancelButton?.getAttribute("data-ui-beam-tone")).toBe("warning")
     expect(failedOverlay).not.toBeNull()
     expect(failedOverlay?.classList.contains("pointer-events-none")).toBe(true)
     expect(failedOverlay?.querySelector("button")).toBeNull()

@@ -36,6 +36,19 @@ cache through a frozen install, and deliver a reviewed branch and pull request. 
 must never symlink another checkout's dependency tree, merge, release, force-push,
 or treat a contributor workflow Skill as a shipped Convax capability.
 
+### Repository contributor Skills
+
+| Skill                                                                              | Canonical use                                                                                                                               |
+| ---------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------- |
+| [`solo-task`](.agents/skills/solo-task/SKILL.md)                                   | Isolated worktree preparation, validation, commit, push, and pull-request delivery.                                                         |
+| [`govern-convax-architecture`](.agents/skills/govern-convax-architecture/SKILL.md) | Package ownership, dependency, public contract, state, persistence, trust-boundary, and architecture-document governance.                   |
+| [`find-simplifications`](.agents/skills/find-simplifications/SKILL.md)             | Evidence-backed dead/duplicate/speculative surface audits, consumer classification, lifecycle review, and bounded simplification decisions. |
+
+These Skills are complementary. `find-simplifications` owns candidate evidence and
+decision quality, `govern-convax-architecture` owns architecture impact, and
+`solo-task` remains the only contributor workflow for worktree and pull-request
+delivery. They never become product-installed Skills or runtime authority.
+
 ## Instruction routing
 
 Before planning or editing:
@@ -99,6 +112,7 @@ the contract instead of choosing the more convenient interpretation.
 | Desktop application update, signing, notarization, release feed                          | [`docs/architecture.md` §§6 and 10](docs/architecture.md#desktop-application-update), [`docs/desktop-builds.md`](docs/desktop-builds.md), and the Desktop Main contract                                                                                                              |
 | Portable/native paths, filesystem trust, Windows path handling                           | [`docs/architecture.md` §11](docs/architecture.md#11-portable-paths-and-trust-boundaries) and the owning native-adapter contract                                                                                                                                                     |
 | External editor, retired built-in, native media drag-out                                 | [`docs/architecture.md` “Retired built-ins” and “Native Canvas media drag-out”](docs/architecture.md#retired-built-ins), then the Desktop Main/Renderer contracts                                                                                                                    |
+| Simplification, cleanup, dead code, duplicate state, dependency replacement              | [`.agents/skills/find-simplifications/SKILL.md`](.agents/skills/find-simplifications/SKILL.md), the relevant architecture sections, and every affected owner contract                                                                                                                |
 
 ## Required workflow
 
@@ -117,6 +131,10 @@ the contract instead of choosing the more convenient interpretation.
    protocol, directory responsibility, or validation requirements change.
 6. Run focused checks during iteration, then the required package and repository
    checks before handoff.
+7. For simplification work, classify production, non-production, and
+   ambiguous/dynamic consumers before removal. Static-analysis output is a lead,
+   not proof across published, persisted, generated, or dynamically registered
+   surfaces.
 
 ## Single current collaboration protocol
 
@@ -137,6 +155,13 @@ schema and reducer, and Desktop packages and loads that one descriptor.
   `local-project-owner` or `team-replica` signer-authority mode. An unshared durable
   local owner may create/edit ProjectIndex and Canvas data offline; a durable Team
   binding disables new local-owner signing but never selects another protocol.
+- Local and Team signing private keys are explicit user-managed files below Electron
+  `userData`; Desktop never calls a system credential vault. If an unshared
+  Project's current local key is missing, Desktop durably creates a fresh
+  replica/actor binding in the same Project epoch, archives the prior public binding
+  for historical verification, atomically makes the new binding current, and keeps
+  editing. It never reads retired vault ciphertext, rewrites or re-signs history, or
+  treats key rotation as a protocol or Project reset.
 - Frame magic, wire format, and `protocolDigest` must equal the built descriptor.
   Anything else is `unsupported-project-data`; never try a second decoder, guess a
   layout, or reinterpret unknown bytes.
@@ -147,7 +172,8 @@ schema and reducer, and Desktop packages and loads that one descriptor.
 - Version-suffixed identifiers still present in this repository are legacy names of
   that one current implementation. Renaming them is mechanical cleanup and never
   admits a second protocol, decoder, kernel, or reducer.
-- Independent contracts such as `convax.plugin/8`, `convax.package/2`, the
+- Independent contracts such as `convax.plugin/8` and `convax.plugin/9`,
+  `convax.package/2`, the
   `@convax/plugin-api` Catalog SemVer, Marketplace Registry v2, and
   `desktopProtocolVersion` are separate release lines. This rule neither renumbers
   them nor lets them become collaboration decoders.
@@ -234,10 +260,10 @@ selector or runtime fallback.
 | `@convax/collaboration`     | One current protocol descriptor/digest, one envelope+JCS codec, one causal frame/frontier model, one `replicaDoc`/isolated `candidateDoc` kernel, checkpoint/floor primitives, journal ports, and session undo coordination | Project/Canvas schema, PeerJS, membership/auth policy, Electron, filesystem, native I/O, or a second decoder/kernel |
 | `@convax/workbench`         | Window-scoped serializable Input, Selection, Surface and layout-part state; guarded open/close/reveal/resize transitions                                                                                                    | Domain data, catalogs, filesystem, React/DOM, Electron, localStorage                                                |
 | `@convax/plugin-api`        | Headless Plugin Host API catalog, API SemVer/history, availability contracts, generated validators/types/client metadata, and deterministic human/Skill reference generation inputs                                         | Desktop state, Plugin identity policy, concrete handlers, filesystem/network adapters                               |
-| `@convax/plugin-sdk`        | Headless `convax.plugin/8` manifest/contribution and localization ABI, Plugin-to-Plugin export/import contracts, bounded-value schema integration, SemVer matching, and deterministic Plugin/Skill reference inputs         | ActiveSet selection, runtime binding, leases, grants, execution, IPC, I/O, concrete Plugins                         |
+| `@convax/plugin-sdk`        | Headless v8/v9 manifest/contribution and localization ABIs, Plugin-to-Plugin export/import contracts, bounded-value integration, SemVer matching, and deterministic Plugin/Skill references                                 | ActiveSet selection, runtime binding, leases, grants, execution, IPC, I/O, concrete Plugins                         |
 | `@convax/plugin-ui`         | Browser-safe semantic tokens and minimal interaction foundations for sandboxed Plugin documents                                                                                                                             | React, Desktop appearance state, Host transport, or concrete Plugin composition                                     |
 | `@convax/agent-runtime`     | Generic OpenCode adapter, sessions, resources, tool-provider bridge, protected-path enforcement                                                                                                                             | Convax Project/Canvas/UI policy or imports from other Convax packages                                               |
-| `@convax/marketplace`       | Marketplace refs, public schemas, canonical source identity, strict validation, Catalog aggregation and source-conflict rules                                                                                               | Filesystem/network adapters, Electron/UI, concrete packages, installation or execution                              |
+| `@convax/marketplace`       | Marketplace refs, public schemas, canonical source identity, strict validation, bounded Plugin-category display taxonomy, Catalog aggregation and source-conflict rules                                                     | Filesystem/network adapters, Electron/UI, concrete packages, installation or execution                              |
 | `@convax/marketplace-kit`   | Deterministic authoring-time package, Registry, Showcase, bundle and companion metadata generation                                                                                                                          | Desktop runtime, concrete marketplace content, credentials, or executing package bytes                              |
 | `create-convax-marketplace` | Authoring-time scaffold CLI backed by `@convax/marketplace-kit`                                                                                                                                                             | Runtime Marketplace state, publishing credentials, or a second validator                                            |
 | `@convax/ui`                | Product-agnostic visual primitives and theme                                                                                                                                                                                | Project, Canvas, Workbench, Agent, persistence, or Electron behavior                                                |
@@ -294,6 +320,11 @@ user directory.
 
 ## Repository-wide hard rules
 
+- Desktop Main creates and shows one inert local startup window immediately after
+  Electron readiness, before product-runtime restoration. That document is never a
+  trusted Renderer or capability principal; Main loads the trusted Renderer into
+  the same window only after required bridges are ready, and required initialization
+  failure replaces indefinite loading with a bounded local failure surface.
 - UI, Agent, Plugin, and native entry points call the same owner-defined application
   or business operations. Edge adapters do not recreate domain invariants.
 - Main's per-shard `replicaDoc`, rebuilt from accepted durable causal objects, is
@@ -318,17 +349,24 @@ user directory.
   display projection so remounts and cold windows render immediately. It must
   revalidate through Main at window startup and never use that projection as
   installation, source, grant, or runtime authority.
+- Plugin Marketplace categories are a bounded display projection derived from the
+  exact validated manifest: Service contribution, image/video generation output,
+  and owned Skills. They are never an author-selected Registry label, contribution,
+  grant, installation decision, or execution authority; Renderer filtering is local
+  presentation only.
 - Renderer may likewise persist one bounded, versioned, last-complete Plugin Service
   display projection containing only validated summaries, status, credits, and
   optional usage history. It renders that projection immediately, refreshes status
   and usage independently in the background, and never treats it as authorization,
   execution availability, Checkout, or billing authority.
-- Renderer may persist only the bounded versioned presentation step and completion
-  flag for first-run account onboarding. The flow applies only after a successful
-  empty Project-registry read, selects an account surface from generic advertised
-  Service actions, and derives account, Plan, Credits, Checkout and entitlement
-  display from live Service status. Existing local Projects bypass it and remain
-  openable while offline, signed out or unsubscribed.
+- Renderer may persist only the bounded versioned presentation step, completion,
+  and deferred flag for first-run account onboarding. The automatic full-screen
+  flow applies only after a successful empty Project-registry read, selects an
+  account surface from generic advertised Service actions, and derives account,
+  Plan, Credits, Checkout and entitlement display from live Service status. A
+  deferred incomplete flow may remain as a non-blocking bottom-left task and reopen
+  only on explicit user action. Existing local Projects bypass automatic onboarding
+  and remain openable while offline, signed out or unsubscribed.
 - External public-client authorization is companion-owned. Direct Resource Server
   access requires an Access Token whose audience is that exact resource or an
   explicitly bound first-party Application trust domain. An arbitrary or unbound
@@ -351,6 +389,10 @@ user directory.
   Application stores none of those product facts.
 - `WorkbenchController` is the sole active Input/Canvas source.
   `ProjectCanvasController` owns catalog CRUD, never active selection.
+- Editable Canvas text drafts are transient Canvas-owned write-behind state keyed by
+  scope/Canvas/node. Ordinary Canvas navigation starts background save without a
+  prompt or wait; Desktop drains the store before Project teardown and validates the
+  originating renderer lease rather than retargeting the later active Canvas.
 - Only `@convax/project/node` may read or write private Project metadata. Renderer,
   Preload, Agent tools, and general file operations use typed capabilities and never
   edit `.convax` JSON.
@@ -371,8 +413,11 @@ user directory.
   modality-icon plus `生成失败` surface. Selecting that card preserves ordinary
   selection and dragging but never restores its prompt or exposes upload, retry, or
   failure-detail actions; portable failure metadata remains non-UI state.
-- `convax.plugin/8`, `convax.package/2`, and `convax.plugin-capability/3` are the only
-  admitted runtime formats. Additive Host APIs evolve through the independent
+- `convax.plugin/8`, `convax.plugin/9`, `convax.package/2`, and
+  `convax.plugin-capability/3` are the only admitted runtime formats. The v8
+  manifest remains a closed, accepted singleton-Service ABI; it is never rewritten
+  or reinterpreted as v9. V9 keeps one Plugin artifact but may declare multiple
+  service-scoped runtime profiles. Additive Host APIs evolve through the independent
   `@convax/plugin-api` SemVer Catalog, not another manifest or transport version.
 - A Plugin installation is one content-addressed complete closure selected through
   one global ActiveSet CAS. Runtime principals and leases bind exact revisions,

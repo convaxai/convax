@@ -5,7 +5,7 @@ import path from "node:path"
 import {
   decodeRestrictedJcs,
   encodeBase64url,
-  encodeRestrictedJcsText,
+  encodeRestrictedJcs,
   parseDigest,
   parseId128,
   parseMemberId,
@@ -26,10 +26,10 @@ import {
   type Uint64,
 } from "@convax/collaboration"
 
-import type { ElectronSafeStoragePort } from "./electron-replica-signing-vault"
+import { syncDirectoryEntry, syncFileBytes } from "./filesystem-durability"
 
 interface TeamIdentityVaultRecord {
-  readonly format: "convax.desktop-team-identity-key"
+  readonly format: "convax.desktop-user-managed-team-identity-key"
   readonly purpose: "member" | "session"
   readonly projectId: ProjectId
   readonly memberId: MemberId
@@ -55,12 +55,9 @@ type SessionKeyIdentity = Readonly<{
   expiresAtUnixMs: Uint64
 }>
 
-/** Main-private OS-vault key owner for long-lived member and per-session signing identities. */
+/** Main-private user-managed key owner for long-lived member and per-session identities. */
 export class ElectronTeamIdentityVault {
-  constructor(
-    private readonly rootDirectory: string,
-    private readonly safeStorage: ElectronSafeStoragePort,
-  ) {
+  constructor(private readonly rootDirectory: string) {
     if (!path.isAbsolute(rootDirectory)) throw new TypeError("Team identity vault root must be absolute")
   }
 
@@ -78,15 +75,18 @@ export class ElectronTeamIdentityVault {
   }
 
   openMemberSigner(input: MemberKeyIdentity & { readonly expectedPublicKey: PublicKey }) {
-    return this.open(Object.freeze({
-      purpose: "member" as const,
-      projectId: parseProjectId(input.projectId),
-      memberId: parseMemberId(input.memberId),
-      projectEpoch: null,
-      replicaId: null,
-      sessionId: null,
-      expiresAtUnixMs: null,
-    }), input.expectedPublicKey)
+    return this.open(
+      Object.freeze({
+        purpose: "member" as const,
+        projectId: parseProjectId(input.projectId),
+        memberId: parseMemberId(input.memberId),
+        projectEpoch: null,
+        replicaId: null,
+        sessionId: null,
+        expiresAtUnixMs: null,
+      }),
+      input.expectedPublicKey,
+    )
   }
 
   ensureSessionKey(input: SessionKeyIdentity): Promise<TeamIdentitySigningKey> {
@@ -98,10 +98,9 @@ export class ElectronTeamIdentityVault {
   }
 
   async removeSessionKey(input: SessionKeyIdentity): Promise<"removed" | "missing"> {
-    this.requireSecureBackend()
     const identity = parseSessionIdentity(input)
     const target = this.target(identity)
-    if (!await isFile(target)) return "missing"
+    if (!(await isFile(target))) return "missing"
     const record = await this.readRecord(target)
     if (!sameIdentity(record, identity)) throw new Error("Team identity vault key crossed identity")
     await fs.unlink(target)
@@ -113,7 +112,6 @@ export class ElectronTeamIdentityVault {
     readonly nowUnixMs: Uint64
     readonly maximumEntries?: number
   }): Promise<number> {
-    this.requireSecureBackend()
     const now = BigInt(parseUint64(input.nowUnixMs))
     const maximumEntries = input.maximumEntries ?? 1_024
     if (!Number.isSafeInteger(maximumEntries) || maximumEntries < 1 || maximumEntries > 4_096) {
@@ -124,7 +122,7 @@ export class ElectronTeamIdentityVault {
     if (entries.length > maximumEntries) throw new Error("Team identity vault exceeds the bounded prune scan")
     let removed = 0
     for (const entry of entries) {
-      if (!/^[0-9a-f]{64}\.vault$/.test(entry)) throw new Error("Team identity vault contains an untrusted entry")
+      if (!/^[0-9a-f]{64}\.key$/.test(entry)) throw new Error("Team identity store contains an untrusted entry")
       const target = path.join(this.rootDirectory, entry)
       const record = await this.readRecord(target)
       if (record.purpose !== "session" || BigInt(record.expiresAtUnixMs!) > now) continue
@@ -135,8 +133,9 @@ export class ElectronTeamIdentityVault {
     return removed
   }
 
-  private async ensure(identity: Omit<TeamIdentityVaultRecord, "format" | "privateKeyPkcs8Base64url">): Promise<TeamIdentitySigningKey> {
-    this.requireSecureBackend()
+  private async ensure(
+    identity: Omit<TeamIdentityVaultRecord, "format" | "privateKeyPkcs8Base64url">,
+  ): Promise<TeamIdentitySigningKey> {
     await ensureDirectory(this.rootDirectory)
     const target = this.target(identity)
     if (await isFile(target)) return this.load(identity, target)
@@ -144,17 +143,14 @@ export class ElectronTeamIdentityVault {
     const privateKeyPkcs8 = pair.privateKey.export({ format: "der", type: "pkcs8" }) as Buffer
     try {
       const record: TeamIdentityVaultRecord = Object.freeze({
-        format: "convax.desktop-team-identity-key",
+        format: "convax.desktop-user-managed-team-identity-key",
         ...identity,
         privateKeyPkcs8Base64url: privateKeyPkcs8.toString("base64url"),
       })
-      const encrypted = this.safeStorage.encryptString(encodeRestrictedJcsText(record))
       try {
-        await writeNewEncrypted(target, encrypted)
+        await writeNewRecord(target, record)
       } catch (error) {
         if (!isAlreadyExists(error)) throw error
-      } finally {
-        encrypted.fill(0)
       }
     } finally {
       privateKeyPkcs8.fill(0)
@@ -165,10 +161,9 @@ export class ElectronTeamIdentityVault {
   private async open(
     identity: Omit<TeamIdentityVaultRecord, "format" | "privateKeyPkcs8Base64url">,
     expectedPublicKey: PublicKey,
-  ): Promise<ReplicaSignerPort | "missing" | "unavailable" | "rejected"> {
-    if (!this.hasSecureBackend()) return "unavailable"
+  ): Promise<ReplicaSignerPort | "missing" | "rejected"> {
     const target = this.target(identity)
-    if (!await isFile(target)) return "missing"
+    if (!(await isFile(target))) return "missing"
     try {
       const loaded = await this.load(identity, target)
       return loaded.publicKey === parsePublicKey(expectedPublicKey) ? loaded.signer : "rejected"
@@ -208,29 +203,14 @@ export class ElectronTeamIdentityVault {
   }
 
   private async readRecord(target: string): Promise<TeamIdentityVaultRecord> {
-    if (!await isFile(target)) throw new Error("Team identity vault entry is missing")
-    const encrypted = Buffer.from(await fs.readFile(target))
-    let plaintext = ""
-    try { plaintext = this.safeStorage.decryptString(encrypted) } finally { encrypted.fill(0) }
-    try {
-      return parseRecord(decodeRestrictedJcs(new TextEncoder().encode(plaintext)))
-    } finally {
-      plaintext = ""
-    }
+    if (!(await isFile(target))) throw new Error("Team identity vault entry is missing")
+    return parseRecord(decodeRestrictedJcs(await readRecordBytes(target)))
   }
 
   private target(identity: Omit<TeamIdentityVaultRecord, "format" | "privateKeyPkcs8Base64url">): string {
     const { expiresAtUnixMs: _expiry, ...nativeIdentity } = identity
-    const digest = structuredDigest("convax.desktop-team-identity-native-key-v3", nativeIdentity)
-    return path.join(this.rootDirectory, `${parseDigest(digest)}.vault`)
-  }
-
-  private hasSecureBackend(): boolean {
-    return this.safeStorage.isEncryptionAvailable() && this.safeStorage.getSelectedStorageBackend?.() !== "basic_text"
-  }
-
-  private requireSecureBackend(): void {
-    if (!this.hasSecureBackend()) throw new Error("OS-backed team identity vault is unavailable")
+    const digest = structuredDigest("convax.desktop-user-managed-team-identity-key/1", nativeIdentity)
+    return path.join(this.rootDirectory, `${parseDigest(digest)}.key`)
   }
 }
 
@@ -247,27 +227,61 @@ function parseSessionIdentity(input: SessionKeyIdentity) {
 }
 
 function parseRecord(value: unknown): TeamIdentityVaultRecord {
-  if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error("Team identity vault plaintext is invalid")
+  if (!value || typeof value !== "object" || Array.isArray(value))
+    throw new Error("Team identity vault plaintext is invalid")
   const record = value as Record<string, unknown>
-  const keys = ["expiresAtUnixMs", "format", "memberId", "privateKeyPkcs8Base64url", "projectEpoch", "projectId", "purpose", "replicaId", "sessionId"]
-  if (Object.keys(record).sort().join("\0") !== keys.sort().join("\0") ||
-    record.format !== "convax.desktop-team-identity-key" ||
+  const keys = [
+    "expiresAtUnixMs",
+    "format",
+    "memberId",
+    "privateKeyPkcs8Base64url",
+    "projectEpoch",
+    "projectId",
+    "purpose",
+    "replicaId",
+    "sessionId",
+  ]
+  if (
+    Object.keys(record).sort().join("\0") !== keys.sort().join("\0") ||
+    record.format !== "convax.desktop-user-managed-team-identity-key" ||
     (record.purpose !== "member" && record.purpose !== "session") ||
-    typeof record.privateKeyPkcs8Base64url !== "string" || record.privateKeyPkcs8Base64url.length < 1 || record.privateKeyPkcs8Base64url.length > 512) {
+    typeof record.privateKeyPkcs8Base64url !== "string" ||
+    record.privateKeyPkcs8Base64url.length < 1 ||
+    record.privateKeyPkcs8Base64url.length > 512
+  ) {
     throw new Error("Team identity vault plaintext has unsupported fields")
   }
   const base = {
-    format: "convax.desktop-team-identity-key" as const,
+    format: "convax.desktop-user-managed-team-identity-key" as const,
     purpose: record.purpose,
     projectId: parseProjectId(record.projectId),
     memberId: parseMemberId(record.memberId),
     privateKeyPkcs8Base64url: record.privateKeyPkcs8Base64url,
   }
   if (record.purpose === "member") {
-    if (record.projectEpoch !== null || record.replicaId !== null || record.sessionId !== null || record.expiresAtUnixMs !== null) throw new Error("Member key identity fields are invalid")
-    return Object.freeze({ ...base, purpose: "member", projectEpoch: null, replicaId: null, sessionId: null, expiresAtUnixMs: null })
+    if (
+      record.projectEpoch !== null ||
+      record.replicaId !== null ||
+      record.sessionId !== null ||
+      record.expiresAtUnixMs !== null
+    )
+      throw new Error("Member key identity fields are invalid")
+    return Object.freeze({
+      ...base,
+      purpose: "member",
+      projectEpoch: null,
+      replicaId: null,
+      sessionId: null,
+      expiresAtUnixMs: null,
+    })
   }
-  if (record.projectEpoch === null || record.replicaId === null || record.sessionId === null || record.expiresAtUnixMs === null) throw new Error("Session key identity fields are invalid")
+  if (
+    record.projectEpoch === null ||
+    record.replicaId === null ||
+    record.sessionId === null ||
+    record.expiresAtUnixMs === null
+  )
+    throw new Error("Session key identity fields are invalid")
   return Object.freeze({
     ...base,
     purpose: "session",
@@ -282,26 +296,60 @@ function sameIdentity(
   left: TeamIdentityVaultRecord,
   right: Omit<TeamIdentityVaultRecord, "format" | "privateKeyPkcs8Base64url">,
 ): boolean {
-  return left.purpose === right.purpose && left.projectId === right.projectId && left.memberId === right.memberId &&
-    left.projectEpoch === right.projectEpoch && left.replicaId === right.replicaId && left.sessionId === right.sessionId &&
+  return (
+    left.purpose === right.purpose &&
+    left.projectId === right.projectId &&
+    left.memberId === right.memberId &&
+    left.projectEpoch === right.projectEpoch &&
+    left.replicaId === right.replicaId &&
+    left.sessionId === right.sessionId &&
     left.expiresAtUnixMs === right.expiresAtUnixMs
+  )
 }
 
 async function ensureDirectory(directory: string): Promise<void> {
   await fs.mkdir(directory, { recursive: true, mode: 0o700 })
   const stat = await fs.lstat(directory)
   if (!stat.isDirectory() || stat.isSymbolicLink()) throw new Error("Team identity vault root is untrusted")
+  if (process.platform !== "win32" && (stat.mode & 0o077) !== 0) {
+    throw new Error("Team identity key directory permissions are too broad")
+  }
 }
 
-async function writeNewEncrypted(target: string, encrypted: Readonly<Uint8Array>): Promise<void> {
-  const handle = await fs.open(target, constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | constants.O_NOFOLLOW, 0o600)
-  try { await handle.writeFile(encrypted); await handle.sync() } finally { await handle.close() }
+async function writeNewRecord(target: string, record: TeamIdentityVaultRecord): Promise<void> {
+  const bytes = encodeRestrictedJcs(record)
+  const handle = await fs.open(
+    target,
+    constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | constants.O_NOFOLLOW,
+    0o600,
+  )
+  try {
+    await handle.writeFile(bytes)
+    await syncFileBytes(handle)
+  } finally {
+    await handle.close()
+  }
   await syncDirectory(path.dirname(target))
 }
 
+async function readRecordBytes(target: string): Promise<Uint8Array> {
+  const handle = await fs.open(target, constants.O_RDONLY | constants.O_NOFOLLOW)
+  try {
+    const stat = await handle.stat()
+    if (!stat.isFile() || stat.size < 1 || stat.size > 4 * 1024) {
+      throw new Error("Team identity key is not a bounded plain file")
+    }
+    if (process.platform !== "win32" && (stat.mode & 0o077) !== 0) {
+      throw new Error("Team identity key permissions are too broad")
+    }
+    return new Uint8Array(await handle.readFile())
+  } finally {
+    await handle.close()
+  }
+}
+
 async function syncDirectory(target: string): Promise<void> {
-  const directory = await fs.open(target, constants.O_RDONLY | constants.O_DIRECTORY | constants.O_NOFOLLOW)
-  try { await directory.sync() } finally { await directory.close() }
+  await syncDirectoryEntry(target)
 }
 
 async function isFile(target: string): Promise<boolean> {

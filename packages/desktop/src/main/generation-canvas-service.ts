@@ -3059,6 +3059,13 @@ export class GenerationCanvasService {
               this.#ensureStoredSupervision(operationLedger, actor, false)
               throw error
             }
+            if (externalStarted && (recoveryTerminal.status === "absent" || recoveryTerminal.status === "prepared")) {
+              // Dispatch authorization crossed the durable boundary, but the
+              // sidecar has not yet persisted provider acceptance. Preserve
+              // the exact stored request so supervision can safely replay it.
+              this.#ensureStoredSupervision(operationLedger, actor, false)
+              throw error
+            }
             if (
               externalStarted &&
               (recoveryTerminal.status === "absent" || recoveryTerminal.status === "prepared")

@@ -213,43 +213,38 @@
   box-shadow: inset 0 0 0 1px color-mix(in oklab, var(--ui-interactive-selected-border) 30%, transparent);
 }
 
-.agent-runtime-status[data-agent-runtime-status="running"],
-.agent-runtime-status[data-agent-runtime-status="stopping"] {
-  color: var(--ui-text-secondary);
-}
-
 .agent-composer-frame {
   position: relative;
   isolation: isolate;
   border-radius: var(--agent-composer-radius);
+  outline: 1px solid transparent;
+  outline-offset: -1px;
+  transition:
+    background-color 140ms ease,
+    box-shadow 140ms ease,
+    opacity 140ms ease,
+    outline-color 140ms ease,
+    transform 140ms ease;
+}
+
+.agent-composer-frame:focus-within {
+  outline-color: color-mix(in oklab, var(--ui-brand) 42%, transparent);
+  box-shadow: var(--ui-shadow-medium);
+  transform: translateY(-1px);
+}
+
+.agent-composer-frame[data-agent-composer-has-content="true"] {
+  background-color: color-mix(in oklab, var(--ui-surface-raised) 96%, var(--ui-brand));
+}
+
+.agent-composer-frame[data-agent-composer-disabled="true"] {
+  transform: none;
 }
 
 .agent-composer-frame[data-agent-composer-surface="flat"] {
   padding: 0.5rem;
   background: var(--ui-surface-raised);
   box-shadow: var(--ui-shadow-low);
-}
-
-.agent-composer-frame::before {
-  position: absolute;
-  z-index: 2;
-  inset: -1px;
-  border: 1px solid color-mix(in oklab, var(--ui-brand) 58%, transparent);
-  border-radius: inherit;
-  box-shadow: 0 0 12px color-mix(in oklab, var(--ui-brand) 18%, transparent);
-  content: "";
-  opacity: 0;
-  pointer-events: none;
-}
-
-.agent-composer-frame[data-agent-composer-state="running"]::before {
-  animation: agent-composer-edge 1.8s ease-in-out infinite;
-}
-
-.agent-composer-frame[data-agent-composer-state="stopping"]::before {
-  border-color: color-mix(in oklab, var(--ui-status-warning) 60%, transparent);
-  box-shadow: 0 0 10px color-mix(in oklab, var(--ui-status-warning) 16%, transparent);
-  opacity: 0.5;
 }
 
 .agent-composer-editor {
@@ -292,29 +287,18 @@
   }
 }
 
-@keyframes agent-composer-edge {
-  0%,
-  100% {
-    opacity: 0.18;
-  }
-  50% {
-    opacity: 0.68;
-  }
-}
-
 @media (prefers-reduced-motion: reduce) {
   .agent-message,
-  .agent-tool-call__detail,
-  .agent-composer-frame[data-agent-composer-state="running"]::before {
+  .agent-tool-call__detail {
     animation: none;
+  }
+
+  .agent-composer-frame {
+    transition: none;
   }
 
   .agent-message-actions {
     transition: none;
-  }
-
-  .agent-composer-frame[data-agent-composer-state="running"]::before {
-    opacity: 0.45;
   }
 }
 

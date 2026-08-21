@@ -2,7 +2,7 @@ import fs from "node:fs/promises"
 import os from "node:os"
 import path from "node:path"
 
-import { afterEach, expect, test } from "bun:test"
+import { afterEach, expect, mock, test } from "bun:test"
 import {
   builtinSourceKey,
   canonicalJson,
@@ -97,13 +97,15 @@ function harness(options: {
   networkCandidates?: SourceQualifiedItem[]
   networkFetch?: ConstructorParameters<typeof MarketplaceApplicationService>[0]["networkFetch"]
   networkRefresh?: (id: string) => Promise<void>
-  preinstalledPolicy?: ConstructorParameters<typeof MarketplaceApplicationService>[0]["preinstalledPolicy"]
+  defaultInstallPolicy?: ConstructorParameters<typeof MarketplaceApplicationService>[0]["defaultInstallPolicy"]
   prepareFixedArtifact?: ConstructorParameters<typeof MarketplaceApplicationService>[0]["prepareFixedArtifact"]
+  projectDetails?: ConstructorParameters<typeof MarketplaceApplicationService>[0]["projectDetails"]
   pluginRuntimeState?: ConstructorParameters<typeof MarketplaceApplicationService>[0]["pluginRuntimeState"]
   pluginUpdateRecoveryBindings?: ConstructorParameters<
     typeof MarketplaceApplicationService
   >[0]["pluginUpdateRecoveryBindings"]
   refreshFixedSource?: ConstructorParameters<typeof MarketplaceApplicationService>[0]["refreshFixedSource"]
+  repositoryAuthority?: ConstructorParameters<typeof MarketplaceApplicationService>[0]["repositoryAuthority"]
   reservedBuiltinIdentities?: ConstructorParameters<
     typeof MarketplaceApplicationService
   >[0]["reservedBuiltinIdentities"]
@@ -130,6 +132,7 @@ function harness(options: {
     }),
     prepareSetup: async (_record, pick) => ({ addTarget: await pick() }),
     resolveTransition: async () => "unknown",
+    scheduleStartupRefresh: () => undefined,
     setup: async () => null,
     uninstall: async () => undefined,
     verifyAuthorization: async () => true,
@@ -138,7 +141,6 @@ function harness(options: {
   const mutations = new CapabilityMutationCoordinator()
   const service = new MarketplaceApplicationService({
     ...(options.activePluginBindings ? { activePluginBindings: options.activePluginBindings } : {}),
-    arch: "arm64",
     ...(options.assertCapabilityMutationAllowed
       ? { assertCapabilityMutationAllowed: options.assertCapabilityMutationAllowed }
       : {}),
@@ -178,19 +180,19 @@ function harness(options: {
           throw new Error("not used")
         },
       } as never),
-    platform: "darwin",
     ...(options.pluginRuntimeState ? { pluginRuntimeState: options.pluginRuntimeState } : {}),
     ...(options.pluginUpdateRecoveryBindings
       ? { pluginUpdateRecoveryBindings: options.pluginUpdateRecoveryBindings }
       : {}),
-    ...(options.preinstalledPolicy ? { preinstalledPolicy: options.preinstalledPolicy } : {}),
+    ...(options.defaultInstallPolicy ? { defaultInstallPolicy: options.defaultInstallPolicy } : {}),
     ...(options.prepareFixedArtifact ? { prepareFixedArtifact: options.prepareFixedArtifact } : {}),
+    ...(options.projectDetails ? { projectDetails: options.projectDetails } : {}),
     ...(options.refreshFixedSource ? { refreshFixedSource: options.refreshFixedSource } : {}),
     readFixedArtifact: async (item) => {
       preparedOutsideMutation = true
       return new TextEncoder().encode(item.sourceKind === "builtin" ? "builtin-skill" : "unexpected")
     },
-    repositoryAuthority: async () => ({ owner: "acme", repository: "marketplace" }),
+    repositoryAuthority: options.repositoryAuthority ?? (async () => ({ owner: "acme", repository: "marketplace" })),
     ...(options.reservedBuiltinIdentities ? { reservedBuiltinIdentities: options.reservedBuiltinIdentities } : {}),
     state: options.state,
   })
@@ -343,7 +345,7 @@ test("rejects a legacy explicit Plugin setup before preparing another authorizat
   expect((await state.read()).transitions).toEqual([])
 })
 
-test("startup provisioning installs every missing Builtin member and the exact Official preinstall policy", async () => {
+test("startup provisioning installs every missing Builtin member and exact Official defaults", async () => {
   const state = await stateStore()
   const builtin = skill()
   const secondBuiltin = skill({
@@ -351,6 +353,7 @@ test("startup provisioning installs every missing Builtin member and the exact O
     presentation: { name: "Offline Helper" },
   })
   const bytes = new TextEncoder().encode("ffmpeg-plugin")
+  const officialSkillBytes = new TextEncoder().encode("official-skill")
   const ffmpeg: SourceQualifiedItem = {
     ...runtimeItem(),
     delivery: {
@@ -366,53 +369,180 @@ test("startup provisioning installs every missing Builtin member and the exact O
     sourceKey: sourceA,
     version: "1.0.0",
   }
+  const officialSkill = skill({
+    delivery: {
+      kind: "artifact",
+      sha256: sha256Hex(officialSkillBytes),
+      size: officialSkillBytes.byteLength,
+      url: "https://github.com/convaxai/convax-plugins/releases/download/skill-creator-v1.0.0/skill.zip",
+    },
+    id: "skill-creator",
+    marketplaceId: "convax-official",
+    official: true,
+    presentation: { name: "Skill Creator" },
+    sourceKey: sourceA,
+    sourceKind: "network",
+  })
   const installed: string[] = []
-  const setupModes: string[] = []
+  const startupModes: boolean[] = []
+  const scheduledRefreshes: Array<readonly { id: string; kind: string }[]> = []
   const { service } = harness({
-    candidates: [builtin, secondBuiltin, ffmpeg],
+    candidates: [builtin, secondBuiltin, ffmpeg, officialSkill],
     installer: {
-      installArtifact: async (item) => {
+      installArtifact: async (item, _prepared, options) => {
         installed.push(`${item.kind}/${item.id}`)
+        startupModes.push(options.startup === true)
+        if (item.kind === "plugin") {
+          expect(options).toMatchObject({ authorizeExecution: true, productDefaultAuthorization: true })
+          return { authorizationContractDigest: "f".repeat(64) }
+        }
+        expect(options).toMatchObject({ authorizeExecution: false, startup: true })
         return {}
       },
-      installBuiltin: async (item) => {
+      installBuiltin: async (item, _bytes, options) => {
         installed.push(`${item.kind}/${item.id}`)
+        startupModes.push(options?.startup === true)
       },
-      setup: async (_record, _prepared, options) => {
-        setupModes.push(options.mode)
-        return { authorizationContractDigest: "f".repeat(64) }
+      scheduleStartupRefresh: (identities) => {
+        scheduledRefreshes.push(identities)
       },
     },
-    preinstalledPolicy: (item) =>
-      item.id === ffmpeg.id &&
-      item.kind === ffmpeg.kind &&
-      item.sourceKey === ffmpeg.sourceKey &&
-      item.version === ffmpeg.version
+    defaultInstallPolicy: (item) =>
+      (item.id === ffmpeg.id || item.id === officialSkill.id) && item.sourceKey === sourceA && item.version === "1.0.0"
         ? {
             marketplaceId: ffmpeg.marketplaceId,
             observedPolicyRevision: 1,
             policyEntryDigest: sha256Hex(canonicalJson(item)),
-            setup: "automatic",
+            version: item.version,
           }
         : undefined,
-    prepareFixedArtifact: async () => ({ artifactBytes: bytes, companionBytes: {} }),
+    prepareFixedArtifact: async (item) => ({
+      artifactBytes: item.kind === "skill" ? officialSkillBytes : bytes,
+      companionBytes: {},
+    }),
     state,
   })
 
   await service.provisionDefaults()
   await service.provisionDefaults()
 
-  expect(installed).toEqual(["skill/canvas-storyboard", "skill/offline-helper", "plugin/ffmpeg-tools"])
-  expect(setupModes).toEqual(["automatic-product-lock"])
+  expect(installed).toEqual([
+    "skill/canvas-storyboard",
+    "skill/offline-helper",
+    "plugin/ffmpeg-tools",
+    "skill/skill-creator",
+  ])
+  expect(startupModes).toEqual([true, true, true, true])
+  expect(scheduledRefreshes).toEqual([
+    [
+      { id: "canvas-storyboard", kind: "skill" },
+      { id: "offline-helper", kind: "skill" },
+      { id: "ffmpeg-tools", kind: "plugin" },
+      { id: "skill-creator", kind: "skill" },
+    ],
+  ])
   expect((await state.read()).installations.map(({ id }) => id).sort()).toEqual([
     "canvas-storyboard",
     "ffmpeg-tools",
     "offline-helper",
+    "skill-creator",
   ])
   expect(await state.read()).toMatchObject({
     executionGrants: [{ identity: { id: "ffmpeg-tools", kind: "plugin" }, sourceKey: ffmpeg.sourceKey }],
     transitions: [],
   })
+})
+
+test("startup provisioning schedules one refresh for committed defaults even when another entry fails", async () => {
+  const state = await stateStore()
+  const builtin = skill()
+  const bytes = new TextEncoder().encode("official-skill")
+  const official = skill({
+    delivery: {
+      kind: "artifact",
+      sha256: sha256Hex(bytes),
+      size: bytes.byteLength,
+      url: "https://github.com/convaxai/convax-plugins/releases/download/skill-reviewer-v1.0.0/skill.zip",
+    },
+    id: "skill-reviewer",
+    marketplaceId: "convax-official",
+    official: true,
+    sourceKey: sourceA,
+    sourceKind: "network",
+  })
+  const scheduled: Array<readonly { id: string; kind: string }[]> = []
+  const { service } = harness({
+    candidates: [builtin, official],
+    defaultInstallPolicy: (item) =>
+      item.id === official.id
+        ? {
+            marketplaceId: official.marketplaceId,
+            observedPolicyRevision: 1,
+            policyEntryDigest: sha256Hex(canonicalJson(item)),
+            version: item.version,
+          }
+        : undefined,
+    installer: {
+      installBuiltin: async () => {
+        throw new Error("builtin publication failed")
+      },
+      scheduleStartupRefresh: (identities) => scheduled.push(identities),
+    },
+    prepareFixedArtifact: async () => ({ artifactBytes: bytes, companionBytes: {} }),
+    state,
+  })
+
+  await expect(service.provisionDefaults()).rejects.toThrow("Marketplace default provisioning failed")
+  expect(scheduled).toEqual([[{ id: "skill-reviewer", kind: "skill" }]])
+  expect(await state.read()).toMatchObject({ installations: [{ id: "skill-reviewer" }] })
+})
+
+test("Builtin default provisioning preserves an explicit user removal across restart", async () => {
+  const state = await stateStore()
+  const item = skill()
+  const policyEntryDigest = sha256Hex(canonicalJson({ id: item.id, sourceKey: item.sourceKey, version: item.version }))
+  const policy = (identity: { id: string; kind: string; sourceKey: SourceKey; version: string }) =>
+    identity.id === item.id &&
+    identity.kind === item.kind &&
+    identity.sourceKey === item.sourceKey &&
+    identity.version === item.version
+      ? {
+          marketplaceId: item.marketplaceId,
+          observedPolicyRevision: 1,
+          policyEntryDigest,
+          version: item.version,
+        }
+      : undefined
+  let installs = 0
+  const first = harness({
+    candidates: [item],
+    defaultInstallPolicy: policy,
+    installer: {
+      installBuiltin: async () => {
+        installs += 1
+      },
+    },
+    state,
+  })
+
+  await first.service.provisionBuiltins()
+  await first.service.uninstall({ id: item.id, kind: item.kind })
+  expect(installs).toBe(1)
+  expect((await state.read()).provisioningDecisions).toMatchObject([
+    {
+      decision: "removed-by-user",
+      identity: { id: item.id, kind: item.kind },
+      marketplaceId: item.marketplaceId,
+      policyEntryDigest,
+      sourceKey: item.sourceKey,
+    },
+  ])
+
+  const restarted = harness({ candidates: [item], defaultInstallPolicy: policy, state })
+  await restarted.service.provisionBuiltins()
+
+  expect(installs).toBe(1)
+  expect((await state.read()).installations).toEqual([])
 })
 
 test("refreshes the fixed Official source without routing its reserved identity through Network", async () => {
@@ -472,6 +602,100 @@ test("keeps a missing packaged Builtin identity reserved and hides an impostor N
     ],
   })
   await expect(service.beginInstall({ id: "canvas-storyboard", kind: "skill" }, "renderer")).resolves.toEqual([])
+})
+
+test("projects only the representative Plugin source categories into catalog cards", async () => {
+  const state = await stateStore()
+  const plugin = skill({
+    id: "categorized-plugin",
+    kind: "plugin",
+    pluginCategories: ["service", "video", "skill"],
+    runtimeSurface: "agent-and-convax",
+  })
+  const { service } = harness({ candidates: [plugin], state })
+
+  await expect(service.listCatalog()).resolves.toMatchObject({
+    cards: [
+      {
+        categories: ["service", "video", "skill"],
+        id: "categorized-plugin",
+        kind: "plugin",
+      },
+    ],
+  })
+})
+
+test("projects details from the same installed representative used by the catalog", async () => {
+  const state = await stateStore()
+  const builtin = skill({
+    id: "detail-plugin",
+    kind: "plugin",
+    pluginCategories: ["service"],
+    runtimeSurface: "agent-and-convax",
+  })
+  const installedSource = skill({
+    id: builtin.id,
+    kind: "plugin",
+    marketplaceId: "installed-marketplace",
+    pluginCategories: ["image", "skill"],
+    runtimeSurface: "agent",
+    sourceKey: sourceB,
+    sourceKind: "network",
+    sourceOrder: 4,
+  })
+  await state.update((draft) => {
+    draft.installations.push({
+      artifactDigest: sha256Hex(canonicalJson(installedSource.delivery)),
+      id: installedSource.id,
+      kind: installedSource.kind,
+      revision: 1,
+      runtimeSurface: installedSource.runtimeSurface,
+      sourceKey: installedSource.sourceKey,
+      version: installedSource.version,
+    })
+  })
+  let projectedSource: SourceKey | undefined
+  let repositorySource: SourceKey | undefined
+  const { service } = harness({
+    candidates: [builtin, installedSource],
+    projectDetails: async (item) => {
+      projectedSource = item.sourceKey
+      return {}
+    },
+    repositoryAuthority: async (item) => {
+      repositorySource = item.sourceKey
+      return { owner: "installed-owner", repository: "installed-repository" }
+    },
+    state,
+  })
+
+  await expect(service.getCapabilityDetails({ id: builtin.id, kind: "plugin" })).resolves.toMatchObject({
+    categories: ["image", "skill"],
+    id: builtin.id,
+    runtimeScope: "agent",
+    sourceLabel: "installed-marketplace",
+    sourceRepository: "github",
+  })
+  expect(projectedSource).toBe(sourceB)
+  await expect(service.getCapabilitySourceRepositoryUrl({ id: builtin.id, kind: "plugin" })).resolves.toBe(
+    "https://github.com/installed-owner/installed-repository",
+  )
+  expect(repositorySource).toBe(sourceB)
+})
+
+test("does not project or open a repository for a Local capability", async () => {
+  const state = await stateStore()
+  const local = skill({ marketplaceId: "local", sourceKey: sourceB, sourceKind: "local" })
+  const repositoryAuthority = mock(async () => ({ owner: "must-not", repository: "be-used" }))
+  const { service } = harness({ candidates: [local], repositoryAuthority, state })
+
+  await expect(service.getCapabilityDetails({ id: local.id, kind: local.kind })).resolves.not.toHaveProperty(
+    "sourceRepository",
+  )
+  await expect(service.getCapabilitySourceRepositoryUrl({ id: local.id, kind: local.kind })).rejects.toThrow(
+    "no source repository",
+  )
+  expect(repositoryAuthority).not.toHaveBeenCalled()
 })
 
 test("isolates a corrupt Local authority while keeping unrelated Network catalog available", async () => {
@@ -1863,7 +2087,7 @@ test("reports hard-refresh failure as partial success after publishing committed
   expect(changes).toBeGreaterThan(0)
 })
 
-test("preinstalls only the exact source-bound policy entry and preserves removal across restart", async () => {
+test("default-installs only the exact source-bound policy entry and preserves removal across restart", async () => {
   const state = await stateStore()
   const bytes = new TextEncoder().encode("plugin-zip")
   const item: SourceQualifiedItem = {
@@ -1891,19 +2115,19 @@ test("preinstalls only the exact source-bound policy entry and preserves removal
           marketplaceId: item.marketplaceId,
           observedPolicyRevision: 1,
           policyEntryDigest,
-          setup: "automatic" as const,
+          version: item.version,
         }
       : undefined
   const first = harness({
     candidates: [item],
     installer: {
-      setup: async () => ({ authorizationContractDigest: "f".repeat(64) }),
+      installArtifact: async () => ({ authorizationContractDigest: "f".repeat(64) }),
     },
-    preinstalledPolicy: policy,
+    defaultInstallPolicy: policy,
     prepareFixedArtifact: async () => ({ artifactBytes: bytes, companionBytes: {} }),
     state,
   })
-  await first.service.provisionPreinstalled()
+  await first.service.provisionDefaultPackages()
   expect(await state.read()).toMatchObject({
     executionGrants: [{ identity: { id: item.id, kind: item.kind }, sourceKey: item.sourceKey }],
     installations: [{ id: item.id, sourceKey: item.sourceKey }],
@@ -1918,15 +2142,15 @@ test("preinstalls only the exact source-bound policy entry and preserves removal
   ])
   const restarted = harness({
     candidates: [item],
-    preinstalledPolicy: policy,
+    defaultInstallPolicy: policy,
     prepareFixedArtifact: async () => ({ artifactBytes: bytes, companionBytes: {} }),
     state,
   })
-  await restarted.service.provisionPreinstalled()
+  await restarted.service.provisionDefaultPackages()
   expect((await state.read()).installations).toEqual([])
 })
 
-test("explicit reinstall clears the matching removal decision and completes automatic Plugin setup", async () => {
+test("explicit reinstall clears the matching default-removal decision without a setup mutation", async () => {
   const state = await stateStore()
   const bytes = new TextEncoder().encode("plugin-zip")
   const item: SourceQualifiedItem = {
@@ -1949,29 +2173,29 @@ test("explicit reinstall clears the matching removal decision and completes auto
     marketplaceId: item.marketplaceId,
     observedPolicyRevision: 1,
     policyEntryDigest,
-    setup: "automatic" as const,
+    version: item.version,
   })
-  const setupModes: string[] = []
+  const authorizationKinds: string[] = []
   const { service } = harness({
     candidates: [item],
     installer: {
-      setup: async (_record, _prepared, options) => {
-        setupModes.push(options.mode)
+      installArtifact: async (_item, _prepared, options) => {
+        authorizationKinds.push(options.productDefaultAuthorization ? "product-default" : "user")
         return { authorizationContractDigest: "f".repeat(64) }
       },
     },
-    preinstalledPolicy: policy,
+    defaultInstallPolicy: policy,
     prepareFixedArtifact: async () => ({ artifactBytes: bytes, companionBytes: {} }),
     state,
   })
 
-  await service.provisionPreinstalled()
+  await service.provisionDefaultPackages()
   await service.uninstall({ id: item.id, kind: item.kind })
   expect((await state.read()).provisioningDecisions).toHaveLength(1)
 
   await install(service, item)
 
-  expect(setupModes).toEqual(["automatic-product-lock", "automatic-product-lock"])
+  expect(authorizationKinds).toEqual(["product-default", "user"])
   expect(await state.read()).toMatchObject({
     executionGrants: [{ identity: { id: item.id, kind: item.kind }, sourceKey: item.sourceKey }],
     installations: [{ id: item.id, sourceKey: item.sourceKey }],
@@ -2017,29 +2241,29 @@ test("uninstall recovery preserves the accepted removal decision across a produc
           marketplaceId: item.marketplaceId,
           observedPolicyRevision: 1,
           policyEntryDigest,
-          setup: "automatic" as const,
+          version: item.version,
         }
       : identity.version === nextItem.version
         ? {
             marketplaceId: nextItem.marketplaceId,
             observedPolicyRevision: 2,
             policyEntryDigest: nextPolicyEntryDigest,
-            setup: "automatic" as const,
+            version: nextItem.version,
           }
         : undefined
   const first = harness({
     candidates: [item],
     installer: {
-      setup: async () => ({ authorizationContractDigest: "f".repeat(64) }),
+      installArtifact: async () => ({ authorizationContractDigest: "f".repeat(64) }),
       uninstall: async () => {
         throw new Error("crashed after removing Plugin bytes")
       },
     },
-    preinstalledPolicy: policy,
+    defaultInstallPolicy: policy,
     prepareFixedArtifact: async () => ({ artifactBytes: bytes, companionBytes: {} }),
     state,
   })
-  await first.service.provisionPreinstalled()
+  await first.service.provisionDefaultPackages()
   await expect(first.service.uninstall({ id: item.id, kind: item.kind })).rejects.toThrow(
     "crashed after removing Plugin bytes",
   )
@@ -2048,12 +2272,12 @@ test("uninstall recovery preserves the accepted removal decision across a produc
     activePluginBindings: async () => [],
     candidates: [nextItem],
     installer: { resolveTransition: async () => "next" },
-    preinstalledPolicy: policy,
+    defaultInstallPolicy: policy,
     prepareFixedArtifact: async () => ({ artifactBytes: nextBytes, companionBytes: {} }),
     state,
   })
   await restarted.service.recoverTransitions()
-  await restarted.service.provisionPreinstalled()
+  await restarted.service.provisionDefaultPackages()
 
   expect(await state.read()).toMatchObject({
     installations: [],
@@ -2070,7 +2294,7 @@ test("uninstall recovery preserves the accepted removal decision across a produc
   })
 })
 
-test("retries automatic product-lock setup after recovering a failed setup transition", async () => {
+test("retries exact product authorization after recovering a default Plugin publication", async () => {
   const state = await stateStore()
   const bytes = new TextEncoder().encode("plugin-zip")
   const item: SourceQualifiedItem = {
@@ -2092,39 +2316,50 @@ test("retries automatic product-lock setup after recovering a failed setup trans
     marketplaceId: item.marketplaceId,
     observedPolicyRevision: 1,
     policyEntryDigest: "e".repeat(64),
-    setup: "automatic" as const,
+    version: item.version,
   })
   const first = harness({
     candidates: [item],
     installer: {
-      setup: async () => {
-        throw new Error("managed companion changed")
-      },
+      installArtifact: async () => ({}),
     },
-    preinstalledPolicy: policy,
+    defaultInstallPolicy: policy,
     prepareFixedArtifact: async () => ({ artifactBytes: bytes, companionBytes: {} }),
     state,
   })
 
-  await expect(first.service.provisionPreinstalled()).rejects.toThrow("preinstall provisioning")
+  await expect(first.service.provisionDefaultPackages()).rejects.toThrow("default provisioning")
   expect(await state.read()).toMatchObject({
     executionGrants: [],
-    installations: [{ id: item.id }],
-    transitions: [{ identity: { id: item.id }, mutation: "setup", phase: "recovery-required" }],
+    installations: [],
+    transitions: [{ identity: { id: item.id }, mutation: "install", phase: "recovery-required" }],
   })
 
   const restarted = harness({
+    activePluginBindings: async () => [
+      {
+        active: true,
+        artifact: { sha256: item.delivery.kind === "artifact" ? item.delivery.sha256 : "", size: bytes.byteLength },
+        id: item.id,
+        snapshotDigest: "a".repeat(64),
+        sourceKey: item.sourceKey,
+        version: item.version,
+      },
+    ],
     candidates: [item],
     installer: {
       resolveTransition: async () => "next",
-      setup: async () => ({ authorizationContractDigest: "f".repeat(64) }),
+      installArtifact: async (_item, _prepared, options) => {
+        expect(options).toMatchObject({ authorizeExecution: true, productDefaultAuthorization: true })
+        return { authorizationContractDigest: "f".repeat(64) }
+      },
     },
-    preinstalledPolicy: policy,
+    defaultInstallPolicy: policy,
     prepareFixedArtifact: async () => ({ artifactBytes: bytes, companionBytes: {} }),
     state,
   })
   await restarted.service.recoverTransitions()
-  await restarted.service.provisionPreinstalled()
+  await restarted.service.provisionDefaultPackages()
   expect(await state.read()).toMatchObject({
     executionGrants: [{ identity: { id: item.id }, sourceKey: item.sourceKey }],
     installations: [{ id: item.id }],

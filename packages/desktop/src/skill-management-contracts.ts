@@ -67,7 +67,13 @@ export interface DesktopSkillDetails {
 }
 
 export type DesktopSkillShowcaseMedia = "animation" | "poster"
-export type DesktopSkillShowcaseMimeType = "image/gif" | "image/jpeg" | "image/png" | "image/webp" | "video/mp4"
+export type DesktopSkillShowcaseMimeType =
+  | "image/gif"
+  | "image/jpeg"
+  | "image/png"
+  | "image/webp"
+  | "video/mp4"
+  | "video/webm"
 
 export interface DesktopSkillShowcase {
   altText: string

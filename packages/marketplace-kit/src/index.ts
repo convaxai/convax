@@ -15,16 +15,12 @@ import {
   type RegistryV2,
   type ShowcaseV2,
 } from "@convax/marketplace"
+import { renderPluginApiReference, type PluginApiId, type PluginToolReference } from "@convax/plugin-api"
 import {
-  renderPluginApiReference,
-  type PluginApiId,
-  type PluginToolReference,
-} from "@convax/plugin-api"
-import {
-  parsePluginManifestV8,
+  parsePluginManifest,
   renderPluginCapabilityReference,
   type PluginCapabilityDeclaration,
-  type PortablePluginManifestV8,
+  type PortablePluginManifest,
   type PortablePluginSkillContribution,
 } from "@convax/plugin-sdk"
 import { chmod, lstat, mkdir, open, readdir, readFile, realpath, rename, unlink, writeFile } from "node:fs/promises"
@@ -83,6 +79,22 @@ export interface BuildMarketplaceOptions {
   fetchArtifact?: (artifact: { url: string; size: number; sha256: string }) => Promise<Uint8Array>
 }
 
+export interface StagePublishedProductLockCatalogOptions {
+  root: string
+  outDir: string
+  descriptorPath: string
+  registryPath: string
+  showcasePath: string
+  fetchArtifact: NonNullable<BuildMarketplaceOptions["fetchArtifact"]>
+}
+
+export interface PublishedProductLockCatalogResult {
+  registry: RegistryV2
+  showcase: ShowcaseV2
+  releasePlan: MarketplaceBuildResult["releasePlan"]
+  productLockInput: Record<string, unknown>
+}
+
 export interface MarketplaceBuildResult {
   registry: RegistryV2
   registrySha256: string
@@ -116,7 +128,7 @@ interface DiscoveredPackage {
   contentRoot: string
   presentation: { name: string; description?: string }
   authoring?: Record<string, unknown>
-  manifest?: PortablePluginManifestV8
+  manifest?: PortablePluginManifest
   server?: Record<string, unknown>
   extension?: ReturnType<typeof parseMcpServerExtension>
   catalogSupported?: boolean
@@ -207,13 +219,17 @@ function assertSegment(value: string, label: string): void {
   }
 }
 
-async function readJson(path: string, label: string): Promise<unknown> {
-  const { bytes } = await readStableRegularFile(path, label, 1024 * 1024)
+function parseJsonBytes(bytes: Uint8Array, label: string): unknown {
   try {
     return JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(bytes))
   } catch {
     throw new TypeError(`${label} is not valid UTF-8 JSON`)
   }
+}
+
+async function readJson(path: string, label: string): Promise<unknown> {
+  const { bytes } = await readStableRegularFile(path, label, 1024 * 1024)
+  return parseJsonBytes(bytes, label)
 }
 
 function parsePackageMetadata(value: unknown, label = "convax-package.json"): Record<string, unknown> {
@@ -272,17 +288,7 @@ function parseBasePackageMetadata(value: unknown, label: string): Record<string,
   for (const key of Object.keys(metadata)) {
     if (!allowed.includes(key)) throw new TypeError(`${label} has unknown property ${key}`)
   }
-  for (const key of [
-    "schema",
-    "kind",
-    "id",
-    "name",
-    "description",
-    "version",
-    "compatibility",
-    "license",
-    "yanked",
-  ]) {
+  for (const key of ["schema", "kind", "id", "name", "description", "version", "compatibility", "license", "yanked"]) {
     if (!(key in metadata)) throw new TypeError(`${label} is missing ${key}`)
   }
   if (metadata.kind !== "plugin" && metadata.kind !== "skill") {
@@ -293,11 +299,7 @@ function parseBasePackageMetadata(value: unknown, label: string): Record<string,
       throw new TypeError(`${label}.${key} must be a non-empty string`)
     }
   }
-  if (
-    !metadata.compatibility ||
-    typeof metadata.compatibility !== "object" ||
-    Array.isArray(metadata.compatibility)
-  ) {
+  if (!metadata.compatibility || typeof metadata.compatibility !== "object" || Array.isArray(metadata.compatibility)) {
     throw new TypeError(`${label}.compatibility must be an object`)
   }
   if (typeof metadata.yanked !== "boolean") {
@@ -393,7 +395,7 @@ async function inspectPackage(
     if (metadata && (metadata.kind !== "plugin" || manifest.id !== id || manifest.version !== version)) {
       throw new TypeError("Plugin authoring metadata does not match package manifest")
     }
-    const portableManifest = parsePluginManifestV8(manifest)
+    const portableManifest = parsePluginManifest(manifest)
     assertSegment(id, "Plugin id")
     return {
       kind,
@@ -573,10 +575,7 @@ export async function changedMarketplaceVersions(
     if (authoringText === undefined) {
       throw new TypeError(`base package ${packageRoot} does not use convax.package/2`)
     }
-    const authoring = parseBasePackageMetadata(
-      JSON.parse(authoringText),
-      `base package ${packageRoot}`,
-    )
+    const authoring = parseBasePackageMetadata(JSON.parse(authoringText), `base package ${packageRoot}`)
     const kind = authoring.kind as StarterKind
     const id = authoring.id as string
     const version = authoring.version as string
@@ -896,6 +895,245 @@ async function fetchVerifiedArtifact(
   return bytes
 }
 
+type PackagedProductSelection = {
+  marketplaceId: string
+  kind: "plugin" | "skill"
+  id: string
+  targets: string[]
+}
+
+type ProductLockInputArtifact = { path: string; url: string }
+
+type LocalRegistryArtifact = ProductLockInputArtifact & {
+  size: number
+  sha256: string
+}
+
+async function readPackagedProductSelections(
+  root: string,
+  descriptor: ReturnType<typeof parseMarketplaceDescriptor>,
+): Promise<PackagedProductSelection[]> {
+  const value = await readJson(join(root, "catalogs", "packaged.json"), "packaged config")
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    throw new TypeError("packaged config must be an object")
+  }
+  const config = value as Record<string, unknown>
+  if (
+    Object.keys(config).sort().join(",") !== "packages,schema" ||
+    config.schema !== "convax.packaged-config/1" ||
+    !Array.isArray(config.packages) ||
+    config.packages.length < 1 ||
+    config.packages.length > 64
+  ) {
+    throw new TypeError("packaged config must strictly declare a bounded non-empty package closure")
+  }
+  const selected = config.packages.map((raw, index): PackagedProductSelection => {
+    if (!raw || typeof raw !== "object" || Array.isArray(raw)) {
+      throw new TypeError(`packaged package ${index} must be an object`)
+    }
+    const entry = raw as Record<string, unknown>
+    const kind = entry.kind
+    if (
+      Object.keys(entry).sort().join(",") !== "id,kind,marketplaceId,targets" ||
+      entry.marketplaceId !== descriptor.id ||
+      (kind !== "plugin" && kind !== "skill") ||
+      typeof entry.id !== "string" ||
+      !SAFE_SEGMENT.test(entry.id) ||
+      !Array.isArray(entry.targets) ||
+      entry.targets.length > 6 ||
+      entry.targets.some((target) => typeof target !== "string" || !TARGET.test(target)) ||
+      new Set(entry.targets).size !== entry.targets.length ||
+      canonicalJson(entry.targets) !== canonicalJson([...entry.targets].sort(compareAscii)) ||
+      (kind === "skill" && entry.targets.length !== 0)
+    ) {
+      throw new TypeError(`packaged package ${index} is not a valid generic Plugin or standalone Skill declaration`)
+    }
+    return {
+      marketplaceId: descriptor.id,
+      kind,
+      id: entry.id,
+      targets: entry.targets as string[],
+    }
+  })
+  const identities = selected.map(({ id, kind }) => `${kind}\0${id}`)
+  if (new Set(identities).size !== selected.length) {
+    throw new TypeError("packaged package identities must be unique")
+  }
+  if (canonicalJson(identities) !== canonicalJson([...identities].sort(compareAscii))) {
+    throw new TypeError("packaged package identities must be in canonical order")
+  }
+  return selected
+}
+
+function registryPluginOwnedSkillNames(entry: RegistryPackage): string[] {
+  if (entry.kind !== "plugin") return []
+  if (!entry.manifest) throw new TypeError(`packaged Plugin ${entry.id} has no Registry manifest`)
+  const manifest = parsePluginManifest(entry.manifest)
+  if (manifest.id !== entry.id || manifest.version !== entry.version) {
+    throw new TypeError(`packaged Plugin ${entry.id} Registry manifest does not match its identity and version`)
+  }
+  return (manifest.contributes.skills ?? []).map(({ name }) => name)
+}
+
+async function stageRegistryArtifact(options: {
+  artifact: { url: string; size: number; sha256: string }
+  descriptor: ReturnType<typeof parseMarketplaceDescriptor>
+  expectedTag: string
+  fetchArtifact?: BuildMarketplaceOptions["fetchArtifact"]
+  label: string
+  localArtifacts: Map<string, LocalRegistryArtifact>
+  outDir: string
+}): Promise<ProductLockInputArtifact> {
+  const coordinates = releaseAssetCoordinates(options.descriptor, options.artifact.url)
+  if (coordinates.tag !== options.expectedTag) {
+    throw new TypeError(`${options.label} Release tag does not match its Registry identity`)
+  }
+  const local = options.localArtifacts.get(options.artifact.url)
+  if (local) {
+    if (local.size !== options.artifact.size || local.sha256 !== options.artifact.sha256) {
+      throw new TypeError(`${options.label} local bytes do not match their Registry identity`)
+    }
+    return { path: local.path, url: local.url }
+  }
+  if (!options.fetchArtifact) {
+    throw new TypeError(`${options.label} is inherited but no artifact fetch port was provided`)
+  }
+  const bytes = await fetchVerifiedArtifact(options.fetchArtifact, options.artifact, options.label)
+  const path = join(options.outDir, "inherited", options.artifact.sha256, coordinates.name)
+  await atomicWrite(path, bytes)
+  const locked = {
+    path: relative(options.outDir, path).split(sep).join("/"),
+    url: options.artifact.url,
+    size: options.artifact.size,
+    sha256: options.artifact.sha256,
+  }
+  options.localArtifacts.set(options.artifact.url, locked)
+  return { path: locked.path, url: locked.url }
+}
+
+async function buildPackagedProductLockCatalogInput(options: {
+  root: string
+  outDir: string
+  descriptor: ReturnType<typeof parseMarketplaceDescriptor>
+  registry: RegistryV2
+  official: {
+    descriptor: ProductLockInputArtifact
+    registry: ProductLockInputArtifact
+    revision: string
+    showcase: ProductLockInputArtifact
+  }
+  includePackaged: boolean
+  localArtifacts?: Map<string, LocalRegistryArtifact>
+  fetchArtifact?: BuildMarketplaceOptions["fetchArtifact"]
+}): Promise<Record<string, unknown>> {
+  const selections = options.includePackaged
+    ? await readPackagedProductSelections(options.root, options.descriptor)
+    : []
+  const registryByIdentity = new Map(options.registry.packages.map((entry) => [packageIdentity(entry), entry] as const))
+  const localArtifacts = options.localArtifacts ?? new Map<string, LocalRegistryArtifact>()
+  const packages = await Promise.all(
+    selections.map(async (selected) => {
+      const entry = registryByIdentity.get(`${selected.kind}\0${selected.id}`)
+      if (!entry || entry.kind !== selected.kind || entry.delivery.kind !== "artifact") {
+        throw new TypeError(`packaged package ${selected.kind}/${selected.id} is unavailable`)
+      }
+      if (entry.yanked === true) {
+        throw new TypeError(`packaged package ${selected.kind}/${selected.id} is yanked`)
+      }
+      if (entry.kind === "skill" && entry.ownerPluginId !== undefined) {
+        throw new TypeError(`packaged package skill/${selected.id} belongs to Plugin ${entry.ownerPluginId}`)
+      }
+      const lock = (artifact: { url: string; size: number; sha256: string }, label: string, expectedTag: string) =>
+        stageRegistryArtifact({
+          artifact,
+          descriptor: options.descriptor,
+          expectedTag,
+          fetchArtifact: options.fetchArtifact,
+          label,
+          localArtifacts,
+          outDir: options.outDir,
+        })
+      const artifact = await lock(
+        entry.delivery,
+        `packaged package ${entry.kind}/${entry.id}`,
+        releaseTagForPackage(entry),
+      )
+      if (entry.kind === "skill") {
+        return {
+          marketplaceId: selected.marketplaceId,
+          kind: "skill" as const,
+          id: entry.id,
+          version: entry.version,
+          setup: "none" as const,
+          artifact,
+          ownedSkills: [],
+          companions: [],
+        }
+      }
+
+      const ownedSkillNames = registryPluginOwnedSkillNames(entry)
+      const registryOwnedSkillNames = options.registry.packages
+        .filter((candidate) => candidate.kind === "skill" && candidate.ownerPluginId === entry.id)
+        .map(({ id }) => id)
+        .sort(compareAscii)
+      if (canonicalJson([...ownedSkillNames].sort(compareAscii)) !== canonicalJson(registryOwnedSkillNames)) {
+        throw new TypeError(`packaged Plugin ${entry.id} owned Skills differ between its manifest and Registry`)
+      }
+      const ownedSkills = await Promise.all(
+        ownedSkillNames.map(async (name) => {
+          const skill = registryByIdentity.get(`skill\0${name}`)
+          if (
+            !skill ||
+            skill.kind !== "skill" ||
+            skill.ownerPluginId !== entry.id ||
+            skill.delivery.kind !== "artifact" ||
+            skill.yanked === true
+          ) {
+            throw new TypeError(`owned Skill ${name} has no current independently locked artifact for ${entry.id}`)
+          }
+          return lock(skill.delivery, `owned Skill ${name}`, releaseTagForPackage(skill))
+        }),
+      )
+      const companionTargets = (entry.companions ?? []).flatMap((companion) => companion.targets)
+      const companions = await Promise.all(
+        selected.targets.map(async (target) => {
+          const matches = companionTargets.filter(({ platform, arch }) => `${platform}-${arch}` === target)
+          if (matches.length !== 1) {
+            throw new TypeError(`packaged package ${entry.id} does not close target companion ${target}`)
+          }
+          const companion = matches[0]
+          return {
+            ...(await lock(
+              companion.artifact,
+              `packaged companion ${entry.id}/${target}`,
+              releaseTagForPackage(entry),
+            )),
+            platform: companion.platform,
+            arch: companion.arch,
+          }
+        }),
+      )
+      return {
+        marketplaceId: selected.marketplaceId,
+        kind: "plugin" as const,
+        id: entry.id,
+        version: entry.version,
+        setup: "explicit" as const,
+        artifact,
+        ownedSkills,
+        companions,
+      }
+    }),
+  )
+  const productLockInput = {
+    schema: "convax.product-lock-catalog-input/1",
+    official: options.official,
+    packages,
+  }
+  await atomicWrite(join(options.outDir, "product-lock-input.catalog.json"), jsonBytes(productLockInput))
+  return productLockInput
+}
+
 async function packageInventory(
   entry: DiscoveredPackage,
   allPackages: readonly DiscoveredPackage[],
@@ -942,38 +1180,28 @@ async function packageInventory(
 
 function addGeneratedSkillReferences(
   entries: InventoryEntry[],
-  manifest: PortablePluginManifestV8,
+  manifest: PortablePluginManifest,
   skill: PortablePluginSkillContribution,
 ) {
-  const generationTools = new Map(
-    manifest.contributes.generation?.tools.map((tool) => [tool.id, tool]) ?? [],
-  )
-  const agentTools = new Map(
-    manifest.contributes.agent?.tools?.map((tool) => [tool.id, tool.tool]) ?? [],
-  )
-  const pluginTools: PluginToolReference[] = (skill.uses?.pluginTools ?? []).map(
-    (agentToolId) => {
-      const generationToolId = agentTools.get(agentToolId)
-      const generationTool =
-        generationToolId === undefined ? undefined : generationTools.get(generationToolId)
-      if (!generationTool) {
-        throw new TypeError(
-          `Plugin Skill ${skill.name} references an undocumented Plugin tool: ${agentToolId}`,
-        )
-      }
-      return {
-        id: agentToolId,
-        summary: generationTool.description,
-        request: `Validated input for manifest operation \`${generationTool.id}\`.`,
-        response: `Bounded ${generationTool.output} result from the verified Plugin runtime.`,
-      }
-    },
-  )
-  const capabilityDeclaration: PluginCapabilityDeclaration =
-    manifest.contributes.capabilities ?? {
-      exports: [],
-      imports: { optional: [], required: [] },
+  const generationTools = new Map(manifest.contributes.generation?.tools.map((tool) => [tool.id, tool]) ?? [])
+  const agentTools = new Map(manifest.contributes.agent?.tools?.map((tool) => [tool.id, tool.tool]) ?? [])
+  const pluginTools: PluginToolReference[] = (skill.uses?.pluginTools ?? []).map((agentToolId) => {
+    const generationToolId = agentTools.get(agentToolId)
+    const generationTool = generationToolId === undefined ? undefined : generationTools.get(generationToolId)
+    if (!generationTool) {
+      throw new TypeError(`Plugin Skill ${skill.name} references an undocumented Plugin tool: ${agentToolId}`)
     }
+    return {
+      id: agentToolId,
+      summary: generationTool.description,
+      request: `Validated input for manifest operation \`${generationTool.id}\`.`,
+      response: `Bounded ${generationTool.output} result from the verified Plugin runtime.`,
+    }
+  })
+  const capabilityDeclaration: PluginCapabilityDeclaration = manifest.contributes.capabilities ?? {
+    exports: [],
+    imports: { optional: [], required: [] },
+  }
   const generated = [
     {
       bytes: new TextEncoder().encode(
@@ -986,20 +1214,12 @@ function addGeneratedSkillReferences(
       path: `${skill.path}/references/convax-capabilities.md`,
     },
     {
-      bytes: new TextEncoder().encode(
-        renderPluginCapabilityReference(capabilityDeclaration),
-      ),
+      bytes: new TextEncoder().encode(renderPluginCapabilityReference(capabilityDeclaration)),
       path: `${skill.path}/references/plugin-capabilities.md`,
     },
   ]
   for (const reference of generated) {
-    if (
-      entries.some(
-        (entry) =>
-          entry.path.toLocaleLowerCase("en-US") ===
-          reference.path.toLocaleLowerCase("en-US"),
-      )
-    ) {
+    if (entries.some((entry) => entry.path.toLocaleLowerCase("en-US") === reference.path.toLocaleLowerCase("en-US"))) {
       throw new TypeError(
         `Plugin-owned Skill generated reference is reserved and must not be authored: ${reference.path}`,
       )
@@ -1216,12 +1436,10 @@ export async function buildMarketplace(options: BuildMarketplaceOptions): Promis
       })
     : undefined
   const selectedIdentityInput = publishSelections?.map(packageIdentity) ?? options.publishIdentities
-  const selectedIdentities = selectedIdentityInput?.length === 0 && removeSelections?.length
-    ? []
-    : parsePublishIdentities(selectedIdentityInput)
-  const removedIdentities = removeSelections === undefined
-    ? undefined
-    : parsePublishIdentities(removeSelections.map(packageIdentity))
+  const selectedIdentities =
+    selectedIdentityInput?.length === 0 && removeSelections?.length ? [] : parsePublishIdentities(selectedIdentityInput)
+  const removedIdentities =
+    removeSelections === undefined ? undefined : parsePublishIdentities(removeSelections.map(packageIdentity))
   const hasSelectiveSelection = selectedIdentities !== undefined || removedIdentities !== undefined
   if (hasSelectiveSelection && (selectedIdentities?.length ?? 0) + (removedIdentities?.length ?? 0) === 0) {
     throw new TypeError("selective build must select or remove at least one package")
@@ -1740,161 +1958,39 @@ export async function buildMarketplace(options: BuildMarketplaceOptions): Promis
       .sort((left, right) => compareAscii(left.tag, right.tag)),
   }
   await atomicWrite(join(outDir, "release-plan.json"), jsonBytes(releasePlan))
-  const lockArtifact = (asset: { path: string; url: string }) => ({
-    path: asset.path,
-    url: asset.url,
-  })
   const metadataByName = new Map(metadataRelease.assets.map((asset) => [asset.name, asset]))
-  const lockedArtifactByUrl = new Map(
+  const localArtifacts = new Map<string, LocalRegistryArtifact>(
     artifacts.flatMap((artifact) =>
       selectionContext && !(selectedIdentities ?? []).includes(`${artifact.kind}\0${artifact.id}`)
         ? []
-        : [[artifact.url, { path: relative(outDir, artifact.path).split(sep).join("/"), url: artifact.url }] as const],
+        : [
+            [
+              artifact.url,
+              {
+                path: relative(outDir, artifact.path).split(sep).join("/"),
+                url: artifact.url,
+                size: artifact.size,
+                sha256: artifact.sha256,
+              },
+            ] as const,
+          ],
     ),
   )
-  const lockRegistryArtifact = async (
-    artifact: { url: string; size: number; sha256: string },
-    label: string,
-  ): Promise<{ path: string; url: string }> => {
-    const local = lockedArtifactByUrl.get(artifact.url)
-    if (local) return local
-    if (!options.fetchArtifact) throw new TypeError(`${label} is inherited but no artifact fetch port was provided`)
-    const bytes = await fetchVerifiedArtifact(options.fetchArtifact, artifact, label)
-    const sourceUrl = new URL(artifact.url)
-    const name = sourceUrl.pathname.slice(sourceUrl.pathname.lastIndexOf("/") + 1)
-    if (!SAFE_SEGMENT.test(name)) throw new TypeError(`${label} has an unsafe Release asset name`)
-    const path = join(outDir, "inherited", artifact.sha256, name)
-    await atomicWrite(path, bytes)
-    const locked = { path: relative(outDir, path).split(sep).join("/"), url: artifact.url }
-    lockedArtifactByUrl.set(artifact.url, locked)
-    return locked
-  }
-  const registryByIdentity = new Map(registry.packages.map((entry) => [packageIdentity(entry), entry] as const))
-  const preinstalled = options.official
-    ? (() => {
-        return readJson(join(options.root, "catalogs", "preinstalled.json"), "preinstalled config")
-      })()
-    : Promise.resolve({ schema: "convax.preinstalled-config/1", packages: [] })
-  const preinstalledValue = await preinstalled
-  if (!preinstalledValue || typeof preinstalledValue !== "object" || Array.isArray(preinstalledValue)) {
-    throw new TypeError("preinstalled config must be an object")
-  }
-  const preinstalledConfig = preinstalledValue as Record<string, unknown>
-  if (
-    Object.keys(preinstalledConfig).sort().join(",") !== "packages,schema" ||
-    preinstalledConfig.schema !== "convax.preinstalled-config/1" ||
-    !Array.isArray(preinstalledConfig.packages) ||
-    preinstalledConfig.packages.length > 64
-  ) {
-    throw new TypeError("preinstalled config must strictly declare schema and packages")
-  }
-  if (!options.official && preinstalledConfig.packages.length !== 0) {
-    throw new TypeError("third-party Marketplace cannot emit a Convax product preinstalled policy")
-  }
-  const selectedPreinstalled = preinstalledConfig.packages.map((rawPreinstalled, index) => {
-    if (!rawPreinstalled || typeof rawPreinstalled !== "object" || Array.isArray(rawPreinstalled)) {
-      throw new TypeError(`preinstalled package ${index} must be an object`)
-    }
-    const selected = rawPreinstalled as Record<string, unknown>
-    if (
-      Object.keys(selected).sort().join(",") !== "id,kind,marketplaceId,setup,targets" ||
-      selected.marketplaceId !== descriptor.id ||
-      selected.kind !== "plugin" ||
-      selected.setup !== "explicit" ||
-      typeof selected.id !== "string" ||
-      !SAFE_SEGMENT.test(selected.id) ||
-      !Array.isArray(selected.targets) ||
-      selected.targets.length > 6 ||
-      selected.targets.some((target) => typeof target !== "string" || !TARGET.test(target)) ||
-      new Set(selected.targets).size !== selected.targets.length
-    ) {
-      throw new TypeError(`preinstalled package ${index} is not a valid generic explicit Plugin declaration`)
-    }
-    return {
-      marketplaceId: selected.marketplaceId,
-      kind: "plugin" as const,
-      id: selected.id,
-      targets: selected.targets as string[],
-      setup: "explicit" as const,
-    }
-  })
-  if (new Set(selectedPreinstalled.map(({ id }) => id)).size !== selectedPreinstalled.length) {
-    throw new TypeError("preinstalled package identities must be unique")
-  }
-  const lockedPreinstalledPackages = await Promise.all(
-    selectedPreinstalled.map(async (selected) => {
-      const identity = `${selected.kind}\0${selected.id}`
-      const entry = registryByIdentity.get(identity)
-      if (!entry || entry.kind !== "plugin" || entry.delivery.kind !== "artifact") {
-        throw new TypeError(`preinstalled package ${selected.kind}/${selected.id} is unavailable`)
-      }
-      const packageArtifact = await lockRegistryArtifact(
-        entry.delivery,
-        `preinstalled package ${entry.kind}/${entry.id}`,
-      )
-      const ownedSkillNames =
-        entry.manifest?.contributes &&
-        typeof entry.manifest.contributes === "object" &&
-        !Array.isArray(entry.manifest.contributes) &&
-        Array.isArray((entry.manifest.contributes as Record<string, unknown>).skills)
-          ? ((entry.manifest.contributes as Record<string, unknown>).skills as unknown[]).flatMap((value) =>
-              value &&
-              typeof value === "object" &&
-              !Array.isArray(value) &&
-              typeof (value as Record<string, unknown>).name === "string"
-                ? [(value as Record<string, unknown>).name as string]
-                : [],
-            )
-          : []
-      const companions = await Promise.all(
-        (entry.companions ?? []).flatMap((companion) =>
-          companion.targets
-            .filter((target) => selected.targets.includes(`${target.platform}-${target.arch}`))
-            .map(async (target) => ({
-              ...(await lockRegistryArtifact(
-                target.artifact,
-                `preinstalled companion ${entry.id}/${target.platform}-${target.arch}`,
-              )),
-              platform: target.platform,
-              arch: target.arch,
-            })),
-        ),
-      )
-      if (companions.length !== selected.targets.length) {
-        throw new TypeError(`preinstalled package ${entry.id} does not close its selected companion targets`)
-      }
-      const ownedSkills = await Promise.all(
-        ownedSkillNames.map(async (name) => {
-          const skill = registryByIdentity.get(`skill\0${name}`)
-          if (!skill || skill.kind !== "skill" || skill.delivery.kind !== "artifact") {
-            throw new TypeError(`owned Skill ${name} has no independently locked artifact`)
-          }
-          return lockRegistryArtifact(skill.delivery, `owned Skill ${name}`)
-        }),
-      )
-      return {
-        marketplaceId: selected.marketplaceId,
-        kind: entry.kind,
-        id: entry.id,
-        version: entry.version,
-        setup: selected.setup,
-        artifact: packageArtifact,
-        ownedSkills,
-        companions,
-      }
-    }),
-  )
-  const productLockInput = {
-    schema: "convax.product-lock-catalog-input/1",
+  const productLockInput = await buildPackagedProductLockCatalogInput({
+    root: options.root,
+    outDir,
+    descriptor,
+    registry,
     official: {
-      descriptor: lockArtifact(metadataByName.get("marketplace.json")!),
-      registry: lockArtifact(metadataByName.get("registry-v2.json")!),
+      descriptor: metadataByName.get("marketplace.json")!,
+      registry: metadataByName.get("registry-v2.json")!,
       revision,
-      showcase: lockArtifact(metadataByName.get("showcase-v2.json")!),
+      showcase: metadataByName.get("showcase-v2.json")!,
     },
-    packages: lockedPreinstalledPackages,
-  }
-  await atomicWrite(join(outDir, "product-lock-input.catalog.json"), jsonBytes(productLockInput))
+    includePackaged: options.official === true,
+    localArtifacts,
+    fetchArtifact: options.fetchArtifact,
+  })
   return {
     registry,
     registrySha256: sha256Hex(registryBytes),
@@ -1906,6 +2002,91 @@ export async function buildMarketplace(options: BuildMarketplaceOptions): Promis
     productLockInput,
     ...(selectionContext ? { selectionContext } : {}),
   }
+}
+
+export async function stagePublishedProductLockCatalog(
+  options: StagePublishedProductLockCatalogOptions,
+): Promise<PublishedProductLockCatalogResult> {
+  if (typeof options.fetchArtifact !== "function") {
+    throw new TypeError("published product-lock catalog staging requires a bounded artifact fetch port")
+  }
+  const [descriptorFile, registryFile, showcaseFile] = await Promise.all([
+    readStableRegularFile(options.descriptorPath, "published Marketplace descriptor", 1024 * 1024),
+    readStableRegularFile(options.registryPath, "published Registry v2", 16 * 1024 * 1024),
+    readStableRegularFile(options.showcasePath, "published Showcase v2", 16 * 1024 * 1024),
+  ])
+  const descriptor = parseMarketplaceDescriptor(
+    parseJsonBytes(descriptorFile.bytes, "published Marketplace descriptor"),
+  )
+  const officialPagesRoot = "https://convaxai.github.io/convax-plugins"
+  if (
+    descriptor.id !== "convax-official" ||
+    descriptor.repository.owner !== "convaxai" ||
+    descriptor.repository.name !== "convax-plugins" ||
+    descriptor.registry.v2.url !== `${officialPagesRoot}/registry/v2/index.json` ||
+    descriptor.showcase.v2.url !== `${officialPagesRoot}/showcase/v2/index.json`
+  ) {
+    throw new TypeError("published product-lock metadata must identify the canonical Official Marketplace")
+  }
+  const registryValue = parseJsonBytes(registryFile.bytes, "published Registry v2")
+  const showcaseValue = parseJsonBytes(showcaseFile.bytes, "published Showcase v2")
+  const registry = parseRegistryV2(registryValue)
+  const showcase = parseShowcaseV2(showcaseValue, registry, descriptor)
+  if (
+    registry.marketplaceId !== descriptor.id ||
+    canonicalJson(registryValue) !== canonicalJson(registry) ||
+    canonicalJson(showcaseValue) !== canonicalJson(showcase)
+  ) {
+    throw new TypeError("published product-lock metadata does not form one exact Official closure")
+  }
+
+  const outDir = resolve(options.outDir)
+  await mkdir(outDir, { recursive: true })
+  const metadataTag = `registry-v2-${registry.revision}`
+  const metadataSources = [
+    { name: "marketplace.json", bytes: descriptorFile.bytes },
+    { name: "registry-v2.json", bytes: registryFile.bytes },
+    { name: "showcase-v2.json", bytes: showcaseFile.bytes },
+  ]
+  const metadataAssets = await Promise.all(
+    metadataSources.map(async ({ name, bytes }) => {
+      const path = join(outDir, "releases", metadataTag, name)
+      await atomicWrite(path, bytes)
+      return {
+        path: relative(outDir, path).split(sep).join("/"),
+        name,
+        size: bytes.byteLength,
+        sha256: sha256Hex(bytes),
+        url: releaseUrl(descriptor, metadataTag, name),
+      }
+    }),
+  )
+  const releasePlan: MarketplaceBuildResult["releasePlan"] = {
+    schema: "convax.release-plan/1",
+    releases: [
+      {
+        tag: metadataTag,
+        assets: metadataAssets.sort((left, right) => compareAscii(left.name, right.name)),
+      },
+    ],
+  }
+  await atomicWrite(join(outDir, "release-plan.json"), jsonBytes(releasePlan))
+  const metadataByName = new Map(metadataAssets.map((asset) => [asset.name, asset] as const))
+  const productLockInput = await buildPackagedProductLockCatalogInput({
+    root: options.root,
+    outDir,
+    descriptor,
+    registry,
+    official: {
+      descriptor: metadataByName.get("marketplace.json")!,
+      registry: metadataByName.get("registry-v2.json")!,
+      revision: registry.revision,
+      showcase: metadataByName.get("showcase-v2.json")!,
+    },
+    includePackaged: true,
+    fetchArtifact: options.fetchArtifact,
+  })
+  return { registry, showcase, releasePlan, productLockInput }
 }
 
 export async function buildRegistryV2(options: BuildMarketplaceOptions): Promise<RegistryV2> {
@@ -2268,7 +2449,7 @@ export async function createMarketplaceStarter(root: string, options: StarterOpt
           "build-index": "convax-marketplace build-index . --out dist",
         },
         devDependencies: {
-          "@convax/marketplace-kit": process.env.CONVAX_MARKETPLACE_KIT_SPEC ?? "^0.2.2",
+          "@convax/marketplace-kit": process.env.CONVAX_MARKETPLACE_KIT_SPEC ?? "^0.2.3",
         },
       },
       null,

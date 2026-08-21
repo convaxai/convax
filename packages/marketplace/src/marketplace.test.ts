@@ -12,6 +12,7 @@ import {
   identityKeyForMcpServer,
   parseMarketplaceDescriptor,
   parseMarketplaceProductLock,
+  parseMarketplaceProductPolicy,
   parseBuiltinBundle,
   parseRegistryV2,
   parseShowcaseV2,
@@ -173,6 +174,45 @@ describe("@convax/marketplace strict contracts", () => {
       schema: "convax.plugin/8",
       hostApi: { major: 3, required: [], optional: [] },
     })
+    const currentV9Packages = registry.packages.map((entry) =>
+      "manifest" in entry
+        ? {
+            ...entry,
+            manifest: {
+              ...entry.manifest,
+              schema: "convax.plugin/9",
+            },
+          }
+        : entry,
+    )
+    expect(
+      parseRegistryV2({
+        ...registry,
+        revision: sha256Hex(canonicalJson(currentV9Packages)),
+        packages: currentV9Packages,
+      }).packages[0]?.manifest,
+    ).toMatchObject({
+      schema: "convax.plugin/9",
+      hostApi: { major: 3, required: [], optional: [] },
+    })
+    const retiredV9HostApiPackages = currentV9Packages.map((entry) =>
+      "manifest" in entry
+        ? {
+            ...entry,
+            manifest: {
+              ...entry.manifest,
+              hostApi: { major: 2, required: [], optional: [] },
+            },
+          }
+        : entry,
+    )
+    expect(() =>
+      parseRegistryV2({
+        ...registry,
+        revision: sha256Hex(canonicalJson(retiredV9HostApiPackages)),
+        packages: retiredV9HostApiPackages,
+      }),
+    ).toThrow("major must be 3")
     const futureMinorPackages = registry.packages.map((entry) =>
       "manifest" in entry
         ? {
@@ -349,12 +389,17 @@ describe("@convax/marketplace strict contracts", () => {
     const group = aggregateCatalog([
       item("third", "plugin", "shared"),
       item("official", "plugin", "shared"),
-      item("builtin", "plugin", "shared"),
+      {
+        ...item("builtin", "plugin", "shared"),
+        pluginCategories: ["image", "skill"] as const,
+      },
     ])[0]
     expect(group?.representative.marketplaceId).toBe("builtin")
+    expect(group?.representative.pluginCategories).toEqual(["image", "skill"])
     expect(group?.representative).toMatchObject({
       catalogSequence: 1,
       catalogRevision: "a".repeat(64),
+      pluginCategories: ["image", "skill"],
       runtimeSurface: "none",
     })
     expect(group?.requiresSourceSelection).toBe(true)
@@ -795,118 +840,123 @@ describe("@convax/marketplace strict contracts", () => {
     ).toThrow("canonical member content digest")
   })
 
-  test("parses generic preinstall identities symmetrically and rejects Release path injection", () => {
-    const lockedArtifact = (name: string, tag: string) => ({
+  test("parses one exact Official closure with default-install and retired-recovery purposes", () => {
+    const lockedArtifact = (name: string, tag: string, sha = "a".repeat(64)) => ({
       name,
       url: `https://github.com/convaxai/convax-plugins/releases/download/${tag}/${name}`,
       size: 10,
-      sha256: "a".repeat(64),
+      sha256: sha,
     })
     const officialRevision = "b".repeat(64)
-    const lockFor = (id: string) => {
-      const policy = {
-        builtin: { marketplaceId: "convax-builtin" as const, repository: "convaxai/convax-plugins" as const },
-        official: {
-          descriptorUrl: "https://convaxai.github.io/convax-plugins/marketplace.json",
-          marketplaceId: "convax-official" as const,
-          repository: "convaxai/convax-plugins" as const,
+    const retired = {
+      artifact: { sha256: "d".repeat(64), size: 11 },
+      hostApiMajor: 1,
+      snapshotDigest: "e".repeat(64),
+      sourceKey: "f".repeat(64),
+      version: "0.2.0",
+    }
+    const policy = {
+      builtin: { marketplaceId: "convax-builtin", repository: "convaxai/convax-plugins" },
+      official: {
+        descriptorUrl: "https://convaxai.github.io/convax-plugins/marketplace.json",
+        marketplaceId: "convax-official",
+        repository: "convaxai/convax-plugins",
+      },
+      packages: [
+        {
+          marketplaceId: "convax-official",
+          kind: "plugin",
+          id: "nexus-service",
+          purposes: ["default-install", "retired-recovery"],
+          targets: ["darwin-arm64"],
+          retired,
+          version: "0.5.1",
         },
-        preinstalledPackages: [
+        {
+          marketplaceId: "convax-official",
+          kind: "skill",
+          id: "skill-creator",
+          purposes: ["default-install"],
+          targets: [],
+        },
+      ],
+      revision: 7,
+    } satisfies MarketplaceProductPolicy
+    const lock = {
+      schema: "convax.marketplace-product-lock/3",
+      policy,
+      resolved: {
+        policyDigest: canonicalProductPolicyDigest(policy),
+        builtinBundle: lockedArtifact("convax-builtin-bundle.zip", `builtin-${"c".repeat(64)}`),
+        builtinReservations: [{ kind: "skill", id: "canvas-storyboard" }],
+        official: {
+          revision: officialRevision,
+          descriptor: lockedArtifact("marketplace.json", `registry-v2-${officialRevision}`),
+          registry: lockedArtifact("registry-v2.json", `registry-v2-${officialRevision}`),
+          showcase: lockedArtifact("showcase-v2.json", `registry-v2-${officialRevision}`),
+        },
+        packages: [
           {
             marketplaceId: "convax-official",
             kind: "plugin",
-            id,
+            id: "nexus-service",
+            purposes: ["default-install", "retired-recovery"],
             targets: ["darwin-arm64"],
-            setup: "automatic",
+            retired,
+            version: "0.5.1",
+            artifact: lockedArtifact("plugin-nexus-service-0.5.1.zip", "plugin-nexus-service-v0.5.1"),
+            ownedSkills: [lockedArtifact("skill-nexus-workflow-0.5.0.zip", "skill-nexus-workflow-v0.5.0")],
+            companions: [
+              {
+                ...lockedArtifact("nexus-service-companion", "plugin-nexus-service-v0.5.1"),
+                platform: "darwin",
+                arch: "arm64",
+              },
+            ],
+          },
+          {
+            marketplaceId: "convax-official",
+            kind: "skill",
+            id: "skill-creator",
+            purposes: ["default-install"],
+            targets: [],
+            version: "0.3.1",
+            artifact: lockedArtifact("skill-skill-creator-0.3.1.zip", "skill-skill-creator-v0.3.1"),
           },
         ],
-        recoveryArtifacts: [],
-        revision: 1,
-      } satisfies MarketplaceProductPolicy
-      return {
-        schema: "convax.marketplace-product-lock/2",
-        policy,
-        resolved: {
-          policyDigest: canonicalProductPolicyDigest(policy),
-          builtinBundle: lockedArtifact("convax-builtin-bundle.zip", `builtin-${"c".repeat(64)}`),
-          builtinReservations: [
-            { kind: "skill", id: "workflow-foundation" },
-            { kind: "plugin", id: "headless-foundation" },
-          ],
-          official: {
-            revision: officialRevision,
-            descriptor: lockedArtifact("marketplace.json", `registry-v2-${officialRevision}`),
-            registry: lockedArtifact("registry-v2.json", `registry-v2-${officialRevision}`),
-            showcase: lockedArtifact("showcase-v2.json", `registry-v2-${officialRevision}`),
-          },
-          packages: [
-            {
-              marketplaceId: "convax-official",
-              kind: "plugin",
-              id,
-              version: "0.3.1",
-              setup: "explicit",
-              artifact: lockedArtifact(`plugin-${id}-0.3.1.zip`, `plugin-${id}-v0.3.1`),
-              ownedSkills: [lockedArtifact(`skill-${id}-workflow.zip`, `skill-${id}-workflow-v0.3.1`)],
-              companions: [
-                {
-                  ...lockedArtifact(`${id}-companion`, `plugin-${id}-v0.3.1`),
-                  platform: "darwin",
-                  arch: "arm64",
-                },
-              ],
-            },
-          ],
-          recoveryArtifacts: [],
-        },
-      }
+      },
     }
-    const first = parseMarketplaceProductLock(lockFor("alpha-tools"))
-    const unknown = parseMarketplaceProductLock(lockFor("unknown-extension"))
-    const normalize = (value: ReturnType<typeof parseMarketplaceProductLock>) => ({
-      policy: {
-        ...value.policy,
-        preinstalledPackages: value.policy.preinstalledPackages.map((entry) => ({ ...entry, id: "<plugin>" })),
-      },
-      resolved: {
-        ...value.resolved,
-        policyDigest: "<digest>",
-        packages: value.resolved.packages.map((entry) => ({
-          ...entry,
-          id: "<plugin>",
-          artifact: { ...entry.artifact, name: "<artifact>", url: "<artifact-url>" },
-          ownedSkills: entry.ownedSkills.map((skill) => ({ ...skill, name: "<skill>", url: "<skill-url>" })),
-          companions: entry.companions.map((companion) => ({
-            ...companion,
-            name: "<companion>",
-            url: "<companion-url>",
-          })),
-        })),
-      },
-    })
-    expect(first.resolved.packages[0]?.id).toBe("alpha-tools")
-    expect(unknown.resolved.packages[0]?.id).toBe("unknown-extension")
-    expect(normalize(first)).toEqual(normalize(unknown))
 
-    const lock = lockFor("alpha-tools")
+    const parsed = parseMarketplaceProductLock(lock)
+    expect(parsed.schema).toBe("convax.marketplace-product-lock/3")
+    expect(parsed.resolved.packages).toHaveLength(2)
+    expect(parsed.resolved.packages[0]).toMatchObject({
+      id: "nexus-service",
+      kind: "plugin",
+      purposes: ["default-install", "retired-recovery"],
+      retired,
+    })
+    expect(parsed.resolved.packages[1]).toMatchObject({
+      id: "skill-creator",
+      kind: "skill",
+      purposes: ["default-install"],
+    })
+
+    expect(() => parseMarketplaceProductLock({ ...lock, schema: "convax.marketplace-product-lock/2" })).toThrow(
+      "unsupported Marketplace product lock schema",
+    )
     expect(() =>
       parseMarketplaceProductLock({
         ...lock,
-        policy: {
-          ...lock.policy,
-          preinstalledPackages: [
-            ...lock.policy.preinstalledPackages,
-            {
-              marketplaceId: "convax-official",
-              kind: "plugin",
-              id: "alpha-tools",
-              targets: ["linux-x64"],
-              setup: "automatic",
-            },
-          ],
+        resolved: {
+          ...lock.resolved,
+          packages: lock.resolved.packages.map((entry) =>
+            entry.kind === "skill" ? { ...entry, ownerPluginId: "nexus-service" } : entry,
+          ),
         },
       }),
-    ).toThrow("identities")
+    ).toThrow("unsupported or missing fields")
+
     expect(() =>
       parseMarketplaceProductLock({
         ...lock,
@@ -917,16 +967,57 @@ describe("@convax/marketplace strict contracts", () => {
               ...lock.resolved.packages[0],
               companions: [
                 {
-                  ...lockedArtifact("linux-companion", "plugin-alpha-tools-v0.3.1"),
+                  ...lock.resolved.packages[0]!.companions![0],
                   platform: "linux",
                   arch: "x64",
                 },
               ],
             },
+            lock.resolved.packages[1],
           ],
         },
       }),
-    ).toThrow("policy targets")
+    ).toThrow("companions must exactly close")
+
+    const versionDriftPolicy = {
+      ...policy,
+      packages: policy.packages.map((entry) => (entry.kind === "plugin" ? { ...entry, version: "0.5.2" } : entry)),
+    } as MarketplaceProductPolicy
+    expect(() =>
+      parseMarketplaceProductLock({
+        ...lock,
+        policy: versionDriftPolicy,
+        resolved: {
+          ...lock.resolved,
+          policyDigest: canonicalProductPolicyDigest(versionDriftPolicy),
+        },
+      }),
+    ).toThrow("version does not match")
+
+    expect(() =>
+      parseMarketplaceProductLock({
+        ...lock,
+        resolved: {
+          ...lock.resolved,
+          packages: lock.resolved.packages.map((entry) =>
+            entry.kind === "skill" ? { ...entry, artifact: { ...entry.artifact, sha256: "A".repeat(64) } } : entry,
+          ),
+        },
+      }),
+    ).toThrow("immutable size and SHA-256")
+
+    expect(() =>
+      parseMarketplaceProductLock({
+        ...lock,
+        resolved: {
+          ...lock.resolved,
+          packages: lock.resolved.packages.map((entry) =>
+            entry.kind === "skill" ? { ...entry, marketplaceId: "convax-builtin" } : entry,
+          ),
+        },
+      }),
+    ).toThrow("exactly close policy.packages")
+
     expect(() =>
       parseMarketplaceProductLock({
         ...lock,
@@ -939,29 +1030,93 @@ describe("@convax/marketplace strict contracts", () => {
         },
       }),
     ).toThrow("immutable")
+  })
+
+  test("rejects ambiguous package purposes and duplicate product identities", () => {
+    const basePolicy = {
+      builtin: { marketplaceId: "convax-builtin", repository: "convaxai/convax-plugins" },
+      official: {
+        descriptorUrl: "https://convaxai.github.io/convax-plugins/marketplace.json",
+        marketplaceId: "convax-official",
+        repository: "convaxai/convax-plugins",
+      },
+      packages: [
+        {
+          marketplaceId: "convax-official",
+          kind: "plugin",
+          id: "alpha-tools",
+          purposes: ["default-install"],
+          targets: [],
+        },
+      ],
+      revision: 1,
+    }
+    expect(parseMarketplaceProductPolicy(basePolicy).packages).toHaveLength(1)
     expect(() =>
       parseMarketplaceProductLock({
-        ...lock,
-        resolved: {
-          ...lock.resolved,
-          builtinBundle: {
-            ...lock.resolved.builtinBundle,
-            url: lock.resolved.builtinBundle.url.replace("convax-builtin-bundle.zip", "convax-builtin%2Dbundle.zip"),
-          },
+        schema: "convax.marketplace-product-lock/3",
+        policy: {
+          ...basePolicy,
+          packages: [{ ...basePolicy.packages[0], purposes: ["retired-recovery", "default-install"] }],
         },
+        resolved: {},
       }),
-    ).toThrow("immutable")
+    ).toThrow("canonical order")
     expect(() =>
       parseMarketplaceProductLock({
-        ...lock,
-        resolved: {
-          ...lock.resolved,
-          builtinBundle: {
-            ...lock.resolved.builtinBundle,
-            url: lock.resolved.builtinBundle.url.replace("/convax-builtin-bundle.zip", "//convax-builtin-bundle.zip"),
-          },
+        schema: "convax.marketplace-product-lock/3",
+        policy: {
+          ...basePolicy,
+          packages: [basePolicy.packages[0], { ...basePolicy.packages[0] }],
         },
+        resolved: {},
       }),
-    ).toThrow("immutable")
+    ).toThrow("identities")
+    expect(() =>
+      parseMarketplaceProductLock({
+        schema: "convax.marketplace-product-lock/3",
+        policy: {
+          ...basePolicy,
+          packages: [
+            {
+              marketplaceId: "convax-official",
+              kind: "skill",
+              id: "skill-creator",
+              purposes: ["retired-recovery"],
+              targets: [],
+            },
+          ],
+        },
+        resolved: {},
+      }),
+    ).toThrow("standalone Skill")
+    expect(() =>
+      parseMarketplaceProductPolicy({
+        ...basePolicy,
+        packages: [
+          {
+            marketplaceId: "convax-official",
+            kind: "skill",
+            id: "skill-creator",
+            purposes: ["default-install"],
+            targets: ["darwin-arm64"],
+          },
+        ],
+      }),
+    ).toThrow("portable")
+    expect(() =>
+      parseMarketplaceProductPolicy({
+        ...basePolicy,
+        packages: [
+          {
+            marketplaceId: "convax-official",
+            kind: "plugin",
+            id: "alpha-tools",
+            purposes: ["default-install"],
+            targets: ["linux-x64", "darwin-arm64"],
+          },
+        ],
+      }),
+    ).toThrow("canonical order")
   })
 })

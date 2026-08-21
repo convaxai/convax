@@ -3,7 +3,20 @@ import { resolve } from "node:path"
 
 import type { MarketplaceProductPolicy } from "./marketplace-product-lock"
 
-export const CURRENT_MARKETPLACE_PRODUCT_POLICY_REVISION = 6
+export const CURRENT_MARKETPLACE_PRODUCT_POLICY_REVISION = 15
+
+const DEFAULT_STANDALONE_SKILLS = [
+  "ad-idea",
+  "audiobook",
+  "convax-plugin-authoring",
+  "ecommerce-image",
+  "film-shot",
+  "image-remix",
+  "short-drama-screenwriter",
+  "skill-creator",
+  "skill-reviewer",
+  "video-prompting",
+] as const
 
 export function configureMarketplaceProductPolicy(revision: number): MarketplaceProductPolicy {
   if (!Number.isSafeInteger(revision) || revision < 1) {
@@ -19,20 +32,35 @@ export function configureMarketplaceProductPolicy(revision: number): Marketplace
       marketplaceId: "convax-official",
       repository: "convaxai/convax-plugins",
     },
-    preinstalledPackages: [
+    packages: [
       {
         id: "ffmpeg-tools",
         kind: "plugin",
         marketplaceId: "convax-official",
-        setup: "automatic",
+        purposes: ["default-install"],
         targets: ["darwin-arm64"],
       },
-    ],
-    recoveryArtifacts: [
+      {
+        id: "jianying-editor",
+        kind: "plugin",
+        marketplaceId: "convax-official",
+        purposes: ["default-install"],
+        targets: ["darwin-arm64"],
+      },
+      ...["jimeng-service", "libtv-service", "xiaoyunque-service"].map(
+        (id): MarketplaceProductPolicy["packages"][number] => ({
+          id,
+          kind: "plugin",
+          marketplaceId: "convax-official",
+          purposes: ["default-install"],
+          targets: ["darwin-arm64"],
+        }),
+      ),
       {
         id: "cutout-studio",
         kind: "plugin",
         marketplaceId: "convax-official",
+        purposes: ["retired-recovery"],
         retired: {
           artifact: {
             sha256: "1167cc5541a05e755135c354ab8f6bee04c343d3d5c7b8300ae3ff3562a088a0",
@@ -50,6 +78,7 @@ export function configureMarketplaceProductPolicy(revision: number): Marketplace
         id: "nexus-service",
         kind: "plugin",
         marketplaceId: "convax-official",
+        purposes: ["default-install", "retired-recovery"],
         retired: {
           artifact: {
             sha256: "32899a84630de5d41fbc5011d1271b9d1309a21056b17c8d7afe70107fc01f65",
@@ -61,12 +90,20 @@ export function configureMarketplaceProductPolicy(revision: number): Marketplace
           version: "0.3.14",
         },
         targets: ["darwin-arm64"],
-        version: "0.5.1",
+        version: "1.0.7",
       },
+      ...DEFAULT_STANDALONE_SKILLS.map((id): MarketplaceProductPolicy["packages"][number] => ({
+        id,
+        kind: "skill",
+        marketplaceId: "convax-official",
+        purposes: ["default-install"],
+        targets: [],
+      })),
       {
         id: "storyai-3d-director-desk",
         kind: "plugin",
         marketplaceId: "convax-official",
+        purposes: ["retired-recovery"],
         retired: {
           artifact: {
             sha256: "a910abb3091ea973afaab8885ff77a1d69ac3fb2605f6bbf86079f33ce1af8f9",
@@ -84,6 +121,7 @@ export function configureMarketplaceProductPolicy(revision: number): Marketplace
         id: "storyboard-studio",
         kind: "plugin",
         marketplaceId: "convax-official",
+        purposes: ["retired-recovery"],
         retired: {
           artifact: {
             sha256: "b1b07d89093c7fb4d68431581266321c74e4e6717c012561edc56dd5bcf6634b",
@@ -101,6 +139,7 @@ export function configureMarketplaceProductPolicy(revision: number): Marketplace
         id: "video-timeline",
         kind: "plugin",
         marketplaceId: "convax-official",
+        purposes: ["retired-recovery"],
         retired: {
           artifact: {
             sha256: "71c64f025a29a9c55ed156aa33172b9a016a4ac24df54d8274bd4422d7fc7a9f",

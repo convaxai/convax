@@ -17,8 +17,8 @@ describe("Marketplace product policy configuration", () => {
     expect(new TextDecoder().decode(result.stderr)).toContain("--revision=<positive integer>")
   })
 
-  test("creates the approved v6 source, preinstall policy, and exact retired-major recovery set", () => {
-    expect(CURRENT_MARKETPLACE_PRODUCT_POLICY_REVISION).toBe(6)
+  test("creates the approved v15 source and one package policy per exact multi-purpose closure", () => {
+    expect(CURRENT_MARKETPLACE_PRODUCT_POLICY_REVISION).toBe(15)
     expect(configureMarketplaceProductPolicy(CURRENT_MARKETPLACE_PRODUCT_POLICY_REVISION)).toEqual({
       builtin: { marketplaceId: "convax-builtin", repository: "convaxai/convax-plugins" },
       official: {
@@ -26,20 +26,33 @@ describe("Marketplace product policy configuration", () => {
         marketplaceId: "convax-official",
         repository: "convaxai/convax-plugins",
       },
-      preinstalledPackages: [
+      packages: [
         {
           id: "ffmpeg-tools",
           kind: "plugin",
           marketplaceId: "convax-official",
-          setup: "automatic",
+          purposes: ["default-install"],
           targets: ["darwin-arm64"],
         },
-      ],
-      recoveryArtifacts: [
+        {
+          id: "jianying-editor",
+          kind: "plugin",
+          marketplaceId: "convax-official",
+          purposes: ["default-install"],
+          targets: ["darwin-arm64"],
+        },
+        ...["jimeng-service", "libtv-service", "xiaoyunque-service"].map((id) => ({
+          id,
+          kind: "plugin",
+          marketplaceId: "convax-official",
+          purposes: ["default-install"],
+          targets: ["darwin-arm64"],
+        })),
         {
           id: "cutout-studio",
           kind: "plugin",
           marketplaceId: "convax-official",
+          purposes: ["retired-recovery"],
           retired: {
             artifact: {
               sha256: "1167cc5541a05e755135c354ab8f6bee04c343d3d5c7b8300ae3ff3562a088a0",
@@ -57,6 +70,7 @@ describe("Marketplace product policy configuration", () => {
           id: "nexus-service",
           kind: "plugin",
           marketplaceId: "convax-official",
+          purposes: ["default-install", "retired-recovery"],
           retired: {
             artifact: {
               sha256: "32899a84630de5d41fbc5011d1271b9d1309a21056b17c8d7afe70107fc01f65",
@@ -68,12 +82,31 @@ describe("Marketplace product policy configuration", () => {
             version: "0.3.14",
           },
           targets: ["darwin-arm64"],
-          version: "0.5.1",
+          version: "1.0.7",
         },
+        ...[
+          "ad-idea",
+          "audiobook",
+          "convax-plugin-authoring",
+          "ecommerce-image",
+          "film-shot",
+          "image-remix",
+          "short-drama-screenwriter",
+          "skill-creator",
+          "skill-reviewer",
+          "video-prompting",
+        ].map((id) => ({
+          id,
+          kind: "skill",
+          marketplaceId: "convax-official",
+          purposes: ["default-install"],
+          targets: [],
+        })),
         {
           id: "storyai-3d-director-desk",
           kind: "plugin",
           marketplaceId: "convax-official",
+          purposes: ["retired-recovery"],
           retired: {
             artifact: {
               sha256: "a910abb3091ea973afaab8885ff77a1d69ac3fb2605f6bbf86079f33ce1af8f9",
@@ -91,6 +124,7 @@ describe("Marketplace product policy configuration", () => {
           id: "storyboard-studio",
           kind: "plugin",
           marketplaceId: "convax-official",
+          purposes: ["retired-recovery"],
           retired: {
             artifact: {
               sha256: "b1b07d89093c7fb4d68431581266321c74e4e6717c012561edc56dd5bcf6634b",
@@ -108,6 +142,7 @@ describe("Marketplace product policy configuration", () => {
           id: "video-timeline",
           kind: "plugin",
           marketplaceId: "convax-official",
+          purposes: ["retired-recovery"],
           retired: {
             artifact: {
               sha256: "71c64f025a29a9c55ed156aa33172b9a016a4ac24df54d8274bd4422d7fc7a9f",
@@ -122,7 +157,7 @@ describe("Marketplace product policy configuration", () => {
           version: "0.2.2",
         },
       ],
-      revision: 6,
+      revision: 15,
     })
   })
 
