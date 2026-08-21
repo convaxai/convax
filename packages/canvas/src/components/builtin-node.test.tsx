@@ -639,6 +639,7 @@ describe("built-in node toolbar visibility", () => {
       expect(markup).toContain(`data-canvas-empty-placeholder="${kind}"`)
       expect(markup).toContain(kind === "video" ? "lucide-video" : "lucide-image")
       expect(markup).toContain("convax-media-state-card__icon")
+      expect(markup).not.toContain("convax-media-state-card__title")
       expect(markup).toContain(">Add<")
       expect(markup).not.toContain("convax-node__surface--video")
       expect(openingTagContaining(markup, `aria-label="${kind === "video" ? "Add video" : "Add image"}"`)).toContain(
@@ -658,7 +659,7 @@ describe("built-in node toolbar visibility", () => {
       expect(markup).not.toContain("Relink a selected Project resource")
       expect(markup).not.toContain("Add an image")
       expect(markup).not.toContain("Describe what you want to generate below")
-      expect(markup).toContain(`Empty ${kind}`)
+      expect(markup).not.toContain(`Empty ${kind}`)
     }
   })
 
