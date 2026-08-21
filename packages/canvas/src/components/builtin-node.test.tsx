@@ -634,18 +634,22 @@ describe("built-in node toolbar visibility", () => {
       )
 
       expect(markup).toContain(`data-canvas-empty-media="${kind}"`)
-      expect(markup).toContain('class="convax-media-empty__content convax-media-empty__content--add"')
+      expect(markup).toContain('class="convax-media-state-card__content"')
+      expect(markup).toContain('data-canvas-media-state="empty"')
       expect(markup).toContain(`data-canvas-empty-placeholder="${kind}"`)
       expect(markup).toContain(kind === "video" ? "lucide-video" : "lucide-image")
-      expect(markup).not.toContain("convax-media-empty__icon")
+      expect(markup).toContain("convax-media-state-card__icon")
       expect(markup).toContain(">Add<")
       expect(markup).not.toContain("convax-node__surface--video")
       expect(openingTagContaining(markup, `aria-label="${kind === "video" ? "Add video" : "Add image"}"`)).toContain(
-        "convax-media-empty__add",
+        "convax-media-state-card__action-button",
       )
       expect(openingTagContaining(markup, `aria-label="${kind === "video" ? "Add video" : "Add image"}"`)).toContain(
-        "bg-primary",
+        "border-transparent",
       )
+      expect(
+        openingTagContaining(markup, `aria-label="${kind === "video" ? "Add video" : "Add image"}"`),
+      ).not.toContain("bg-primary")
       expect(openingTagContaining(markup, `aria-label="${kind === "video" ? "Add video" : "Add image"}"`)).toContain(
         "h-7",
       )
@@ -653,7 +657,8 @@ describe("built-in node toolbar visibility", () => {
       expect(markup).not.toContain(`${kind} unavailable`)
       expect(markup).not.toContain("Relink a selected Project resource")
       expect(markup).not.toContain("Add an image")
-      expect(markup).not.toContain("Empty video")
+      expect(markup).not.toContain("Describe what you want to generate below")
+      expect(markup).toContain(`Empty ${kind}`)
     }
   })
 
@@ -724,7 +729,8 @@ describe("built-in node toolbar visibility", () => {
     expect(imageMarkup).toContain('aria-label="Relink selected Project resource"')
     expect(imageMarkup).toContain('aria-label="Relink local file"')
     expect(imageMarkup).not.toContain("Relink is not available yet")
-    expect(imageMarkup).toContain('class="convax-media-empty__content"')
+    expect(imageMarkup).toContain('class="convax-media-state-card__content"')
+    expect(imageMarkup).toContain('data-canvas-media-state="unavailable"')
     expect(imageMarkup).toContain("image unavailable")
     expect(imageMarkup).toContain("Relink a selected Project resource or choose a local file")
     expect(imageMarkup).not.toContain("Empty image")
@@ -1931,9 +1937,8 @@ describe("built-in node toolbar visibility", () => {
     expect(activeMarkup).toContain("正在生成")
     expect(activeMarkup).toContain("取消")
     expect(activeMarkup).toContain('data-slot="loading-spinner"')
-    const cancelButton = openingTagContaining(activeMarkup, 'data-slot="beam-button"')
-    expect(cancelButton).toContain('data-ui-beam="pulse-inner"')
-    expect(cancelButton).toContain('data-ui-beam-tone="warning"')
+    const cancelButton = openingTagContaining(activeMarkup, 'aria-label="取消"')
+    expect(cancelButton).toContain("convax-media-state-card__action-button")
     expect(cancelButton).toContain('type="button"')
     expect(activeMarkup).not.toContain("data-assistant-toolbar")
     expect(openingTagContaining(activeMarkup, 'data-canvas-file-generation-activity="running"')).not.toContain("nodrag")
@@ -1948,7 +1953,8 @@ describe("built-in node toolbar visibility", () => {
     expect(failedMarkup).toContain(">生成失败<")
     expect(failedMarkup).not.toContain("Creative Tools 服务不可用")
     expect(failedMarkup).toContain("lucide-image")
-    expect(failedMarkup).toContain("convax-generation-status-overlay--media")
+    expect(failedMarkup).toContain('data-canvas-media-state="failed"')
+    expect(failedMarkup).toContain("convax-media-state-card--overlay")
     expect(failedMarkup).not.toContain("修改并重试")
     expect(failedMarkup).not.toContain("使用原提示词新建任务")
     expect(failedMarkup).not.toContain('aria-label="Add image"')
@@ -1972,8 +1978,8 @@ describe("built-in node toolbar visibility", () => {
         node: failedVideoNode,
       },
     )
-    expect(failedVideoMarkup).toContain("lucide-clapperboard")
-    expect(failedVideoMarkup).toContain("convax-generation-status-overlay--video")
+    expect(failedVideoMarkup).toContain("lucide-video")
+    expect(failedVideoMarkup).toContain("convax-media-state-card--video")
 
     const genericFailed = finishCanvasNodeGenerationRun(running, imageNode.id, "operation-one")
     const genericFailedMarkup = renderWithEditor(

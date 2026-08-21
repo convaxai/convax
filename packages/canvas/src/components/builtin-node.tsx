@@ -1,4 +1,4 @@
-import { BeamButton, Button, LoadingSpinner, Tooltip, cn } from "@convax/ui"
+import { Button, LoadingSpinner, Tooltip, cn } from "@convax/ui"
 import type { Editor, JSONContent } from "@tiptap/core"
 import DragHandle, { type DragHandleProps } from "@tiptap/extension-drag-handle-react"
 import Placeholder from "@tiptap/extension-placeholder"
@@ -59,6 +59,7 @@ import {
   type CSSProperties,
   type DragEvent,
   type ErrorInfo,
+  type HTMLAttributes,
   type MouseEvent as ReactMouseEvent,
   type PointerEvent as ReactPointerEvent,
   type Ref,
@@ -2176,12 +2177,51 @@ function mediaLabel(kind: CanvasMediaKind, locale: CanvasUiLocale = "en") {
   return canvasMessage(locale, mediaKindMessageKey(kind))
 }
 
-function emptyMediaPlaceholder(kind: CanvasMediaKind) {
-  const glyph = kind === "video" ? <VideoIcon strokeWidth={1.35} /> : <ImageIcon strokeWidth={1.35} />
+type MediaStateCardProps = HTMLAttributes<HTMLDivElement> & {
+  action?: ReactNode
+  description?: string
+  icon?: ReactNode
+  kind: CanvasMediaKind
+  state: "empty" | "failed" | "pending" | "unavailable"
+  title: string
+}
+
+function MediaStateCard({
+  action,
+  className,
+  description,
+  icon,
+  kind,
+  state,
+  title,
+  ...surfaceProps
+}: MediaStateCardProps) {
   return (
-    <span aria-hidden className="convax-media-empty__placeholder" data-canvas-empty-placeholder={kind}>
-      {glyph}
-    </span>
+    <div
+      className={cn("convax-media-state-card size-full", className)}
+      data-canvas-media-state={state}
+      {...surfaceProps}
+    >
+      <div className="convax-media-state-card__content">
+        <span
+          aria-hidden
+          className="convax-media-state-card__icon"
+          data-canvas-empty-placeholder={state === "empty" ? kind : undefined}
+        >
+          {icon ?? mediaIcon(kind)}
+        </span>
+        <span
+          className={cn(
+            "convax-media-state-card__title",
+            state === "failed" && "convax-media-state-card__title--failed",
+          )}
+        >
+          {title}
+        </span>
+        {description ? <span className="convax-media-state-card__description">{description}</span> : null}
+        {action ? <div className="convax-media-state-card__action">{action}</div> : null}
+      </div>
+    </div>
   )
 }
 
@@ -2196,16 +2236,20 @@ function EmptyMedia(props: {
   const editor = useCanvasEditor()
   const locale = resolveCanvasUiLocale(editor.locale)
   const kindLabel = mediaLabel(props.kind, locale)
+  const blank = props.state === "blank"
+  const title = blank
+    ? canvasMessage(locale, "mediaEmpty.blank", { kind: kindLabel })
+    : canvasMessage(locale, "mediaEmpty.unavailable", { kind: kindLabel })
+  const description = blank ? undefined : canvasMessage(locale, "mediaEmpty.unavailableHint")
   if (props.actions) {
     const addLabel = canvasMessage(locale, "mediaEmpty.add")
     const addAriaLabel = canvasMessage(locale, props.kind === "video" ? "mediaEmpty.addVideo" : "mediaEmpty.addImage")
     return (
-      <div className="convax-media-empty convax-media-empty--add size-full" data-canvas-empty-media={props.kind}>
-        <div className="convax-media-empty__content convax-media-empty__content--add">
-          {emptyMediaPlaceholder(props.kind)}
+      <MediaStateCard
+        action={
           <Button
             aria-label={addAriaLabel}
-            className="convax-media-empty__add nodrag nowheel"
+            className="convax-media-state-card__action-button nodrag nowheel"
             data-canvas-shortcuts="ignore"
             disabled={props.actions.disabled}
             onClick={(event) => {
@@ -2215,29 +2259,22 @@ function EmptyMedia(props: {
             onPointerDown={(event) => event.stopPropagation()}
             size="compact"
             type="button"
-            variant="default"
+            variant="ghost"
           >
+            <Plus />
             {addLabel}
           </Button>
-        </div>
-      </div>
+        }
+        data-canvas-empty-media={props.kind}
+        description={description}
+        kind={props.kind}
+        state="empty"
+        title={title}
+      />
     )
   }
-  const blank = props.state === "blank"
   return (
-    <div className="convax-media-empty size-full">
-      <div className="convax-media-empty__content">
-        <span className="convax-media-empty__icon">{mediaIcon(props.kind)}</span>
-        <span className="convax-media-empty__title">
-          {blank
-            ? canvasMessage(locale, "mediaEmpty.blank", { kind: kindLabel })
-            : canvasMessage(locale, "mediaEmpty.unavailable", { kind: kindLabel })}
-        </span>
-        <span className="convax-media-empty__hint">
-          {blank ? canvasMessage(locale, "mediaEmpty.blankHint") : canvasMessage(locale, "mediaEmpty.unavailableHint")}
-        </span>
-      </div>
-    </div>
+    <MediaStateCard description={description} kind={props.kind} state={blank ? "empty" : "unavailable"} title={title} />
   )
 }
 
@@ -3011,6 +3048,39 @@ function FileGenerationActivityOverlay(props: {
   run: CanvasNodeGenerationRun
 }) {
   const editor = useCanvasEditor()
+  const title = props.run.status === "submitting" ? "正在提交…" : "正在生成…"
+  if (props.kind === "image" || props.kind === "video") {
+    return (
+      <MediaStateCard
+        action={
+          <Button
+            aria-label="取消"
+            className="convax-media-state-card__action-button nodrag nowheel"
+            onClick={(event) => {
+              event.stopPropagation()
+              props.onCancel()
+            }}
+            onPointerDown={(event) => event.stopPropagation()}
+            size="compact"
+            type="button"
+            variant="ghost"
+          >
+            取消
+          </Button>
+        }
+        aria-busy="true"
+        aria-live="polite"
+        className={cn("convax-media-state-card--overlay", props.kind === "video" && "convax-media-state-card--video")}
+        data-canvas-file-generation-activity={props.run.status}
+        data-canvas-generation-run-tool-id={props.run.toolId}
+        icon={<LoadingSpinner reducedMotion={editor.reducedMotion} size="lg" tone="brand" />}
+        kind={props.kind}
+        role="status"
+        state="pending"
+        title={title}
+      />
+    )
+  }
   return (
     <div
       aria-busy="true"
@@ -3026,23 +3096,21 @@ function FileGenerationActivityOverlay(props: {
     >
       <div className="flex flex-col items-center gap-2 text-sm font-medium text-foreground">
         <LoadingSpinner reducedMotion={editor.reducedMotion} size="lg" tone="brand" />
-        <span>{props.run.status === "submitting" ? "正在提交…" : "正在生成…"}</span>
-        <BeamButton
-          beam="pulse-inner"
+        <span>{title}</span>
+        <Button
+          aria-label="取消"
           className="nodrag nowheel"
           onClick={(event) => {
             event.stopPropagation()
             props.onCancel()
           }}
           onPointerDown={(event) => event.stopPropagation()}
-          reducedMotion={editor.reducedMotion}
           size="sm"
-          tone="warning"
           type="button"
-          variant="outline"
+          variant="ghost"
         >
           取消
-        </BeamButton>
+        </Button>
       </div>
     </div>
   )
@@ -3059,6 +3127,23 @@ function GenerationFailureOverlay(props: {
   kind: CanvasNode["data"]["kind"]
   source: { type: "persisted-resource" } | { toolId: string; type: "generation-run" }
 }) {
+  if (props.kind === "image" || props.kind === "video") {
+    return (
+      <MediaStateCard
+        className={cn(
+          "convax-media-state-card--overlay pointer-events-none",
+          props.kind === "video" && "convax-media-state-card--video",
+        )}
+        data-canvas-file-generation-activity={props.source.type === "generation-run" ? "failed" : undefined}
+        data-canvas-generation-run-tool-id={props.source.type === "generation-run" ? props.source.toolId : undefined}
+        data-canvas-persisted-resource-status={props.source.type === "persisted-resource" ? "error" : undefined}
+        kind={props.kind}
+        role="alert"
+        state="failed"
+        title="生成失败"
+      />
+    )
+  }
   return (
     <div
       className={cn(
@@ -3081,6 +3166,24 @@ function GenerationFailureOverlay(props: {
 
 function PersistedPendingResourceOverlay(props: { kind: CanvasNode["data"]["kind"] }) {
   const editor = useCanvasEditor()
+  if (props.kind === "image" || props.kind === "video") {
+    return (
+      <MediaStateCard
+        aria-busy="true"
+        aria-live="polite"
+        className={cn(
+          "convax-media-state-card--overlay pointer-events-none",
+          props.kind === "video" && "convax-media-state-card--video",
+        )}
+        data-canvas-persisted-resource-status="pending"
+        icon={<LoadingSpinner reducedMotion={editor.reducedMotion} size="lg" tone="brand" />}
+        kind={props.kind}
+        role="status"
+        state="pending"
+        title="正在生成…"
+      />
+    )
+  }
   return (
     <div
       aria-busy="true"
@@ -3331,28 +3434,31 @@ function OptimisticCanvasGhostNode(props: NodeProps<CanvasNode>) {
             </div>
           </div>
         ) : emptyVisualMedia ? (
-          <div
-            className="convax-media-empty convax-media-empty--add size-full"
-            data-canvas-empty-media={emptyVisualMedia}
-            data-canvas-optimistic-empty-card={emptyVisualMedia}
-          >
-            <div className="convax-media-empty__content convax-media-empty__content--add">
-              {emptyMediaPlaceholder(emptyVisualMedia)}
+          <MediaStateCard
+            action={
               <Button
                 aria-label={canvasMessage(
                   locale,
                   emptyVisualMedia === "video" ? "mediaEmpty.addVideo" : "mediaEmpty.addImage",
                 )}
-                className="convax-media-empty__add"
+                className="convax-media-state-card__action-button"
                 size="compact"
                 tabIndex={-1}
                 type="button"
-                variant="default"
+                variant="ghost"
               >
+                <Plus />
                 {canvasMessage(locale, "mediaEmpty.add")}
               </Button>
-            </div>
-          </div>
+            }
+            data-canvas-empty-media={emptyVisualMedia}
+            data-canvas-optimistic-empty-card={emptyVisualMedia}
+            kind={emptyVisualMedia}
+            state="empty"
+            title={canvasMessage(locale, "mediaEmpty.blank", {
+              kind: mediaLabel(emptyVisualMedia, locale),
+            })}
+          />
         ) : (
           <span aria-hidden className="grid size-full place-items-center" data-canvas-optimistic-placeholder="pending">
             <span className="size-10 rounded-lg border border-border/60 bg-muted/35 opacity-70" />

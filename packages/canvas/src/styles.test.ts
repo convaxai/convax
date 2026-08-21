@@ -497,31 +497,25 @@ describe("Canvas theme closure", () => {
 
   test("themes media and outline empty states while keeping selected rows accent-aware", async () => {
     const styles = await Bun.file(new URL("./styles.css", import.meta.url)).text()
-    const mediaEmptyRule = cssRule(styles, ".convax-canvas .convax-media-empty")
-    const mediaContentRule = cssRule(styles, ".convax-canvas .convax-media-empty__content")
-    const mediaAddContentRule = cssRule(styles, ".convax-canvas .convax-media-empty__content--add")
-    const mediaIconRule = cssRule(styles, ".convax-canvas .convax-media-empty__icon")
-    const mediaHintRule = cssRule(styles, ".convax-canvas .convax-media-empty__hint")
-    const mediaAddRule = cssRule(styles, ".convax-canvas .convax-media-empty__add")
+    const mediaStateRule = cssRule(styles, ".convax-canvas .convax-media-state-card")
+    const mediaContentRule = cssRule(styles, ".convax-canvas .convax-media-state-card__content")
+    const mediaIconRule = cssRule(styles, ".convax-canvas .convax-media-state-card__icon")
+    const mediaHintRule = cssRule(styles, ".convax-canvas .convax-media-state-card__description")
+    const mediaAddRule = cssRule(styles, ".convax-canvas .convax-media-state-card__action-button")
     const outlineEmptyRule = cssRule(styles, ".convax-canvas-outline__empty")
 
-    expect(mediaEmptyRule).toContain("var(--canvas-node-background)")
+    expect(mediaStateRule).toContain("light-dark(var(--canvas-node-background), #050506)")
+    expect(mediaStateRule).toContain("border-radius: inherit")
     expect(mediaContentRule).toContain("display: flex")
     expect(mediaContentRule).toContain("flex-direction: column")
-    expect(mediaContentRule).toContain("color: var(--canvas-text)")
-    expect(mediaContentRule).toContain("pointer-events: none")
-    expect(mediaAddContentRule).toContain("pointer-events: auto")
-    expect(mediaAddContentRule).toContain("gap: 10px")
-    expect(mediaIconRule).toContain("background: var(--canvas-node-background)")
-    expect(cssRule(styles, ".convax-canvas .convax-media-empty--add")).toContain("background: transparent")
-    expect(cssRule(styles, ".convax-canvas .convax-media-empty__placeholder")).toContain("var(--canvas-text-muted)")
-    expect(cssRule(styles, ".convax-canvas .convax-media-empty__placeholder svg")).toContain("width: 48px")
+    expect(mediaIconRule).toContain("var(--canvas-text-muted)")
     expect(mediaHintRule).toContain("color: var(--canvas-text-muted)")
     expect(mediaAddRule).toContain("min-width: 0")
-    expect(mediaAddRule).not.toContain("background: transparent")
+    expect(mediaAddRule).toContain("border-radius: 999px")
+    expect(mediaAddRule).not.toContain("var(--canvas-accent)")
     expect(outlineEmptyRule).toContain("var(--canvas-text-muted")
     expect(styles).toMatch(
-      /@media \(forced-colors: active\)[\s\S]*\.convax-canvas \.convax-media-empty__add[\s\S]*border-color: CanvasText/,
+      /@media \(forced-colors: active\)[\s\S]*\.convax-canvas \.convax-media-state-card__action-button[\s\S]*border-color: CanvasText/,
     )
     expect(styles).toMatch(
       /\.convax-canvas-outline__item\[aria-current="location"\]\s*\{[^}]*background:\s*var\(--canvas-interactive-selected,\s*var\(--ui-interactive-selected\)\)/s,
