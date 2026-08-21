@@ -41,6 +41,8 @@ export interface CanvasNodePresentationSnapshot {
 
 export interface CanvasGhostNode {
   readonly kind: "ghost-node"
+  /** Presentation-only focus affordance; never enters Canvas selection. */
+  readonly focusVisible?: true
   readonly presentationKey: string
   readonly parentPresentationKey?: string
   readonly position: CanvasPresentationPoint
@@ -49,6 +51,8 @@ export interface CanvasGhostNode {
     readonly mediaKind?: "audio" | "file" | "image" | "video"
     readonly mimeType?: string
     readonly nodeType: "file" | "text"
+    /** Renderer-only local/thumbnail URL; never crosses the Canvas command boundary. */
+    readonly previewUrl?: string
     readonly title: string
   }>
   readonly size: CanvasPresentationSize
@@ -169,9 +173,7 @@ export class CanvasOptimisticOverlayCoordinator {
     const existingGhostCount = operation.items.filter(
       (item) => item.kind === "ghost-node" || item.kind === "ghost-edge",
     ).length
-    const nextGhostCount = normalized.filter(
-      (item) => item.kind === "ghost-node" || item.kind === "ghost-edge",
-    ).length
+    const nextGhostCount = normalized.filter((item) => item.kind === "ghost-node" || item.kind === "ghost-edge").length
     if (this.#snapshot.ghostEntityCount - existingGhostCount + nextGhostCount > this.#limits.maximumGhostEntities) {
       this.#operations.delete(token)
       this.#bounded.add(token)

@@ -53,6 +53,27 @@ const U1 = parseUint32("1")
 const U2 = parseUint32("2")
 
 describe("Canvas v2 reducer and merge invariants", () => {
+  test("keeps update-data geometry stable", () => {
+    const document = newCanvas()
+    const node = createAgent(document, context(88, 178, 1), "before")
+
+    applyOk(document, context(89, 179, 2), {
+      format: "convax.typed-intent",
+      kind: "canvas.nodes.update-data",
+      guard: { node: nodeDataGuard(document, node), resourceProof: null },
+      body: {
+        node,
+        data: { format: "convax.canvas-node-data", kind: "agent", title: "after", instructions: null },
+      },
+    })
+    expect(
+      buildCanvasProjectionIndex(validateCanvasYDoc(document)).nodesByKey.get(canvasEntityKey(node))?.size,
+    ).toEqual({
+      height: 120,
+      width: 240,
+    })
+  })
+
   test("emits an exact sorted eight-write ledger for node create", () => {
     const document = newCanvas()
     const operationContext = context(1, 1, 1)

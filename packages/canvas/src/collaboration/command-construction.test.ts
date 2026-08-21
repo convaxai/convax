@@ -1,9 +1,6 @@
 import { describe, expect, test } from "bun:test"
 import { parseUint64 } from "@convax/collaboration"
-import {
-  constructCanvasAuthoritativeIntent,
-  type CanvasPluginCreationGroupCommand,
-} from "./command-construction"
+import { constructCanvasAuthoritativeIntent, type CanvasPluginCreationGroupCommand } from "./command-construction"
 import { applyCanvasCandidateIntent } from "./reducer"
 import type { CanvasResourceProofRef, PluginRequirement, PluginStateEnvelope } from "./types"
 import {
@@ -138,7 +135,13 @@ describe("Canvas v2 authoritative command construction", () => {
       constructCanvasAuthoritativeIntent({
         snapshot: validateCanvasYDoc(base),
         context: relinkContext,
-        command: { kind: "resource-relink", node, title: "Replacement", proof: resourceProof("a") },
+        command: {
+          kind: "resource-relink",
+          node,
+          title: "Replacement",
+          proof: resourceProof("a"),
+          size: { height: 180, width: 320 },
+        },
       }),
     )
     expect(relink.intent.kind).toBe("canvas.nodes.update-data")
@@ -169,7 +172,13 @@ describe("Canvas v2 authoritative command construction", () => {
       constructCanvasAuthoritativeIntent({
         snapshot: validateCanvasYDoc(contentBranch),
         context: otherContext,
-        command: { kind: "resource-relink", node, title: "Other content", proof: resourceProof("b") },
+        command: {
+          kind: "resource-relink",
+          node,
+          title: "Other content",
+          proof: resourceProof("b"),
+          size: { height: 180, width: 320 },
+        },
       }),
     )
     applyOk(contentBranch, otherContext, other.intent)
@@ -197,7 +206,9 @@ describe("Canvas v2 authoritative command construction", () => {
           command: {
             format: "convax.canvas-renderer-command",
             kind: "canvas.nodes.set-geometry",
-            body: { updates: [{ node: { ...node, incarnation: `${node.incarnation}-stale` }, position: { x: 1, y: 2 } }] },
+            body: {
+              updates: [{ node: { ...node, incarnation: `${node.incarnation}-stale` }, position: { x: 1, y: 2 } }],
+            },
           },
         },
       }),

@@ -31,6 +31,13 @@ export interface CanvasProjectionIndex {
   readonly isEdgeLive: (ref: CanvasEntityRef & { readonly kind: "edge" }) => boolean
 }
 
+// CanvasSnapshot values are immutable owner views. Reuse only derived
+// process-local projections for the exact same snapshot object; every accepted
+// Y.Doc mutation installs a new snapshot and therefore misses these weak caches.
+// Weak keys do not retain snapshots after the owner pipeline releases them.
+const projectionIndexBySnapshot = new WeakMap<CanvasSnapshot, CanvasProjectionIndex>()
+const obstacleProjectionDigestBySnapshot = new WeakMap<CanvasSnapshot, Digest>()
+
 /**
  * Stable Canvas-owned keys used by the disposable renderer projection. They are
  * presentation metadata, not Plugin or resource authority: Main must still
@@ -168,9 +175,9 @@ function projectNodeData(node: CanvasProjectedNode): CanvasNodeData {
           ? (node.data.state.publicMessage ?? node.data.state.failureCode)
           : portableRunFailed
             ? (node.data.generationRun?.failureMessage ?? "Generation failed")
-          : failed
-            ? "Generation failed"
-            : undefined
+            : failed
+              ? "Generation failed"
+              : undefined
       return {
         kind: node.plugin === null ? node.data.expectedClass : kind,
         label: node.data.title,
@@ -240,6 +247,8 @@ export function projectCanvas(snapshot: CanvasSnapshot): CanvasProjection {
 }
 
 export function buildCanvasProjectionIndex(snapshot: CanvasSnapshot): CanvasProjectionIndex {
+  const cached = projectionIndexBySnapshot.get(snapshot)
+  if (cached !== undefined) return cached
   const isSemanticCreationEffective = semanticCreationLiveness(snapshot)
   const nodeMemo = new Map<string, boolean>()
   const visiting = new Set<string>()
@@ -316,7 +325,7 @@ export function buildCanvasProjectionIndex(snapshot: CanvasSnapshot): CanvasProj
     nodes: Object.freeze([...nodesByKey.values()]),
     edges: Object.freeze([...edgesByKey.values()]),
   })
-  return Object.freeze({
+  const result = Object.freeze({
     projection,
     nodesByKey,
     edgesByKey,
@@ -324,6 +333,8 @@ export function buildCanvasProjectionIndex(snapshot: CanvasSnapshot): CanvasProj
     isNodeLive: (ref: CanvasEntityRef & { readonly kind: "node" }) => isNodeKeyLive(canvasEntityKey(ref)),
     isEdgeLive: (ref: CanvasEntityRef & { readonly kind: "edge" }) => isEdgeKeyLive(canvasEntityKey(ref)),
   })
+  projectionIndexBySnapshot.set(snapshot, result)
+  return result
 }
 
 function semanticCreationLiveness(snapshot: CanvasSnapshot): (createdBy: string, ref: CanvasEntityRef) => boolean {
@@ -503,15 +514,19 @@ export function projectedGenerationDigestV2(
 }
 
 export function obstacleProjectionDigest(snapshot: CanvasSnapshot): Digest {
+  const cached = obstacleProjectionDigestBySnapshot.get(snapshot)
+  if (cached !== undefined) return cached
   const index = buildCanvasProjectionIndex(snapshot)
   const obstacles = index.projection.nodes
     .filter((node) => node.parent === null)
     .map((node) => ({ node: node.ref, position: node.position, size: node.size }))
     .sort((a, b) => compareUtf8(canvasEntityKey(a.node), canvasEntityKey(b.node)))
-  return canvasDigest("convax.canvas-obstacle-projection", {
+  const result = canvasDigest("convax.canvas-obstacle-projection", {
     format: "convax.canvas-obstacle-projection",
     obstacles,
   })
+  obstacleProjectionDigestBySnapshot.set(snapshot, result)
+  return result
 }
 
 export function projectionDigest(snapshot: CanvasSnapshot): Digest {

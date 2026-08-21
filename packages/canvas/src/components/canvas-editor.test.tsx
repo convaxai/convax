@@ -712,8 +712,8 @@ describe("CanvasEditor node dimension projection", () => {
     renderEditor(createCanvasServices(), { initialDocument })
 
     expect(renderedCanvasNodes.find((node) => node.id === "style-only")).toMatchObject({
-      initialHeight: 160,
-      initialWidth: 280,
+      initialHeight: 180,
+      initialWidth: 320,
     })
     expect(styleOnly).not.toHaveProperty("initialHeight")
     expect(styleOnly).not.toHaveProperty("initialWidth")
@@ -790,9 +790,14 @@ describe("CanvasEditor resource mutation", () => {
     const text = new File(["note"], "notes.md", { type: "text/markdown" })
     const archive = new File(["zip"], "archive.zip", { type: "application/zip" })
 
-    expect(handleCanvasResourceRelinkSelection("image-node", [video], () => relinked.push({ file: video, nodeId: "image-node" }), "image")).toBe(
-      "incompatible",
-    )
+    expect(
+      handleCanvasResourceRelinkSelection(
+        "image-node",
+        [video],
+        () => relinked.push({ file: video, nodeId: "image-node" }),
+        "image",
+      ),
+    ).toBe("incompatible")
     expect(
       handleCanvasResourceRelinkSelection(
         "image-node",
@@ -801,18 +806,38 @@ describe("CanvasEditor resource mutation", () => {
         "image",
       ),
     ).toBe("incompatible")
-    expect(handleCanvasResourceRelinkSelection("video-node", [image], () => relinked.push({ file: image, nodeId: "video-node" }), "video")).toBe(
-      "incompatible",
-    )
-    expect(handleCanvasResourceRelinkSelection("audio-node", [video], () => relinked.push({ file: video, nodeId: "audio-node" }), "audio")).toBe(
-      "incompatible",
-    )
-    expect(handleCanvasResourceRelinkSelection("text-node", [image], () => relinked.push({ file: image, nodeId: "text-node" }), "text")).toBe(
-      "incompatible",
-    )
-    expect(handleCanvasResourceRelinkSelection("file-node", [image], () => relinked.push({ file: image, nodeId: "file-node" }), "file")).toBe(
-      "incompatible",
-    )
+    expect(
+      handleCanvasResourceRelinkSelection(
+        "video-node",
+        [image],
+        () => relinked.push({ file: image, nodeId: "video-node" }),
+        "video",
+      ),
+    ).toBe("incompatible")
+    expect(
+      handleCanvasResourceRelinkSelection(
+        "audio-node",
+        [video],
+        () => relinked.push({ file: video, nodeId: "audio-node" }),
+        "audio",
+      ),
+    ).toBe("incompatible")
+    expect(
+      handleCanvasResourceRelinkSelection(
+        "text-node",
+        [image],
+        () => relinked.push({ file: image, nodeId: "text-node" }),
+        "text",
+      ),
+    ).toBe("incompatible")
+    expect(
+      handleCanvasResourceRelinkSelection(
+        "file-node",
+        [image],
+        () => relinked.push({ file: image, nodeId: "file-node" }),
+        "file",
+      ),
+    ).toBe("incompatible")
     expect(
       handleCanvasResourceRelinkSelection(
         "file-node",
@@ -881,7 +906,7 @@ describe("CanvasEditor resource mutation", () => {
     expect(updated.nodes[0]!.data.metadata).toBe(document.nodes[0]!.data.metadata)
   })
 
-  test("marks mounted resources stale synchronously and single-flights one trailing runtime refresh", async () => {
+  test("keeps mounted ready resources stable while request-only stale hydration single-flights one trailing refresh", async () => {
     const initial = createCanvasDocument({
       id: "canvas-watcher-refresh",
       nodes: [
@@ -891,9 +916,25 @@ describe("CanvasEditor resource mutation", () => {
             kind: "text",
             label: "Note",
             metadata: { resource: "Notes/a.md" },
-            resourceState: { status: "ready", text: "before" },
+            resourceState: {
+              contentRevision: "a".repeat(64),
+              editableText: true,
+              status: "ready",
+              text: "before",
+            },
           },
           position: { x: 0, y: 0 },
+          type: "file",
+        },
+        {
+          id: "other",
+          data: {
+            kind: "text",
+            label: "Other",
+            metadata: { resource: "Notes/other.md" },
+            resourceState: { status: "ready", text: "other" },
+          },
+          position: { x: 400, y: 0 },
           type: "file",
         },
       ],
@@ -911,37 +952,56 @@ describe("CanvasEditor resource mutation", () => {
       pending.push({ promise, resolve })
       return promise
     })
+    const replace = mock((next: typeof initial) => {
+      document = next
+    })
     const controller = new CanvasResourceRefreshController({
       current: () => ({
         document,
         scope: { documentId: document.id, generation: 0, scopeId: "project-one" },
       }),
-      replace(next) {
-        document = next
-      },
+      replace,
       service: {
         hydrateStale,
-        markStale(document) {
+        markStale(document, shouldInvalidate) {
           return {
             ...document,
-            nodes: document.nodes.map((node) => ({
-              ...node,
-              data: {
-                ...node.data,
-                resourceState: {
-                  ...(node.data.resourceState as Record<string, unknown>),
-                  status: "stale",
-                },
-              },
-            })),
+            nodes: document.nodes.map((node) =>
+              shouldInvalidate?.(node)
+                ? {
+                    ...node,
+                    data: {
+                      ...node.data,
+                      resourceState: {
+                        ...(node.data.resourceState as Record<string, unknown>),
+                        status: "stale",
+                      },
+                    },
+                  }
+                : node,
+            ),
           }
         },
       },
     })
 
-    const first = controller.invalidateResources()
-    expect((document.nodes[0]!.data.resourceState as { status: string }).status).toBe("stale")
-    const second = controller.invalidateResources()
+    const mountedNode = document.nodes[0]
+    const mountedState = mountedNode!.data.resourceState
+    const first = controller.invalidateResources((node) => node.id === "note")
+    expect(document).toBe(initial)
+    expect(document.nodes[0]).toBe(mountedNode)
+    expect(document.nodes[0]!.data.resourceState).toBe(mountedState)
+    expect(document.nodes[0]!.data.resourceState).toMatchObject({
+      editableText: true,
+      status: "ready",
+      text: "before",
+    })
+    expect(pending[0]!.promise).toBeInstanceOf(Promise)
+    expect(hydrateStale.mock.calls[0]![0].document.nodes[0]!.data.resourceState).toMatchObject({ status: "stale" })
+    expect(hydrateStale.mock.calls[0]![0].document.nodes[1]).toBe(initial.nodes[1])
+    expect(replace).not.toHaveBeenCalled()
+
+    const second = controller.invalidateResources((node) => node.id === "other")
     expect(hydrateStale).toHaveBeenCalledTimes(1)
 
     pending[0]!.resolve({
@@ -954,18 +1014,30 @@ describe("CanvasEditor resource mutation", () => {
     await Promise.resolve()
     await Promise.resolve()
     expect(hydrateStale).toHaveBeenCalledTimes(2)
+    expect(document).toBe(initial)
+    expect(document.nodes[0]).toBe(mountedNode)
+    expect(document.nodes[0]!.data.resourceState).toBe(mountedState)
+    expect(replace).not.toHaveBeenCalled()
 
     const trailingInput = hydrateStale.mock.calls[1]![0].document
+    expect(trailingInput.nodes[0]!.data.resourceState).toMatchObject({ status: "stale" })
+    expect(trailingInput.nodes[1]!.data.resourceState).toMatchObject({ status: "stale" })
     pending[1]!.resolve({
       ...trailingInput,
       nodes: trailingInput.nodes.map((node) => ({
         ...node,
-        data: { ...node.data, resourceState: { status: "ready", text: "second" } },
+        data: {
+          ...node.data,
+          resourceState:
+            node.id === "note" ? { status: "ready", text: "second" } : { status: "ready", text: "other-second" },
+        },
       })),
     })
     await Promise.all([first, second])
 
+    expect(replace).toHaveBeenCalledTimes(1)
     expect(document.nodes[0]!.data.resourceState).toEqual({ status: "ready", text: "second" })
+    expect(document.nodes[1]!.data.resourceState).toEqual({ status: "ready", text: "other-second" })
     expect(document.id).toBe(initial.id)
     expect(document.metadata).toBe(initial.metadata)
     expect(selection).toEqual({ nodeIds: ["note"] })
@@ -1018,6 +1090,8 @@ describe("CanvasEditor resource mutation", () => {
 
     const refresh = controller.invalidateResources()
     const firstInput = requests[0]!.input
+    expect(document.nodes[0]!.data.resourceState).toEqual({ status: "ready" })
+    expect(firstInput.nodes[0]!.data.resourceState).toEqual({ status: "stale" })
     scopeId = "project-two"
     document = {
       ...document,
@@ -1039,6 +1113,8 @@ describe("CanvasEditor resource mutation", () => {
     expect(hydrateStale).toHaveBeenCalledTimes(2)
     expect(document.nodes[0]!.data.resourceState).not.toHaveProperty("text", "obsolete")
     const trailingInput = requests[1]!.input
+    expect(document.nodes[0]!.data.resourceState).toEqual({ status: "ready" })
+    expect(trailingInput.nodes[0]!.data.resourceState).toEqual({ status: "stale" })
     requests[1]!.resolve({
       ...trailingInput,
       nodes: trailingInput.nodes.map((node) => ({
@@ -1141,7 +1217,7 @@ describe("CanvasEditor resource mutation", () => {
       signal: new AbortController().signal,
     })
     expect(selectNodes).toHaveBeenCalledWith(["note"])
-    expect(show).toHaveBeenCalledWith({ description: undefined, kind: "success", title: "1 item added" })
+    expect(show).not.toHaveBeenCalled()
   })
 
   test("uses an already-delivered session projection without issuing a reload query", async () => {
@@ -1185,7 +1261,7 @@ describe("CanvasEditor resource mutation", () => {
       signal: new AbortController().signal,
     })
 
-    expect(calls).toEqual(["present:one,two", "reload", "select:one,two", "view:one,two", "show"])
+    expect(calls).toEqual(["present:one,two", "reload", "select:one,two", "view:one,two"])
   })
 
   test("keeps the deprecated presentation callback after reload for published callers", async () => {
@@ -1204,7 +1280,7 @@ describe("CanvasEditor resource mutation", () => {
       signal: new AbortController().signal,
     })
 
-    expect(calls).toEqual(["reload", "present:one", "select:one", "show"])
+    expect(calls).toEqual(["reload", "present:one", "select:one"])
   })
 
   test("organizes newly authoritative nodes only after reload makes them available", async () => {
@@ -1225,7 +1301,7 @@ describe("CanvasEditor resource mutation", () => {
       signal: new AbortController().signal,
     })
 
-    expect(calls).toEqual(["reload", "organize:one", "select:one", "show"])
+    expect(calls).toEqual(["reload", "organize:one", "select:one"])
   })
 
   test("reports organization as a partial warning without hiding admitted resources", async () => {
@@ -1247,7 +1323,7 @@ describe("CanvasEditor resource mutation", () => {
     expect(show).toHaveBeenCalledWith({
       description: "Items were added, but follow-up organization failed.",
       kind: "warning",
-      title: "1 item added",
+      title: "Resources added with warnings",
     })
   })
 

@@ -83,6 +83,7 @@ import {
   validateCanvasYDoc,
 } from "./ydoc"
 import { planCanvasHistoryDerivedOrdinals, scheduleCanvasHistoryTemplates } from "./history-schedule"
+import { resolveCanvasResourcePlacements } from "../resource-placement"
 
 export type CanvasReducerOutcome = CanvasIntentApplyResult | "pending" | "rejected"
 
@@ -3363,29 +3364,18 @@ function placeCreatedNodes(
   specs: readonly { ordinal: Uint32; size: { width: number; height: number } }[],
 ): { x: number; y: number }[] {
   const projection = buildCanvasProjectionIndex(base).projection
-  const obstacles = projection.nodes
-    .filter((node) => node.parent === null)
-    .map((node) => ({ ...node.position, ...node.size }))
-  const result = new Map<string, { x: number; y: number }>()
-  for (const spec of [...specs].sort((a, b) => uint32ToNumber(a.ordinal) - uint32ToNumber(b.ordinal))) {
-    let position = { ...anchor }
-    let iterations = 0
-    while (true) {
-      const collisions = obstacles.filter(
-        (obstacle) =>
-          position.x < obstacle.x + obstacle.width + 24 &&
-          position.x + spec.size.width + 24 > obstacle.x &&
-          position.y < obstacle.y + obstacle.height + 24 &&
-          position.y + spec.size.height + 24 > obstacle.y,
-      )
-      if (collisions.length === 0) break
-      position = { x: Math.max(...collisions.map((obstacle) => obstacle.x + obstacle.width + 24)), y: position.y }
-      if (++iterations > obstacles.length + 1 || !Number.isFinite(position.x) || position.x > 10_000_000)
-        throw new CanvasSchemaError("placement-unavailable", "Causal placement cannot find a bounded position")
-    }
-    obstacles.push({ ...position, ...spec.size })
-    result.set(spec.ordinal, position)
+  const ordered = [...specs].sort((a, b) => uint32ToNumber(a.ordinal) - uint32ToNumber(b.ordinal))
+  const orderedPositions = resolveCanvasResourcePlacements({
+    anchor,
+    obstacles: projection.nodes
+      .filter((node) => node.parent === null)
+      .map((node) => ({ ...node.position, ...node.size })),
+    sizes: ordered.map((spec) => spec.size),
+  })
+  if (!orderedPositions) {
+    throw new CanvasSchemaError("placement-unavailable", "Causal placement cannot find a bounded position")
   }
+  const result = new Map(ordered.map((spec, index) => [spec.ordinal, orderedPositions[index]!]))
   return specs.map((spec) => result.get(spec.ordinal)!)
 }
 

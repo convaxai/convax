@@ -19,6 +19,8 @@ export interface CanvasResourceRuntimeState {
   contentRevision?: string
   editableText?: boolean
   error?: string
+  /** Renderer-only local File preview; never authoritative resource evidence. */
+  localPreview?: boolean
   mediaType?: string
   name?: string
   posterUrl?: string
