@@ -9,13 +9,17 @@ Auth、Hosted Product Session、Data Token 和第二份 Nexus Token 方案。
 
 ## 1. 产品结果
 
-集成有两个不同阶段：
+集成有三个不同阶段：
 
 1. **管理员启用阶段**：管理员在 AuthX Console 点击 Enable，浏览器跳转到 Nexus Console，选择
    Workspace、Plan 和 Provider，再回到原 AuthX Application 页面完成激活。
 2. **最终用户运行阶段**：Convax 用户只登录一次 AuthX。Companion 取得短期 AuthX Convax
    Application Access Token，并直接调用已绑定的 Nexus Resource Server；没有第二次 Nexus 登录、
    consent、connect、bootstrap 或 Token Exchange。
+3. **最终用户购买阶段**：Convax Landing 只链接到 AuthX
+   `/account/projects/{projectId}/plan?plan={planKey}`。AuthX 登录成功后返回同一 ProjectUser Portal，
+   Portal 在内存中取得 Application Session Token，读取 Nexus 当前 `WorkspaceAccess`，再由 Nexus
+   创建 Checkout。支付回跳只恢复页面，只有 Nexus 验签 webhook 能改变套餐与 entitlement。
 
 “一次登录”约束只描述最终用户运行时，不得被解释为管理员不能进入 Nexus 完成产品绑定。
 
@@ -28,15 +32,28 @@ Auth、Hosted Product Session、Data Token 和第二份 Nexus Token 方案。
 | Nexus Workspace、Plan、Quota、ProviderConnection、Provider Secret                | Nexus                                     | AuthX Token 或 AuthX 数据库存储产品事实     |
 | Nexus Application binding 与版本                                                 | Nexus；AuthX 只保存引用                   | 根据固定模板自动猜测产品配置                |
 | 管理员绑定 handoff                                                               | AuthX 签名；Nexus 校验                    | 浏览器改写 issuer/client/project/return URI |
-| AuthX Refresh Credential                                                         | verified companion 的 OS credential store | Renderer、Preload 或 Main 保存              |
+| AuthX Refresh Credential                                                         | verified companion 的私有用户应用数据文件 | Renderer、Preload 或 Main 保存              |
 | 短期 Access Token                                                                | companion 内存                            | 持久化或发送到非精确 Nexus origin           |
+| ProjectUser Portal 页面与登录恢复                                                | AuthX                                     | Nexus 恢复 Hosted Auth 或 Convax 自建账户页 |
+| Landing 套餐文案与 Portal 链接                                                   | Convax Web                                | 在前端携带 Workspace/连接/金额权威值         |
+| 当前用户 Plan、Quota、Usage、Checkout 与支付投影                                 | Nexus `WorkspaceAccess`                   | AuthX 持久化产品事实或用回跳直接授权          |
 
 `authx_integration_id` 是跨服务唯一键。它永久映射同一个 Nexus Application。Workspace、Plan、
-Provider、TTL 与 Checkout policy 在首次绑定后不可变；需要迁移产品配置时必须走独立、显式、可审计的
-Nexus 管理流程，而不是重放 Enable。
+Provider、TTL 与 Desktop Checkout policy 在首次绑定后不可变；绑定 Plan 只负责首次开通。每个用户的
+当前 Plan 由自己的 `WorkspaceAccess.planId` 裁决，并且只能由 Nexus 内部用例在已验证计费事实后更新。
+需要迁移绑定配置时必须走独立、显式、可审计的 Nexus 管理流程，而不是重放 Enable。
+
+### ProjectUser Portal 路由
+
+Convax production Project 固定为
+`project_OKnlkG5kU1lNrOqJs0GFTu4JM2SwNkHz`，Landing 的 Free CTA 指向
+`/account/projects/{projectId}`，付费 CTA 指向
+`/account/projects/{projectId}/plan?plan=pro|ultra|max`。Plan query 只是选择意图；AuthX 不解析价格，
+Nexus 不接受浏览器传入 Workspace、Access、BillingConnection、amount、currency、provider host 或
+return URL。AuthX canonical origin 必须显式加入该 Project 的 authorized origin/party，Nexus CORS 也
+只允许该精确 Portal origin。
 
 ### Application identity 与租户边界
-
 Convax Application 保留现有 AuthX Project
 `project_OKnlkG5kU1lNrOqJs0GFTu4JM2SwNkHz`，其
 `ProjectApplicationPolicy.tenantModel = NONE`。Nexus Console 使用独立的 planned Project
@@ -184,6 +201,8 @@ Nexus 服务端实现，不是用户可见的 connect API。
 MCP、Tool、Canvas、Service status、Checkout 与系统浏览器能力：
 
 - Renderer、Preload、Main 不读取或保存 AuthX/Nexus token；
+- companion 仅把轮换 Refresh Credential 写入同一 OS 用户可读的私有应用数据文件，目录权限为
+  `0700`、文件权限为 `0600`；不访问 macOS Keychain，短期 Access Token 仍只在内存中；
 - companion 不调用 Nexus 管理端点，也不选择 Workspace/Plan/Provider；
 - Host 不按 Nexus id、vendor 或模型分支；
 - 生成任务继续使用通用 `convax.generation-lro/1` 与现有 durable commit 边界。
@@ -226,7 +245,9 @@ MCP、Tool、Canvas、Service status、Checkout 与系统浏览器能力：
    Disable 后旧 Token 必须立即失败，Re-enable 后新 Token 恢复。
 8. 验证 AuthX 数据库没有 Workspace/Plan/Provider facts，Nexus 日志没有 handoff、token 或 Provider
    Secret 明文。
+9. 验证 companion 首次授权后可从私有用户应用数据恢复 Refresh Credential，整个授权、重启与退出登录
+   流程不触发 macOS Keychain 弹窗；旧 Keychain 条目不被运行时读取，升级后需要重新授权一次。
 
 回滚必须是 AuthX D1 snapshot 恢复、Nexus PostgreSQL 恢复和 AuthX/Nexus/Convax plugin 三仓 release
-tag 同时回退。tenant claim 合同不能按单仓回滚。在上述协调迁移和发布前，不得把本地实现描述为生产已修复
-或 production ready，也不得单独发布可见的 Enable 跳转。
+tag 同时回退。tenant claim 合同不能按单仓回滚。在上述协调迁移和发布前，
+不得把本地实现描述为生产已修复或 production ready，也不得单独发布可见的 Enable 跳转。

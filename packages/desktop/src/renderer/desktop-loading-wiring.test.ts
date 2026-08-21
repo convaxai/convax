@@ -22,8 +22,16 @@ describe("Desktop Project startup wiring", () => {
     expect(indexSource).toContain('projectBootstrapView.kind === "recovery"')
     expect(indexSource).toContain("<ProjectRegistryLoadingState")
     expect(indexSource).toContain("<ProjectRecoveryState")
-    expect(indexSource).toContain("<ProjectHome")
+    expect(indexSource).toContain("<ConvaxOnboarding")
     expect(projectHomeSource).not.toContain("controller.initialize()")
+  })
+
+  test("keeps deferred onboarding as an explicit bottom-left resume task", () => {
+    expect(indexSource).toContain("readConvaxOnboardingProgress(localStorage)")
+    expect(indexSource).toContain("showDeferredOnboardingTask")
+    expect(indexSource).toContain("<ConvaxOnboardingTaskCard")
+    expect(indexSource).toContain('data-convax-onboarding-overlay="true"')
+    expect(indexSource).toContain("onDismiss={() => setConvaxOnboardingOverlayOpen(false)}")
   })
 
   test("restores an available Project through the existing workspace coordinator", () => {

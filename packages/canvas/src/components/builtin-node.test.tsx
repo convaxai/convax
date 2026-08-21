@@ -6,9 +6,10 @@ import { renderToStaticMarkup } from "react-dom/server"
 import { createAgentNode, createCanvasDocument, createGroupNode, createMediaNode, createTextNode } from "../document"
 import { CanvasEditorProvider, type CanvasEditorController } from "../editor-context"
 import { createCanvasFileRendererRegistry } from "../file-renderer-registry"
-import { getCanvasNodeGenerationToolId, setCanvasNodeGenerationToolId } from "../generation-preference"
+import { setCanvasNodeGenerationToolId } from "../generation-preference"
 import { setCanvasGroupAppearance } from "../group-appearance"
 import { setCanvasGroupFolded } from "../group-fold"
+import { canvasOptimisticGhostDataKey } from "../optimistic-overlay-react-flow"
 import {
   finishCanvasNodeGenerationRun,
   markCanvasNodeGenerationRunRunning,
@@ -86,6 +87,7 @@ const {
   TextEditorDrawer,
   getCanvasTextMenuGeometry,
   isCanvasEmptyImageNodeData,
+  isCanvasEmptyMediaNodeData,
   isCanvasTextLineMenuSelectionValid,
   isCanvasTextResourceEditable,
   moveCanvasTextLineMenuIndex,
@@ -153,6 +155,7 @@ function renderWithEditor(
     isSelectionActionPending?: CanvasEditorController["isSelectionActionPending"]
     mutationSurface?: { disabled: boolean; visible: boolean }
     focusedGroupId?: string | null
+    locale?: CanvasEditorController["locale"]
     groupDropTargetId?: string | null
     groupSummaries?: CanvasGroupPresentationController["summaries"]
     rendererUsesChrome?: boolean
@@ -204,6 +207,7 @@ function renderWithEditor(
     finishSelectionDrag: () => {},
     hydrating,
     isSelectionActionPending: options.isSelectionActionPending ?? (() => false),
+    locale: options.locale,
     quickConnect: () => {},
     relinkResource: () => {},
     relinkSelectedResource: () => {},
@@ -466,6 +470,51 @@ describe("built-in text file drafts", () => {
 })
 
 describe("built-in node toolbar visibility", () => {
+  test("renders optimistic ghosts without mounting the registered file renderer", () => {
+    const ghost: CanvasNode = {
+      ...node,
+      data: {
+        ...node.data,
+        [canvasOptimisticGhostDataKey]: true,
+        status: "pending",
+      },
+    }
+    const markup = renderWithEditor(selection([]), false, (props) => <BuiltinCanvasNode {...props} />, false, {
+      node: ghost,
+    })
+
+    expect(markup).toContain('data-canvas-optimistic-ghost="test-file"')
+    expect(markup).not.toContain("data-file-renderer")
+    expect(markup).not.toContain("data-node-resizer")
+  })
+
+  test("renders a known empty text ghost as the final text-card shell instead of a loading placeholder", () => {
+    const textGhost = createTextNode({
+      id: "ghost-text",
+      label: "Text",
+      metadata: {},
+      position: { x: 0, y: 0 },
+      resourceState: { status: "ready", text: "" },
+    })
+    const markup = renderWithEditor(selection([]), false, (props) => <BuiltinCanvasNode {...props} />, false, {
+      node: {
+        ...textGhost,
+        data: {
+          ...textGhost.data,
+          [canvasOptimisticGhostDataKey]: true,
+          status: "idle",
+        },
+      },
+    })
+
+    expect(markup).toContain('data-canvas-optimistic-empty-card="text"')
+    expect(markup).toContain("convax-text-editor__prosemirror")
+    expect(markup).toContain('data-placeholder="Start writing..."')
+    expect(markup).not.toContain('data-canvas-optimistic-placeholder="pending"')
+    expect(markup).not.toContain("data-file-renderer")
+    expect(markup).not.toContain("data-node-resizer")
+  })
+
   test("preserves the side-drawer export as a compatibility alias", () => {
     expect(TextEditorDrawer).toBe(ExpandedTextEditorDialog)
     const markup = renderToStaticMarkup(<TextEditorDrawer editor={null} label="Legacy title" onClose={() => {}} />)
@@ -581,20 +630,36 @@ describe("built-in node toolbar visibility", () => {
         false,
         (props) => <BuiltinMediaFileNode {...props} />,
         false,
-        { node },
+        { canRelinkResource: true, node },
       )
 
-      expect(markup).toContain('class="convax-media-empty__content"')
+      expect(markup).toContain(`data-canvas-empty-media="${kind}"`)
+      expect(markup).toContain('class="convax-media-state-card__content"')
+      expect(markup).toContain('data-canvas-media-state="empty"')
+      expect(markup).toContain(`data-canvas-empty-placeholder="${kind}"`)
+      expect(markup).toContain(kind === "video" ? "lucide-video" : "lucide-image")
+      expect(markup).toContain("convax-media-state-card__icon")
+      expect(markup).not.toContain("convax-media-state-card__title")
+      expect(markup).toContain(">Add<")
+      expect(markup).not.toContain("convax-node__surface--video")
+      expect(openingTagContaining(markup, `aria-label="${kind === "video" ? "Add video" : "Add image"}"`)).toContain(
+        "convax-media-state-card__action-button",
+      )
+      expect(openingTagContaining(markup, `aria-label="${kind === "video" ? "Add video" : "Add image"}"`)).toContain(
+        "border-transparent",
+      )
+      expect(
+        openingTagContaining(markup, `aria-label="${kind === "video" ? "Add video" : "Add image"}"`),
+      ).not.toContain("bg-primary")
+      expect(openingTagContaining(markup, `aria-label="${kind === "video" ? "Add video" : "Add image"}"`)).toContain(
+        "h-7",
+      )
+      expect(markup).toContain(`aria-label="${kind === "video" ? "Add video" : "Add image"}"`)
       expect(markup).not.toContain(`${kind} unavailable`)
       expect(markup).not.toContain("Relink a selected Project resource")
-      if (kind === "image") {
-        expect(markup).toContain('data-canvas-empty-image="true"')
-        expect(markup).toContain("Add an image")
-        expect(markup).toContain("Upload your own or create one with Generate.")
-      } else {
-        expect(markup).toContain("Empty video")
-        expect(markup).toContain("Describe what you want to generate below")
-      }
+      expect(markup).not.toContain("Add an image")
+      expect(markup).not.toContain("Describe what you want to generate below")
+      expect(markup).not.toContain(`Empty ${kind}`)
     }
   })
 
@@ -665,7 +730,8 @@ describe("built-in node toolbar visibility", () => {
     expect(imageMarkup).toContain('aria-label="Relink selected Project resource"')
     expect(imageMarkup).toContain('aria-label="Relink local file"')
     expect(imageMarkup).not.toContain("Relink is not available yet")
-    expect(imageMarkup).toContain('class="convax-media-empty__content"')
+    expect(imageMarkup).toContain('class="convax-media-state-card__content"')
+    expect(imageMarkup).toContain('data-canvas-media-state="unavailable"')
     expect(imageMarkup).toContain("image unavailable")
     expect(imageMarkup).toContain("Relink a selected Project resource or choose a local file")
     expect(imageMarkup).not.toContain("Empty image")
@@ -870,68 +936,74 @@ describe("built-in node toolbar visibility", () => {
     expect(shouldUpdateCutoutMediaSize("convax-asset://cutout-result")).toBe(true)
   })
 
-  test("gives a newly created empty image a clear upload-or-generate choice", () => {
-    const emptyImage: CanvasNode = {
-      id: "empty-image",
-      type: "file",
-      position: { x: 0, y: 0 },
-      data: {
-        kind: "image",
-        label: "Image",
-        metadata: {},
-        resourceState: { status: "ready" },
-        status: "idle",
-      },
+  test("gives newly created empty image and video cards a centered add action", () => {
+    for (const kind of ["image", "video"] as const) {
+      const emptyMedia: CanvasNode = {
+        id: `empty-${kind}`,
+        type: "file",
+        position: { x: 0, y: 0 },
+        data: {
+          kind,
+          label: kind[0]!.toUpperCase() + kind.slice(1),
+          metadata: {},
+          resourceState: { status: "ready" },
+          status: "idle",
+        },
+      }
+      const addAria = kind === "video" ? "Add video" : "Add image"
+
+      const editable = renderWithEditor(selection([]), false, (props) => <BuiltinMediaFileNode {...props} />, false, {
+        canRelinkResource: true,
+        node: emptyMedia,
+      })
+      const readOnly = renderWithEditor(selection([]), true, (props) => <BuiltinMediaFileNode {...props} />, false, {
+        canRelinkResource: true,
+        node: emptyMedia,
+      })
+      const chinese = renderWithEditor(selection([]), false, (props) => <BuiltinMediaFileNode {...props} />, false, {
+        canRelinkResource: true,
+        locale: "zh-CN",
+        node: emptyMedia,
+      })
+
+      expect(editable).toContain(`data-canvas-empty-media="${kind}"`)
+      expect(editable).toContain(`data-canvas-empty-placeholder="${kind}"`)
+      expect(editable).toContain(kind === "video" ? "lucide-video" : "lucide-image")
+      expect(editable).toContain(">Add<")
+      expect(openingTagContaining(editable, `aria-label="${addAria}"`)).not.toContain('disabled=""')
+      expect(openingTagContaining(readOnly, `aria-label="${addAria}"`)).toContain('disabled=""')
+      expect(chinese).toContain(">添加<")
+      expect(chinese).toContain(`aria-label="${kind === "video" ? "添加视频" : "添加图片"}"`)
+      expect(editable).not.toContain("Upload")
+      expect(editable).not.toContain("Generate")
     }
-
-    const editable = renderWithEditor(selection([]), false, (props) => <BuiltinMediaFileNode {...props} />, false, {
-      canRelinkResource: true,
-      node: emptyImage,
-    })
-    const readOnly = renderWithEditor(selection([]), true, (props) => <BuiltinMediaFileNode {...props} />, false, {
-      canRelinkResource: true,
-      node: emptyImage,
-    })
-    const withoutAssistant = renderWithEditor(
-      selection([]),
-      false,
-      (props) => <BuiltinMediaFileNode {...props} />,
-      false,
-      { assistant: false, canRelinkResource: true, node: emptyImage },
-    )
-
-    expect(editable).toContain('data-canvas-empty-image="true"')
-    expect(editable).toContain("Add an image")
-    expect(openingTagContaining(editable, 'aria-label="Upload image"')).not.toContain('disabled=""')
-    expect(openingTagContaining(editable, 'aria-label="Generate image"')).not.toContain('disabled=""')
-    expect(openingTagContaining(readOnly, 'aria-label="Upload image"')).toContain('disabled=""')
-    expect(openingTagContaining(readOnly, 'aria-label="Generate image"')).toContain('disabled=""')
-    expect(openingTagContaining(withoutAssistant, 'aria-label="Generate image"')).toContain('disabled=""')
   })
 
-  test("recognizes the exact durable empty image shape after runtime state is stripped on reload", () => {
-    const durableEmptyData: CanvasMediaNodeData = {
-      kind: "image",
-      label: "Image",
-      metadata: {},
-      status: "idle",
-    }
-    const durableEmptyImage: CanvasNode = {
-      data: durableEmptyData,
-      id: "durable-empty-image",
-      position: { x: 0, y: 0 },
-      type: "file",
-    }
+  test("recognizes the exact durable empty image and video shape after runtime state is stripped on reload", () => {
+    for (const kind of ["image", "video"] as const) {
+      const durableEmptyData: CanvasMediaNodeData = {
+        kind,
+        label: kind[0]!.toUpperCase() + kind.slice(1),
+        metadata: {},
+        status: "idle",
+      }
+      const durableEmpty: CanvasNode = {
+        data: durableEmptyData,
+        id: `durable-empty-${kind}`,
+        position: { x: 0, y: 0 },
+        type: "file",
+      }
 
-    expect(isCanvasEmptyImageNodeData(durableEmptyData)).toBe(true)
-    const markup = renderWithEditor(selection([]), false, (props) => <BuiltinMediaFileNode {...props} />, false, {
-      canRelinkResource: true,
-      node: durableEmptyImage,
-    })
-    expect(markup).toContain('data-canvas-empty-image="true"')
-    expect(markup).toContain('aria-label="Upload image"')
-    expect(markup).toContain('aria-label="Generate image"')
-    expect(markup).not.toContain("image unavailable")
+      expect(isCanvasEmptyMediaNodeData(durableEmptyData)).toBe(true)
+      expect(isCanvasEmptyImageNodeData(durableEmptyData)).toBe(kind === "image")
+      const markup = renderWithEditor(selection([]), false, (props) => <BuiltinMediaFileNode {...props} />, false, {
+        canRelinkResource: true,
+        node: durableEmpty,
+      })
+      expect(markup).toContain(`data-canvas-empty-media="${kind}"`)
+      expect(markup).toContain(`aria-label="${kind === "video" ? "Add video" : "Add image"}"`)
+      expect(markup).not.toContain(`${kind} unavailable`)
+    }
   })
 
   test("does not mistake referenced, pending, failed, or missing images for a new empty image", () => {
@@ -989,6 +1061,7 @@ describe("built-in node toolbar visibility", () => {
         kind: "image",
         label: "Pending",
         metadata: {},
+        name: "photo.png",
         resourceState: { status: "ready" },
         status: "pending",
       },
@@ -1013,10 +1086,26 @@ describe("built-in node toolbar visibility", () => {
         resourceState: { status: "stale" },
         status: "idle",
       },
+      {
+        kind: "video",
+        label: "Referenced video",
+        metadata: {},
+        name: "clip.mp4",
+        resourceState: { status: "ready" },
+      },
+      {
+        kind: "video",
+        label: "Pending video",
+        metadata: {},
+        name: "clip.mp4",
+        resourceState: { status: "ready" },
+        status: "pending",
+      },
     ]
 
     for (const [index, data] of cases.entries()) {
       expect(isCanvasEmptyImageNodeData(data)).toBe(false)
+      expect(isCanvasEmptyMediaNodeData(data)).toBe(false)
       const target: CanvasNode = {
         data,
         id: `not-empty-${index}`,
@@ -1027,15 +1116,32 @@ describe("built-in node toolbar visibility", () => {
         canRelinkResource: true,
         node: target,
       })
-      expect(markup).not.toContain("data-canvas-empty-image")
-      expect(markup).not.toContain('aria-label="Generate image"')
+      expect(markup).not.toContain("data-canvas-empty-media")
+      expect(markup).not.toContain('aria-label="Add image"')
+      expect(markup).not.toContain('aria-label="Add video"')
     }
   })
 
   test("renders persisted pending and error resource lifecycle overlays", () => {
-    const pending = renderWithEditor(selection([]), false, (props) => (
-      <BuiltinCanvasNode {...props} data={{ ...props.data, status: "pending" }} />
-    ))
+    const image = createMediaNode({
+      id: "pending-image",
+      position: { x: 0, y: 0 },
+      resource: {
+        id: "pending-image",
+        kind: "image",
+        metadata: {},
+        mimeType: "image/png",
+        name: "photo.png",
+        state: { status: "ready" },
+      },
+    })
+    const pending = renderWithEditor(
+      selection([]),
+      false,
+      (props) => <BuiltinCanvasNode {...props} data={{ ...props.data, status: "pending" }} />,
+      false,
+      { node: image },
+    )
     expect(pending).toContain('data-canvas-persisted-resource-status="pending"')
     expect(pending).toContain('aria-busy="true"')
     expect(pending).toContain("正在生成…")
@@ -1045,18 +1151,76 @@ describe("built-in node toolbar visibility", () => {
     expect(pending).not.toContain("data-assistant-toolbar")
     expect(openingTagContaining(pending, 'data-canvas-persisted-resource-status="pending"')).not.toContain("nodrag")
 
-    const failed = renderWithEditor(selection([node.id]), false, (props) => (
-      <BuiltinCanvasNode {...props} data={{ ...props.data, error: "Creative Tools 服务不可用", status: "error" }} />
-    ))
+    const failed = renderWithEditor(
+      selection([image.id]),
+      false,
+      (props) => (
+        <BuiltinCanvasNode {...props} data={{ ...props.data, error: "Creative Tools 服务不可用", status: "error" }} />
+      ),
+      false,
+      { node: image },
+    )
     expect(failed).toContain('data-canvas-persisted-resource-status="error"')
     expect(failed).toContain('role="alert"')
     expect(failed).toContain(">生成失败<")
     expect(failed).not.toContain("Creative Tools 服务不可用")
     expect(failed).not.toContain("修改并重试")
-    expect(failed).not.toContain('aria-label="Upload image"')
-    expect(failed).not.toContain('aria-label="Generate image"')
+    expect(failed).not.toContain('aria-label="Add image"')
+    expect(failed).not.toContain('aria-label="Add video"')
     expect(failed).not.toContain("data-assistant-toolbar")
     expect(openingTagContaining(failed, 'data-canvas-persisted-resource-status="error"')).not.toContain("nodrag")
+  })
+
+  test("does not treat a blank image or video card as generation work", () => {
+    for (const kind of ["image", "video"] as const) {
+      const empty: CanvasNode = {
+        data: {
+          kind,
+          label: kind === "video" ? "Video" : "Image",
+          metadata: {},
+          resourceState: { status: "ready" },
+          status: "pending",
+        },
+        id: `empty-${kind}`,
+        position: { x: 0, y: 0 },
+        type: "file",
+      }
+      expect(isCanvasEmptyMediaNodeData(empty.data)).toBe(true)
+      const overlay = renderWithEditor(selection([]), false, (props) => <BuiltinCanvasNode {...props} />, false, {
+        node: empty,
+      })
+      expect(overlay).not.toContain("正在生成")
+      expect(overlay).not.toContain('data-canvas-persisted-resource-status="pending"')
+      expect(overlay).not.toContain('aria-busy="true"')
+
+      const card = renderWithEditor(selection([]), false, (props) => <BuiltinMediaFileNode {...props} />, false, {
+        canRelinkResource: true,
+        node: empty,
+      })
+      expect(card).toContain(`data-canvas-empty-media="${kind}"`)
+      expect(card).toContain(`aria-label="${kind === "video" ? "Add video" : "Add image"}"`)
+    }
+  })
+
+  test("does not treat a blank text card as generation work", () => {
+    const text = createTextNode({
+      id: "untitled-text",
+      label: "Untitled",
+      metadata: {},
+      position: { x: 0, y: 0 },
+      resourceState: { status: "ready", text: "" },
+    })
+    const pending = renderWithEditor(
+      selection([]),
+      false,
+      (props) => <BuiltinCanvasNode {...props} data={{ ...props.data, status: "pending" }} />,
+      false,
+      { node: text },
+    )
+    expect(pending).toContain("Untitled")
+    expect(pending).not.toContain("正在生成")
+    expect(pending).not.toContain('data-canvas-persisted-resource-status="pending"')
+    expect(pending).not.toContain('aria-busy="true"')
   })
 
   test("pins toolbar visibility to the Canvas-owned sole selection", () => {
@@ -1774,9 +1938,8 @@ describe("built-in node toolbar visibility", () => {
     expect(activeMarkup).toContain("正在生成")
     expect(activeMarkup).toContain("取消")
     expect(activeMarkup).toContain('data-slot="loading-spinner"')
-    const cancelButton = openingTagContaining(activeMarkup, 'data-slot="beam-button"')
-    expect(cancelButton).toContain('data-ui-beam="pulse-inner"')
-    expect(cancelButton).toContain('data-ui-beam-tone="warning"')
+    const cancelButton = openingTagContaining(activeMarkup, 'aria-label="取消"')
+    expect(cancelButton).toContain("convax-media-state-card__action-button")
     expect(cancelButton).toContain('type="button"')
     expect(activeMarkup).not.toContain("data-assistant-toolbar")
     expect(openingTagContaining(activeMarkup, 'data-canvas-file-generation-activity="running"')).not.toContain("nodrag")
@@ -1791,11 +1954,12 @@ describe("built-in node toolbar visibility", () => {
     expect(failedMarkup).toContain(">生成失败<")
     expect(failedMarkup).not.toContain("Creative Tools 服务不可用")
     expect(failedMarkup).toContain("lucide-image")
-    expect(failedMarkup).toContain("convax-generation-status-overlay--media")
+    expect(failedMarkup).toContain('data-canvas-media-state="failed"')
+    expect(failedMarkup).toContain("convax-media-state-card--overlay")
     expect(failedMarkup).not.toContain("修改并重试")
     expect(failedMarkup).not.toContain("使用原提示词新建任务")
-    expect(failedMarkup).not.toContain('aria-label="Upload image"')
-    expect(failedMarkup).not.toContain('aria-label="Generate image"')
+    expect(failedMarkup).not.toContain('aria-label="Add image"')
+    expect(failedMarkup).not.toContain('aria-label="Add video"')
     expect(openingTagContaining(failedMarkup, 'data-canvas-file-generation-activity="failed"')).toContain(
       "pointer-events-none",
     )
@@ -1815,8 +1979,8 @@ describe("built-in node toolbar visibility", () => {
         node: failedVideoNode,
       },
     )
-    expect(failedVideoMarkup).toContain("lucide-clapperboard")
-    expect(failedVideoMarkup).toContain("convax-generation-status-overlay--video")
+    expect(failedVideoMarkup).toContain("lucide-video")
+    expect(failedVideoMarkup).toContain("convax-media-state-card--video")
 
     const genericFailed = finishCanvasNodeGenerationRun(running, imageNode.id, "operation-one")
     const genericFailedMarkup = renderWithEditor(

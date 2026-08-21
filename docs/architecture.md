@@ -168,7 +168,7 @@ flowchart TB
 
   subgraph Desktop["@convax/desktop · Electron composition root"]
     subgraph Entry["Runtime entry surfaces"]
-      Renderer["Renderer UI<br/>React and controllers"]
+      Renderer["Renderer UI<br/>React, controllers, first-run onboarding"]
       Preload["Preload<br/>typed window.convax bridge"]
       Agent["Agent / OpenCode"]
       PluginRuntime["Plugin iframe, sidecar, Skill, Hook"]
@@ -255,18 +255,23 @@ flowchart TB
   DesktopUpdateFeed -->|version, release notes, SHA-512 and signed package| Main
 
   subgraph ExternalServices["External first-party service boundary"]
-    AuthXNexus["AuthX identity + Nexus resource control plane<br/>signed administrator binding handoff"]
+    AuthXPortal["AuthX ProjectUser Portal<br/>identity UI + short-lived Application Session"]
+    NexusControl["Nexus resource control plane<br/>Plan · Quota · Usage · Checkout"]
   end
-  PluginRuntime -->|system-browser OAuth + runtime HTTPS only| AuthXNexus
+  Web -->|public ProjectUser Portal links only| AuthXPortal
+  AuthXPortal -->|exact-origin bearer requests; no product persistence| NexusControl
+  PluginRuntime -->|system-browser OAuth + runtime HTTPS only| NexusControl
 
   subgraph State["State and persistence"]
     UserData["Electron userData<br/>bindings, user-managed private key files, Marketplace, grants, immutable Plugin closures<br/>isolated per identified development task"]
+    CompanionUserData["Companion-owned user application data<br/>private rotating refresh credential only"]
     ProjectRoot["Project root / .convax<br/>identity, final-frame objects/journals/heads, checkpoints/floors, managed assets"]
-    LocalStorage["Browser localStorage<br/>preferences, recovery and disposable Marketplace / Service / model display caches"]
+    LocalStorage["Browser localStorage<br/>preferences, onboarding progress, recovery<br/>and disposable Marketplace / Service / model display caches"]
     UpdaterCache["Electron updater cache<br/>verified partial/downloaded package · disposable"]
   end
 
   Main --> UserData
+  PluginRuntime --> CompanionUserData
   Main --> UpdaterCache
   Main -->|validated native I/O · range streams| ProjectRoot
   Renderer -. non-authoritative UI state only .-> LocalStorage
@@ -294,8 +299,8 @@ flowchart TB
   classDef store fill:#15382e,stroke:#63d4a5,color:#ffffff;
   classDef external fill:#312a1a,stroke:#e8b44e,color:#ffffff;
   class Main authority;
-  class UserData,ProjectRoot,LocalStorage store;
-  class PluginSource,Release,PeerReplicas external;
+  class UserData,CompanionUserData,ProjectRoot,LocalStorage store;
+  class PluginSource,Release,PeerReplicas,AuthXPortal,NexusControl external;
 ```
 
 ## 2. Terms
@@ -765,6 +770,7 @@ boundary checker fails closed until those admissions are complete.
 | Plugin-owned Skill selection and provenance                           | Desktop main                                             | Immutable ActiveSet closure paths enter Agent Runtime through a generic port                                       |
 | Installed Plugin snapshots and ActiveSet                              | Desktop main                                             | One global CAS pointer; exact snapshot leases bind all runtime use                                                 |
 | Plugin Service status and usage display                               | Installed sidecar through Desktop main                   | Renderer may retain only a disposable last-complete safe projection                                                |
+| First-run account onboarding progress                                 | Desktop Renderer preference                              | Bounded step/completion/deferred UI only; live Service status remains authoritative                                |
 | Available/downloaded Desktop application update                       | Desktop Main update controller plus signed remote feed   | Feed metadata and updater cache are not Project, Plugin, or renderer authority                                     |
 
 A recovery preference such as “last Canvas for Project X” is not canonical state.
@@ -838,6 +844,11 @@ Electron userData/
                                         each sidecar process receives a separate disposable private temp directory
   canvas-external-drags/                short-lived host-owned native drag copies
 
+Companion-owned per-user application data/
+  <service-private namespace>/          optional private 0700 directory
+    authx-refresh-credential.json       optional 0600 rotating Refresh Credential;
+                                        never an Access Token or Host credential
+
 The two private-key directories contain bounded canonical plaintext records. On
 POSIX, Desktop creates their directories as `0700` and records as `0600`, rejects
 symlinks and broader record permissions, uses exclusive create, fsyncs each record
@@ -858,7 +869,8 @@ Electron updater platform cache         verified partial or complete Desktop upd
 Packaged app Resources/                 application code and assets only; Desktop ships no
                                         product-selected Marketplace packages or default installs
 
-browser localStorage                    per-user Workbench/renderer preferences plus bounded
+browser localStorage                    per-user Workbench/renderer preferences, bounded first-run
+                                        onboarding progress, plus bounded
                                         disposable Marketplace, Plugin Service and model catalog
                                         display projections
 
@@ -1239,6 +1251,65 @@ other Main runtimes have completed the shared shutdown drain. A preparation or
 installer-start failure keeps or relaunches the currently installed version and
 reports a bounded native error. Project data, installed Plugin closures, preferences,
 and user content remain outside the replaceable application bundle.
+
+### First-run account onboarding
+
+First-run onboarding is a Desktop Renderer composition over the existing Project
+startup route and Plugin Service projection. It is not Project state, a new account
+owner, a billing authority, or a Plugin-specific runtime path.
+
+```text
+Project registry initializes
+  -> any available registered Project bypasses account onboarding and restores locally
+  -> an empty successful registry reads bounded renderer onboarding progress
+  -> Renderer selects exactly one installed Plugin Service whose declared actions
+     contain authorization and Checkout
+  -> zero candidates shows a retryable provisioning state; multiple candidates fail
+     closed instead of choosing by Plugin id, vendor, display name or ordering
+  -> authorize/reauthorize uses the existing Main-owned system-browser flow
+  -> the live v2 Service status alone proves connected account, current Plan,
+     Credits, Checkout offers and subscription state
+  -> a connected Free account may start one advertised Checkout or continue Free
+  -> Checkout cancellation, failure, closure, unknown state or provider delay keeps
+     the current Plan usable and never grants a local entitlement
+  -> every presented step may be deferred without becoming complete; ordinary Home
+     opens and a bottom-left task retains the live current step and bounded progress
+  -> the task remains non-blocking after Project entry and reopens onboarding only
+     through an explicit user action; it never changes Project or Workbench state
+  -> Ready reuses Create Project / Open Project, or finishes against an already
+     active Project; successful entry from that presented final step marks the
+     bounded renderer preference complete
+```
+
+The v2 progress record is a closed, bounded
+`{version, step, completed, deferred}` Renderer preference. `deferred` is only the
+presentation choice that the incomplete flow should remain a task; it is not an
+account or Project fact. A strict v1 record migrates with `deferred: false`. The
+record contains no account identity, email, token, credential, Plan or entitlement
+fact; malformed, oversized, future-version, unavailable-storage and authority-shaped
+values fail soft to the Account step. Account and billing state remain sidecar-owned
+live status, while credentials and authorization URLs stay outside Renderer and
+Preload.
+
+The Account page explains Local Project, Canvas and Agent, the local-data boundary,
+and that password entry happens only in the system browser. The Plan page consumes
+only the current service status and advertised Checkout Plan keys. Subscription is
+recommended but optional: closing or canceling Checkout, or selecting Continue with
+Free, advances without changing the live Plan. Deferring either page renders the
+ordinary product immediately and retains a compact task at the bottom-left. The task
+label and progress are projections of the bounded step plus current live Service
+status. The final page reuses the ordinary Project Home operations rather than
+introducing a tutorial-only Project path; explicit resumption over an active Project
+uses a presentation overlay and returns to that same Project after completion.
+
+Plan and Credits are display projections only. When the v2 status does not carry a
+price or benefit list, Renderer directs the user to the secure Checkout for those
+live facts rather than hard-coding them.
+
+Signing in does not upload, synchronize, share, enroll, or change collaboration
+authority for a local Project. Existing local Projects remain openable and editable
+while offline, signed out, or unsubscribed, subject only to their independent local
+Project authority and recovery state.
 
 ### Project creation and opening
 
@@ -1834,8 +1905,11 @@ exact resource or an explicitly managed first-party Application trust domain tha
 contains it. An arbitrary or unbound client-audience Access Token, ID Token, Cookie,
 Refresh Credential, or Management credential is never a resource credential. The
 verified companion owns the loopback callback, PKCE transaction, token validation,
-refresh rotation and OS credential-store adapter; only the rotating Refresh
-Credential may be durable and short-lived Access Tokens remain in companion memory.
+refresh rotation and its private credential-storage adapter. Only the rotating
+Refresh Credential may be durable, either in an operating-system credential service
+or a private same-user application-data file; short-lived Access Tokens remain in
+companion memory. Main, Preload and Renderer receive neither credential bytes nor
+the native storage path.
 The Resource Server validates exact issuer/JWKS, audience, Application/client,
 subject, environment, token use, capability scope, time claims and the live
 server-side integration binding, then resolves its product authorization and
@@ -1875,8 +1949,13 @@ catalog so a provider webhook projection can become visible without granting any
 entitlement locally.
 
 Desktop exposes one read-only service catalog to the application menu and Services
-settings. Plugin generation capabilities and model rows are derived from the
-installed manifest. Every present LLM contribution declares exactly one `openai`
+settings. Plugin generation capabilities and model-family membership are derived
+from the installed manifest, but a manifest family label is never projected as a
+concrete available model. Concrete generation model rows come only from the current
+bounded `tools/list.inputSchema`: an unmarked live family contributes its one static
+declared model, a marked dynamic family contributes its current selector choices,
+and a missing or invalid live family contributes no model row. Every present LLM
+contribution declares exactly one `openai`
 or `openrouter` Provider protocol; a Service without LLM remains valid. After
 starting its Main-only loopback gateway,
 Desktop actively requests that protocol's `/models` catalog, validates it in Main,
@@ -1891,13 +1970,14 @@ select an OpenCode provider/model pair. Agent messages may carry the exact
 provider/model identity recorded by OpenCode for that message so Renderer can show
 the dispatch result; model-authored prose is never model-selection evidence.
 
-The Services page and generation pickers may display installed model rows while a
-service is disconnected so the user can understand, select, and configure that
-installation. Main joins each model back to the exact installed service projection
-and validates its bounded current tool schema without using `service.status` as a
-discovery gate. Execution is stricter: preparation and dispatch perform bounded live
-status checks and cross the external-call boundary only while the service is
-connected.
+The Services page and generation pickers may display concrete model rows discovered
+from an installed sidecar while a service is disconnected so the user can understand,
+select, and configure that installation. They never synthesize a fallback row from
+a manifest family name when concrete discovery is empty or unavailable. Main joins
+each model back to the exact installed service projection and validates its bounded
+current tool schema without using `service.status` as a discovery gate. Execution is
+stricter: preparation and dispatch perform bounded live status checks and cross the
+external-call boundary only while the service is connected.
 
 Either admitted manifest may add one top-level generic LLM contribution, and each
 v9 Service may independently add one, without introducing a built-in vendor

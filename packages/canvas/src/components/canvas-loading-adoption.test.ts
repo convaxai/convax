@@ -28,10 +28,9 @@ describe("Canvas loading adoption", () => {
     expect(nodeSource).toContain('role="status"')
     expect(nodeSource).toContain('role="alert"')
     expect(nodeSource).not.toContain("LoaderCircle")
-    expect(nodeSource).toContain("BeamButton")
-    expect(nodeSource).toContain('beam="pulse-inner"')
-    expect(nodeSource).toMatch(/<BeamButton[\s\S]*?reducedMotion=\{editor\.reducedMotion\}[\s\S]*?>/)
-    expect(nodeSource).toContain('tone="warning"')
+    expect(nodeSource).toContain("MediaStateCard")
+    expect(nodeSource).toContain("convax-media-state-card__action-button")
+    expect(nodeSource).toContain('variant="ghost"')
   })
 
   test("generation panel catalog waits use Loading without inventing lifecycle state", () => {

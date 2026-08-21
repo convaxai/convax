@@ -43,9 +43,9 @@ or durable domain authority.
   bounded recovery state; Renderer must not automatically
   open Team creation/join UI, load sharing runtime, or imply that sharing is required.
   Team collaboration UI is reached only through an explicit sharing action.
-- Browser storage contains renderer preferences, Workbench recovery choices, and
-  bounded versioned Marketplace, Plugin Service, and model catalog display caches
-  only. Loading a
+- Browser storage contains renderer preferences, Workbench recovery choices,
+  bounded first-run onboarding presentation progress, and bounded versioned
+  Marketplace, Plugin Service, and model catalog display caches only. Loading a
   preference may choose an initial Input; Workbench is canonical afterward. Both
   caches remain disposable projections and Main remains authoritative.
 - Development task identity is a Main-authored, bounded URL projection used only
@@ -99,6 +99,14 @@ or durable domain authority.
   windows, preserve those values while inventory, status, and usage refresh in the
   background, clear prior usage on credential-changing actions, and discard an entry
   when its Plugin contribution fingerprint changes.
+- Show first-run account onboarding only after the Project registry has loaded as
+  empty. Select exactly one account surface from generic authorization plus Checkout
+  actions, fail closed on ambiguity, and keep live Service status authoritative for
+  account, Plan, Credits, Checkout offers and entitlement. Persist only the bounded
+  presentation step/completion/deferred flags. Deferral enters the ordinary product
+  without completing onboarding and exposes a bottom-left resume task; only an
+  explicit resume may cover an existing Project. Existing Projects bypass automatic
+  presentation.
 - Seed Agent and generation model pickers from one last-complete strictly validated
   projection across cold windows, retain it while the current catalogs refresh, and
   group models under expandable Service rows. Cache entries are display-only; exact

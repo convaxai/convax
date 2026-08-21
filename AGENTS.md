@@ -359,13 +359,23 @@ user directory.
   optional usage history. It renders that projection immediately, refreshes status
   and usage independently in the background, and never treats it as authorization,
   execution availability, Checkout, or billing authority.
+- Renderer may persist only the bounded versioned presentation step, completion,
+  and deferred flag for first-run account onboarding. The automatic full-screen
+  flow applies only after a successful empty Project-registry read, selects an
+  account surface from generic advertised Service actions, and derives account,
+  Plan, Credits, Checkout and entitlement display from live Service status. A
+  deferred incomplete flow may remain as a non-blocking bottom-left task and reopen
+  only on explicit user action. Existing local Projects bypass automatic onboarding
+  and remain openable while offline, signed out or unsubscribed.
 - External public-client authorization is companion-owned. Direct Resource Server
   access requires an Access Token whose audience is that exact resource or an
   explicitly bound first-party Application trust domain. An arbitrary or unbound
   client-audience Access Token, ID Token, Cookie, Refresh Credential, or Management
   credential is never accepted. Only a rotating Refresh Credential may be durable
-  in the companion's OS credential store, while Access Tokens remain in memory and
-  never cross Main, Preload or Renderer.
+  in companion-owned private credential storage, which may be an operating-system
+  credential service or a private same-user application-data file. Access Tokens
+  remain in memory and no credential bytes or native storage path ever cross Main,
+  Preload or Renderer.
 - A first-party Resource Server integration may be preconfigured on the upstream
   Application so one Application login uses the same Application Access Token with
   an integration-owned capability scope. Its binding and subject JIT access remain

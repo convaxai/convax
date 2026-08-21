@@ -4,6 +4,7 @@ import {
   Bot,
   Box,
   ChevronRight,
+  Check,
   Code,
   Download,
   FileImage,
@@ -23,7 +24,16 @@ import {
   Workflow,
   X,
 } from "lucide-react"
-import { downloadUrl, githubUrl, navItems, plugins, useCases, valuePillars, workflowChapters } from "./landing-content"
+import {
+  downloadUrl,
+  githubUrl,
+  navItems,
+  plans,
+  plugins,
+  useCases,
+  valuePillars,
+  workflowChapters,
+} from "./landing-content"
 
 function LogoMark({ inverted = false }: { inverted?: boolean }) {
   return (
@@ -611,6 +621,63 @@ export function App() {
           </div>
         </section>
 
+        <section className="pricing-section" id="pricing">
+          <div className="section-heading section-heading--split">
+            <div>
+              <p className="eyebrow">Simple monthly plans</p>
+              <h2>Choose the AI allowance that fits your work.</h2>
+            </div>
+            <p>
+              Every plan includes OpenRouter-backed AI access. Your AI cost budget resets each month, so you can move
+              up as your projects grow.
+            </p>
+          </div>
+
+          <div className="pricing-grid">
+            {plans.map((plan, index) => (
+              <article className="pricing-card" data-plan={plan.key} key={plan.key}>
+                <div className="pricing-card__heading">
+                  <span>0{index + 1}</span>
+                  <h3>{plan.name}</h3>
+                </div>
+                <p className="pricing-card__description">{plan.description}</p>
+                <div className={`pricing-card__price${plan.priceCny === null ? " pricing-card__price--free" : ""}`}>
+                  {plan.priceCny === null ? (
+                    <strong>Free</strong>
+                  ) : (
+                    <>
+                      <span>¥</span>
+                      <strong>{plan.priceCny}</strong>
+                      <small>/ month</small>
+                    </>
+                  )}
+                </div>
+                <div className="pricing-card__budget">
+                  <span>AI cost budget</span>
+                  <strong>{plan.aiBudgetUsd}</strong>
+                  <small>per month</small>
+                </div>
+                <ul>
+                  {plan.details.map((detail) => (
+                    <li key={detail}>
+                      <Check aria-hidden="true" size={14} strokeWidth={2} />
+                      {detail}
+                    </li>
+                  ))}
+                </ul>
+                <a className="pricing-card__cta" href={plan.href}>
+                  {plan.cta}
+                  <ArrowRight aria-hidden="true" size={14} />
+                </a>
+              </article>
+            ))}
+          </div>
+          <p className="pricing-note">
+            Prices are shown in CNY. AI cost budgets are measured from OpenRouter usage and reset monthly. Plans are
+            selected and managed in your secure AuthX application account.
+          </p>
+        </section>
+
         <section className="final-cta">
           <div className="final-cta__mark">
             <LogoMark inverted />
@@ -642,6 +709,7 @@ export function App() {
             <a href="#product">Overview</a>
             <a href="#workflow">Workflow</a>
             <a href="#marketplace">Marketplace</a>
+            <a href="#pricing">Pricing</a>
           </div>
           <div>
             <b>Resources</b>

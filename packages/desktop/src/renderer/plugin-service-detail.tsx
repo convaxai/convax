@@ -534,7 +534,11 @@ function ServiceModelDirectory({ locale, service }: { locale: AppLocale; service
         )
       ) : (
         <p className="mt-3 text-xs text-text-tertiary" role="status">
-          {service.loading ? appMessage(locale, "services.loadingModels") : appMessage(locale, "services.noModels")}
+          {service.loading
+            ? appMessage(locale, "services.loadingModels")
+            : service.kind === "plugin" && service.authentication === "required"
+              ? appMessage(locale, "services.modelsAuthorizationRequired")
+              : appMessage(locale, "services.noModels")}
         </p>
       )}
     </section>

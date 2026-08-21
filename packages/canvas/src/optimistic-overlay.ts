@@ -45,6 +45,7 @@ export interface CanvasGhostNode {
   readonly parentPresentationKey?: string
   readonly position: CanvasPresentationPoint
   readonly presentation: Readonly<{
+    readonly emptyCard?: true
     readonly mediaKind?: "audio" | "file" | "image" | "video"
     readonly mimeType?: string
     readonly nodeType: "file" | "text"
