@@ -1403,17 +1403,30 @@
   }
 }
 
-.convax-canvas .convax-media-empty {
+.convax-canvas .convax-media-state-card {
   display: grid;
+  overflow: hidden;
   place-items: center;
-  background: color-mix(in oklab, var(--canvas-text) 5%, var(--canvas-node-background));
+  border-radius: inherit;
+  background: light-dark(var(--canvas-node-background), #050506);
+  color: var(--canvas-text);
 }
 
-.convax-canvas .convax-media-empty--add {
-  background: transparent;
+.convax-canvas .convax-media-state-card--overlay {
+  position: absolute;
+  z-index: 20;
+  inset: 0;
+  border-radius: var(--canvas-media-radius);
+  -webkit-backdrop-filter: blur(12px);
+  backdrop-filter: blur(12px);
 }
 
-.convax-canvas .convax-media-empty__content {
+.convax-canvas .convax-media-state-card--video {
+  inset: 2px;
+  border-radius: calc(var(--canvas-media-radius) - 2px);
+}
+
+.convax-canvas .convax-media-state-card__content {
   display: flex;
   width: 100%;
   height: 100%;
@@ -1422,65 +1435,63 @@
   align-items: center;
   justify-content: center;
   flex-direction: column;
-  gap: 6px;
-  padding: 16px;
+  gap: 7px;
+  padding: 18px;
   border: 0;
   background: transparent;
-  color: var(--canvas-text);
   font: inherit;
-  pointer-events: none;
   text-align: center;
   user-select: none;
 }
 
-.convax-canvas .convax-media-empty__content--add {
-  gap: 10px;
-  pointer-events: auto;
-}
-
-.convax-canvas .convax-media-empty__placeholder {
+.convax-canvas .convax-media-state-card__icon {
   display: grid;
+  width: 42px;
+  height: 42px;
   place-items: center;
   color: color-mix(in oklab, var(--canvas-text-muted) 70%, transparent);
 }
 
-.convax-canvas .convax-media-empty__placeholder svg {
-  width: 48px;
-  height: 48px;
+.convax-canvas .convax-media-state-card__icon > svg {
+  width: 38px;
+  height: 38px;
+  stroke-width: 1.45;
 }
 
-.convax-canvas .convax-media-empty__icon {
-  display: grid;
-  width: 44px;
-  height: 44px;
-  margin-bottom: 2px;
-  place-items: center;
-  border: 1px solid var(--canvas-node-border);
-  border-radius: 12px;
-  background: var(--canvas-node-background);
-  color: var(--canvas-accent);
-  box-shadow: 0 6px 18px color-mix(in oklab, var(--canvas-background) 40%, transparent);
-}
-
-.convax-canvas .convax-media-empty__icon svg {
-  width: 18px;
-  height: 18px;
-}
-
-.convax-canvas .convax-media-empty__title {
+.convax-canvas .convax-media-state-card__title {
   font-size: 13px;
   font-weight: 600;
+  line-height: 1.25;
 }
 
-.convax-canvas .convax-media-empty__hint {
+.convax-canvas .convax-media-state-card__title--failed {
+  color: var(--destructive);
+}
+
+.convax-canvas .convax-media-state-card__description {
   max-width: 240px;
   color: var(--canvas-text-muted);
   font-size: 11px;
   line-height: 1.4;
 }
 
-.convax-canvas .convax-media-empty__add {
+.convax-canvas .convax-media-state-card__action {
+  margin-top: 3px;
+}
+
+.convax-canvas .convax-media-state-card__action-button {
   min-width: 0;
+  border: 1px solid color-mix(in oklab, var(--canvas-text) 14%, transparent);
+  border-radius: 999px;
+  background: color-mix(in oklab, var(--canvas-text) 6%, transparent);
+  color: color-mix(in oklab, var(--canvas-text) 82%, transparent);
+  box-shadow: none;
+}
+
+.convax-canvas .convax-media-state-card__action-button:hover {
+  border-color: color-mix(in oklab, var(--canvas-text) 22%, transparent);
+  background: color-mix(in oklab, var(--canvas-text) 10%, transparent);
+  color: var(--canvas-text);
 }
 
 .convax-canvas .convax-video__media {
@@ -2681,9 +2692,8 @@
     color: CanvasText;
   }
 
-  .convax-canvas .convax-media-empty__icon,
-  .convax-canvas .convax-media-empty__placeholder,
-  .convax-canvas .convax-media-empty__add {
+  .convax-canvas .convax-media-state-card,
+  .convax-canvas .convax-media-state-card__action-button {
     border-color: CanvasText;
     background: Canvas;
     color: CanvasText;
