@@ -127,16 +127,22 @@ export function createProjectIndexBackedCanvasExternalFactAuthority(input: {
           projectId: request.scope.projectId,
         })
         request.signal?.throwIfAborted()
-        return request.request.proofs.every((proof) => current.some((reference) => {
+        const verified = request.request.proofs.every((proof) => current.some((reference) => {
+          // Narrow by the exact portable resource fields before canonicalizing
+          // the owner proof. A large Project may contain hundreds of current
+          // references, while one Canvas creation ordinarily proves one newly
+          // published resource. The final digest check remains authoritative.
+          if (proof.resource.uri !== reference.canonicalUri) return false
+          if (
+            proof.resource.contentDigest !== reference.blob.digest ||
+            proof.resource.byteLength !== reference.blob.byteLength ||
+            proof.resource.mime !== reference.blob.mime ||
+            proof.resource.mediaClass !== mediaClassForMime(reference.blob.mime)
+          ) return false
           const digest = projectIndexResourceReferenceDigest(reference)
-          return proof.ownerProofDigest === digest &&
-            proof.resource.ownerProofDigest === digest &&
-            proof.resource.uri === reference.canonicalUri &&
-            proof.resource.contentDigest === reference.blob.digest &&
-            proof.resource.byteLength === reference.blob.byteLength &&
-            proof.resource.mime === reference.blob.mime &&
-            proof.resource.mediaClass === mediaClassForMime(reference.blob.mime)
-        })) ? "verified" : "rejected"
+          return proof.ownerProofDigest === digest && proof.resource.ownerProofDigest === digest
+        }))
+        return verified ? "verified" : "rejected"
       }
       if (request.request.kind !== "retained-resources") return "pending"
       const wanted = request.request.proofs.map((proof) => Object.freeze({

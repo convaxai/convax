@@ -297,11 +297,12 @@ export function createProductionCanvasRouteRuntimeOpener(input: {
           createOperationId: input.createOperationId,
           diagnostics: createMainCollaborationLatencyDiagnosticsPort({
             recordAll: process.env.CONVAX_COLLABORATION_LATENCY_RECORD_ALL === "1",
-            // Record-all is a benchmark mode. Avoid letting an O(outbox) sampler
-            // contend with the following root and perturb the latency distribution.
-            sample: process.env.CONVAX_COLLABORATION_LATENCY_RECORD_ALL === "1"
-              ? () => ({})
-              : () => runtime.persistence.sampleLatencyDiagnostics(scope),
+            // Exact history/outbox inspection is intentionally benchmark-only.
+            // Production slow-command telemetry must never enqueue O(outbox)
+            // persistence work behind an accepted user mutation.
+            ...(process.env.CONVAX_COLLABORATION_LATENCY_RECORD_ALL === "1"
+              ? { sample: () => ({}) }
+              : {}),
           }),
         })
         return Object.freeze({ session, dispose() { session.dispose(); runtime.dispose() } })

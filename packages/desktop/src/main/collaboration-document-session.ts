@@ -79,7 +79,7 @@ export function createKernelBackedMainCollaborationDocumentSession<K extends Doc
 }
 
 export function createMainCollaborationLatencyDiagnosticsPort(input: {
-  readonly sample: () => CollaborationLatencySample | Promise<CollaborationLatencySample>
+  readonly sample?: () => CollaborationLatencySample | Promise<CollaborationLatencySample>
   /** Benchmark-only escape from the production slow-command filter. */
   readonly recordAll?: boolean
   readonly slowThresholdMs?: number
@@ -93,7 +93,7 @@ export function createMainCollaborationLatencyDiagnosticsPort(input: {
     shouldSample(diagnostic: CollaborationLatencyDiagnostic) {
       return input.recordAll === true || diagnostic.totalDurationMs > threshold
     },
-    sample: input.sample,
+    ...(input.sample ? { sample: input.sample } : {}),
     record(diagnostic: CollaborationLatencyDiagnostic) {
       try { write(diagnostic) } catch { /* Diagnostics never affect a durable command. */ }
     },
@@ -109,16 +109,17 @@ export async function createMainCollaborationDocumentSession<K extends DocumentO
   options: CreateMainCollaborationDocumentSessionOptions<K>,
 ): Promise<MainCollaborationDocumentSession<K>> {
   const listeners = new Set<(event: CollaborationDocumentInvalidation) => void>()
+  const pendingInvalidations: CollaborationDocumentInvalidation[] = []
+  let invalidationDelivery: ReturnType<typeof setImmediate> | undefined
+  let disposed = false
   let session: MainCollaborationDocumentSession<K> | undefined
   const kernel = await options.openKernel({
     publish(input) {
       const event = Object.freeze({ scope: input.scope, frameDigest: input.frameDigest })
-      for (const listener of listeners) {
-        try { listener(event) } catch { /* Durable state is unaffected by an observer. */ }
-      }
+      pendingInvalidations.push(event)
+      scheduleInvalidationDelivery()
     },
   })
-  let disposed = false
   session = Object.freeze({
     scope: options.scope,
     query<T>(project: (state: OwnerValidatedState<K>) => T): Promise<T> {
@@ -152,6 +153,9 @@ export async function createMainCollaborationDocumentSession<K extends DocumentO
     dispose(): void {
       if (disposed) return
       disposed = true
+      if (invalidationDelivery !== undefined) clearImmediate(invalidationDelivery)
+      invalidationDelivery = undefined
+      pendingInvalidations.length = 0
       listeners.clear()
       kernel.dispose()
     },
@@ -160,5 +164,23 @@ export async function createMainCollaborationDocumentSession<K extends DocumentO
 
   function requireLive(): void {
     if (disposed || session === undefined) throw new Error("Collaboration document session is disposed")
+  }
+
+  function scheduleInvalidationDelivery(): void {
+    if (disposed || invalidationDelivery !== undefined) return
+    // A projection invalidation is an observer notification, not part of the
+    // durability barrier. Deliver it on the next event-loop turn so listener
+    // work cannot enqueue ahead of the submitter's authoritative result.
+    invalidationDelivery = setImmediate(() => {
+      invalidationDelivery = undefined
+      if (disposed) return
+      const batch = pendingInvalidations.splice(0)
+      for (const event of batch) {
+        for (const listener of listeners) {
+          try { listener(event) } catch { /* Durable state is unaffected by an observer. */ }
+        }
+      }
+      if (pendingInvalidations.length > 0) scheduleInvalidationDelivery()
+    })
   }
 }
