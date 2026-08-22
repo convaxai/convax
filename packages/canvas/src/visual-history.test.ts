@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test"
 import { createCanvasDocument, createMediaNode, createTextNode } from "./document"
 import { applyCanvasReplacePresentation } from "./optimistic-overlay-react-flow"
 import { CanvasVisualHistoryCoordinator, type CanvasVisualHistoryAuthority } from "./visual-history"
+import type { CanvasDocument } from "./types"
 
 function authority(ids: readonly string[]): CanvasVisualHistoryAuthority {
   return {
@@ -18,6 +19,19 @@ function authority(ids: readonly string[]): CanvasVisualHistoryAuthority {
     edgeEntities: [],
     nodeEntities: ids.map((id) => ({ nodeId: id, entity: { id, incarnation: `${id}-incarnation`, kind: "node" } })),
   }
+}
+
+function guardCompleteDocumentAccess(document: CanvasDocument): CanvasDocument {
+  const fail = () => {
+    throw new Error("visual history synchronously inspected the complete Canvas document")
+  }
+  return new Proxy(document, {
+    get: fail,
+    getOwnPropertyDescriptor: fail,
+    getPrototypeOf: fail,
+    has: fail,
+    ownKeys: fail,
+  })
 }
 
 describe("Canvas visual history", () => {
@@ -74,6 +88,46 @@ describe("Canvas visual history", () => {
       },
     ])
     expect(history.reconcile(undo, { direction: "undo", rootOperationId: "root-create" }, before)).toBeTrue()
+  })
+
+  test("stages and binds an opaque root without reading or cloning the complete Canvas document", () => {
+    const history = new CanvasVisualHistoryCoordinator()
+    const source = authority(["source"])
+    const guarded: CanvasVisualHistoryAuthority = {
+      ...source,
+      document: guardCompleteDocumentAccess(source.document),
+    }
+
+    const staged = history.stagePendingRoot("opaque-command", guarded)
+
+    expect(staged).toBe("provisional:opaque-command")
+    expect(history.bindStagedRoot(staged!, "root-opaque", guarded, guarded)).toBeTrue()
+    expect(history.canUndo()).toBeTrue()
+  })
+
+  test("does not stage a visual root for a geometry command that changes nothing", () => {
+    const history = new CanvasVisualHistoryCoordinator()
+    const current = authority(["source"])
+
+    expect(
+      history.stageRendererCommand(
+        "same-geometry",
+        {
+          format: "convax.canvas-renderer-command",
+          kind: "canvas.nodes.set-geometry",
+          body: {
+            updates: [
+              {
+                node: { id: "source", incarnation: "source-incarnation", kind: "node" },
+                position: { x: 0, y: 0 },
+              },
+            ],
+          },
+        },
+        current,
+      ),
+    ).toBeNull()
+    expect(history.canUndo()).toBeFalse()
   })
 
   test("tracks the authoritative incarnation created by redo for the next immediate undo", () => {

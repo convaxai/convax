@@ -1,8 +1,33 @@
 import { describe, expect, test } from "bun:test"
-import { createCanvasDocument, createMediaNode } from "./document"
-import { fitCanvasMediaNodeToIntrinsicSize, fitCanvasMediaSizeWithinBounds } from "./media-sizing"
+import { createCanvasDocument, createMediaNode, createTextNode } from "./document"
+import {
+  fitCanvasMediaNodeToIntrinsicSize,
+  fitCanvasMediaSizeWithinBounds,
+  getCanvasResourcePresentationSize,
+} from "./media-sizing"
 
 describe("Canvas media sizing", () => {
+  test("keeps every low-level resource factory on the Canvas presentation-size policy", () => {
+    expect(
+      createTextNode({
+        metadata: {},
+        mimeType: "text/markdown",
+        name: "brief.md",
+        position: { x: 0, y: 0 },
+        resourceState: { status: "ready", text: "" },
+      }).style,
+    ).toEqual(getCanvasResourcePresentationSize("text"))
+
+    for (const kind of ["audio", "file", "image", "video"] as const) {
+      expect(
+        createMediaNode({
+          position: { x: 0, y: 0 },
+          resource: { id: kind, kind, metadata: {}, state: { status: "ready" } },
+        }).style,
+      ).toEqual(getCanvasResourcePresentationSize(kind))
+    }
+  })
+
   test("fits every aspect ratio within one bounded media box", () => {
     expect(fitCanvasMediaSizeWithinBounds(4_000, 4_000)).toEqual({ height: 320, width: 320 })
     expect(fitCanvasMediaSizeWithinBounds(1_024, 2_048)).toEqual({ height: 320, width: 160 })

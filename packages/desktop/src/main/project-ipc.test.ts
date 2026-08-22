@@ -171,7 +171,11 @@ test("binds project preview leases to the trusted renderer sender", async () => 
   const filePreviews = {
     close: mock(() => true),
     open: mock(async () => ({ leaseId: "lease-one", url: "convax-project-preview://lease-one/stream" })),
-    thumbnail: mock(async () => ({ dataUrl: "data:image/png;base64,small" })),
+    thumbnail: mock(async () => ({
+      dataUrl: "data:image/png;base64,small",
+      intrinsicHeight: 80,
+      intrinsicWidth: 80,
+    })),
   }
   const { projectFilesIpcChannels, registerProjectIpc } = await import("./project-ipc")
   const dispose = await registerProjectIpc(manager, {
@@ -188,6 +192,8 @@ test("binds project preview leases to the trusted renderer sender", async () => 
   })
   await expect(invoke(projectFilesIpcChannels.readFileThumbnail, scope)).resolves.toEqual({
     dataUrl: "data:image/png;base64,small",
+    intrinsicHeight: 80,
+    intrinsicWidth: 80,
   })
   expect(await invoke(projectFilesIpcChannels.closeFilePreview, { leaseId: "lease-one" })).toBeTrue()
   expect(filePreviews.open).toHaveBeenCalledWith(previewScope, 1)

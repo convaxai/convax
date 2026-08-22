@@ -155,6 +155,10 @@ contract and its routed references.
   projection. Ghost/token/visual-history values never cross preload or IPC. Resource
   preparation remains in Main; post-commit session delivery may be unavailable
   without changing durable success, in which case Renderer performs one refresh.
+- Resource hydration refreshes through the originating mounted Canvas session lease.
+  Main derives the renderer actor from the trusted sender and validates the exact
+  `ref` and session id locally around asynchronous hydration; it never performs a
+  nested request back into that same Renderer to rediscover Workbench scope.
 - The strict session projection carries exact node and edge incarnation tables for
   guarded presentation only. Provisional visual roots and renderer-decoded image
   hints remain Canvas-owned transient state; Main binds history to durable roots and

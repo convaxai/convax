@@ -99,7 +99,9 @@ import { mountCanvasSessionWithBackgroundReconcile } from "./canvas-session-moun
 import { createCanvasRendererRequestHandler } from "./canvas-renderer-request-handler"
 import { resolveWorkspaceCanvasViewportInsets } from "./canvas-viewport-occlusion"
 import { publishCanvasSelectionToWorkbench } from "./canvas-workbench-selection"
-import { addCanvasUploadResources } from "./canvas-upload"
+import { addCanvasUploadResources, resolveCanvasUploadPresentations } from "./canvas-upload"
+import { collectStaleCanvasResourceNodeIds } from "./canvas-resource-hydration"
+import { canvasPerformanceDiagnosticsEnabled, installCanvasLongTaskDiagnostics } from "./canvas-performance-diagnostics"
 import {
   closeDesktopSettings,
   createDesktopSurfaceState,
@@ -256,6 +258,13 @@ function App() {
     return () => handle.dispose()
   }, [shortcutService])
   useEffect(() => () => shortcutService.dispose(), [shortcutService])
+  useEffect(
+    () =>
+      installCanvasLongTaskDiagnostics({
+        enabled: canvasPerformanceDiagnosticsEnabled({ location: window.location, storage: localStorage }),
+      }),
+    [],
+  )
   const developmentIdentity = useMemo(() => rendererDevelopmentIdentity(window.location.href), [])
   const [notification, setNotification] = useState<CanvasNotification | null>(null)
   const [viewportWidth, setViewportWidth] = useState(() => window.innerWidth)
@@ -1202,13 +1211,17 @@ function App() {
         },
       },
       hydration: {
-        async hydrateStale({ signal }) {
-          if (!activeProjectId || !activeCanvasId) {
+        async hydrateStale({ document, signal }) {
+          if (!activeProjectId || !activeCanvasId || !activeCanvasSession) {
             throw new Error("Open a Project Canvas before refreshing resources")
           }
           if (signal.aborted) throw signal.reason
+          const staleNodeIds = collectStaleCanvasResourceNodeIds(document)
+          if (staleNodeIds.length === 0) return document
           const hydrated = await window.convax.canvas.resources.hydrateStale({
-            canvasId: activeCanvasId,
+            ref: activeCanvasSession.ref,
+            sessionId: activeCanvasSession.sessionId,
+            nodeIds: staleNodeIds,
           })
           if (signal.aborted) throw signal.reason
           return hydrated
@@ -1216,6 +1229,10 @@ function App() {
         markStale: markProjectCanvasResourcesStale,
       },
       mutation: {
+        preparePresentation(request) {
+          if (!activeProjectId) return []
+          return resolveCanvasUploadPresentations(request, { projectId: activeProjectId })
+        },
         async add(request) {
           if (request.signal.aborted) throw request.signal.reason
           if (!activeProjectId || !activeCanvasId || !activeCanvasSession) {
@@ -2046,7 +2063,7 @@ function App() {
 
   const resolveProjectFileThumbnailUrl = useCallback(
     async ({ path, projectId }: { path: string; projectId: string }) =>
-      (await window.convax.projectFiles.readFileThumbnail({ path, projectId })).dataUrl,
+      window.convax.projectFiles.readFileThumbnail({ path, projectId }),
     [],
   )
   const openProjectFilePreview = useCallback(

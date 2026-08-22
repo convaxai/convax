@@ -1,10 +1,12 @@
 import { describe, expect, mock, test } from "bun:test"
 import { parseActorId, parseDigest, parseId128 } from "@convax/collaboration"
 import type { BoundedOperationReceipt } from "../collaboration"
-import { createCanvasDocument } from "../document"
+import { createCanvasDocument, createMediaNode } from "../document"
 import type { CanvasUploadItem } from "../types"
 import { CanvasResourceBusinessService, CanvasResourcePartialFailureError } from "./resources"
 import type { CanvasApplicationCommandResult } from "./service"
+import { canvasResourceProofMetadataKey } from "../collaboration/application-command-adapter"
+import { canvasProjectionResourceMetadataKey } from "../collaboration/projection"
 
 const receipt: BoundedOperationReceipt = {
   format: "convax.canvas-operation-receipt",
@@ -18,10 +20,33 @@ const receipt: BoundedOperationReceipt = {
   historyMaterialDigest: parseDigest("f".repeat(64)),
 }
 
+function resourceIdentity(seed: string, mediaClass: "image" | "text") {
+  return {
+    format: "convax.canvas-resource-ref" as const,
+    uri: `convax-project://test/${seed}`,
+    mediaClass,
+    mime: mediaClass === "image" ? "image/png" : "text/plain",
+    byteLength: "1",
+    contentDigest: `${seed}-content`,
+    ownerProofDigest: `${seed}-owner`,
+  }
+}
+
+function resourceProof(resource: ReturnType<typeof resourceIdentity>) {
+  return {
+    format: "convax.canvas-resource-proof-ref" as const,
+    mode: "current-owner-state" as const,
+    resource,
+    ownerProofDigest: resource.ownerProofDigest,
+    requireCurrentLiveVersion: true as const,
+  }
+}
+
+const imageResource = resourceIdentity("prepared-image", "image")
 const image: CanvasUploadItem = {
   id: "prepared-image",
   kind: "image",
-  metadata: {},
+  metadata: { [canvasResourceProofMetadataKey]: resourceProof(imageResource) },
   name: "image.png",
   state: { status: "ready", url: "canvas-resource://prepared-image" },
 }
@@ -66,6 +91,174 @@ describe("Canvas resource collaboration orchestration", () => {
       envelope: { command: { type: "resources.add" }, commandId: "add-one" },
       scopeId: "project",
     })
+  })
+
+  test("retains the validated prepared runtime state in the first authoritative projection", async () => {
+    const committedDocument = createCanvasDocument({
+      id: "canvas",
+      nodes: [
+        createMediaNode({
+          id: "image-node",
+          position: { x: 10, y: 20 },
+          resource: {
+            id: "prepared-image",
+            kind: "image",
+            metadata: { [canvasProjectionResourceMetadataKey]: imageResource },
+            name: "image.png",
+            state: { status: "stale" },
+          },
+        }),
+      ],
+    })
+    const execute = mock(async () => ({
+      ...result(),
+      affectedNodeIds: ["image-node"],
+      createdNodeIds: ["image-node"],
+      document: committedDocument,
+    }))
+    const service = new CanvasResourceBusinessService(
+      { prepare: async () => ({ items: [image] }) },
+      { execute, query: mock() },
+    )
+
+    const applied = await service.addResources(baseRequest)
+
+    expect(applied.document.nodes[0]?.data.resourceState).toEqual({
+      status: "ready",
+      url: "canvas-resource://prepared-image",
+    })
+    expect(committedDocument.nodes[0]?.data.resourceState).toEqual({ status: "stale" })
+  })
+
+  test("binds prepared runtime state by persisted resource identity when receipt node ids reverse item order", async () => {
+    const firstResource = resourceIdentity("first", "image")
+    const secondResource = resourceIdentity("second", "image")
+    const first: CanvasUploadItem = {
+      id: "first-source",
+      kind: "image",
+      metadata: { [canvasResourceProofMetadataKey]: resourceProof(firstResource) },
+      name: "first.png",
+      state: { status: "ready", url: "canvas-resource://first" },
+    }
+    const second: CanvasUploadItem = {
+      id: "second-source",
+      kind: "image",
+      metadata: { [canvasResourceProofMetadataKey]: resourceProof(secondResource) },
+      name: "second.png",
+      state: { status: "ready", url: "canvas-resource://second" },
+    }
+    const committedDocument = createCanvasDocument({
+      id: "canvas",
+      nodes: [
+        createMediaNode({
+          id: "a-node",
+          position: { x: 10, y: 20 },
+          resource: {
+            id: "second-source",
+            kind: "image",
+            metadata: { [canvasProjectionResourceMetadataKey]: secondResource },
+            name: "second.png",
+            state: { status: "stale" },
+          },
+        }),
+        createMediaNode({
+          id: "z-node",
+          position: { x: 354, y: 20 },
+          resource: {
+            id: "first-source",
+            kind: "image",
+            metadata: { [canvasProjectionResourceMetadataKey]: firstResource },
+            name: "first.png",
+            state: { status: "stale" },
+          },
+        }),
+      ],
+    })
+    const service = new CanvasResourceBusinessService(
+      { prepare: async () => ({ items: [first, second] }) },
+      {
+        execute: async () => ({
+          ...result(),
+          affectedNodeIds: ["a-node", "z-node"],
+          // Operation receipts sort entity ids, which is the opposite of item order here.
+          createdNodeIds: ["a-node", "z-node"],
+          document: committedDocument,
+        }),
+        query: mock(),
+      },
+    )
+
+    const applied = await service.addResources({
+      ...baseRequest,
+      sources: [
+        { kind: "host-file", path: "first.png", sourceId: "first-source" },
+        { kind: "host-file", path: "second.png", sourceId: "second-source" },
+      ],
+    })
+
+    expect(applied.document.nodes.find((node) => node.id === "z-node")?.data.resourceState).toEqual(first.state)
+    expect(applied.document.nodes.find((node) => node.id === "a-node")?.data.resourceState).toEqual(second.state)
+  })
+
+  test("does not cross differing runtime states between indistinguishable duplicate resources", async () => {
+    const duplicateResource = resourceIdentity("duplicate", "image")
+    const items: CanvasUploadItem[] = [
+      {
+        id: "duplicate-one",
+        kind: "image",
+        metadata: { [canvasResourceProofMetadataKey]: resourceProof(duplicateResource) },
+        name: "duplicate.png",
+        state: { status: "ready", url: "canvas-resource://one" },
+      },
+      {
+        id: "duplicate-two",
+        kind: "image",
+        metadata: { [canvasResourceProofMetadataKey]: resourceProof(duplicateResource) },
+        name: "duplicate.png",
+        state: { status: "ready", url: "canvas-resource://two" },
+      },
+    ]
+    const committedDocument = createCanvasDocument({
+      id: "canvas",
+      nodes: ["a-node", "z-node"].map((id, index) =>
+        createMediaNode({
+          id,
+          position: { x: index * 344, y: 0 },
+          resource: {
+            id,
+            kind: "image",
+            metadata: { [canvasProjectionResourceMetadataKey]: duplicateResource },
+            name: "duplicate.png",
+            state: { status: "stale" },
+          },
+        }),
+      ),
+    })
+    const service = new CanvasResourceBusinessService(
+      { prepare: async () => ({ items }) },
+      {
+        execute: async () => ({
+          ...result(),
+          affectedNodeIds: ["a-node", "z-node"],
+          createdNodeIds: ["a-node", "z-node"],
+          document: committedDocument,
+        }),
+        query: mock(),
+      },
+    )
+
+    const applied = await service.addResources({
+      ...baseRequest,
+      sources: [
+        { kind: "host-file", path: "duplicate.png", sourceId: "duplicate-one" },
+        { kind: "host-file", path: "duplicate.png", sourceId: "duplicate-two" },
+      ],
+    })
+
+    expect(applied.document.nodes.map((node) => node.data.resourceState)).toEqual([
+      { status: "stale" },
+      { status: "stale" },
+    ])
   })
 
   test("forwards Group placement in the same typed resource intent", async () => {

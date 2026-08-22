@@ -56,11 +56,31 @@ Canvas owns document and editor semantics independently of Project and Agent.
   non-interactive ghost presentation. Guarded hide/replace records require the exact
   live incarnation; a mismatch retains authority. Keep each session bounded to 32
   pending operations and 512 ghost entities and coalesce authority/overlay changes
-  into one presentation snapshot.
-- Visual undo/redo history stores only bounded complete presentation snapshots with
-  exact node/edge incarnation guards. Every local mutation may reserve an opaque
-  provisional root before Main's durable lane; Renderer must not execute the business
-  command or construct a candidate document to predict it. Typed geometry may attach
+  into one presentation snapshot. For owner-derived resource creation, keep the
+  non-interactive ghost as a bounded paint shield until the authoritative renderer
+  has mounted and completed one paint. A requested create-and-focus may mark that
+  ghost with a presentation-only focus affordance immediately, but its presentation
+  key must never enter Canvas selection or become command/query identity. Preserve
+  the affordance across authority handoff: a focused ghost settles only after the
+  authoritative surface has committed its focused DOM state, and matching bounds
+  must not restart focus motion. Resource batches use one service-order placement
+  pass for local files, source hints, and null reservations so later ghosts cannot
+  overlap or shift at handoff. Settlement must remain bounded and must not delay the
+  durable commit. Successful resource creation is already visible through the new
+  node and must not emit a redundant success notification; retain notifications for
+  warnings and failures.
+  Publish the base ghost from the mutation-start projection before Main work or an
+  asynchronous media probe. A later probe may replace only that operation's exact
+  presentation keys while the mutation is still pending; it must never append a
+  late ghost after authority has arrived. Concurrent create-and-focus operations
+  are latest-wins for selection and camera effects even when durable results return
+  out of order.
+- Visual undo/redo history retains at most a bounded number of immutable accepted
+  session projection endpoints with exact node/edge incarnation guards. It derives
+  presentation deltas lazily rather than copying complete documents. Every local
+  mutation may reserve an opaque provisional root before Main's durable lane;
+  Renderer must not execute the business command or construct a candidate document
+  to predict it. Typed geometry may attach
   its already-known presentation result, while every other root is filled only from
   Main's accepted before/after projection. Owner-derived creations retain only their
   operation-specific forward ghost and never guess identities. The visual cursor does
@@ -73,6 +93,8 @@ Canvas owns document and editor semantics independently of Project and Agent.
   the mounted node data identity so live text and media runtime state cannot reload.
   Combined presentation scheduling must invoke browser scheduling APIs with their
   required receiver and must never strand its coalescing latch after a scheduling error.
+  Input handlers must never deep-clone or stringify the complete Canvas to reserve
+  a provisional root.
 - Fit and reveal derive world bounds from the authoritative Canvas document, including
   parent coordinates. Do not wait for or trust stale mounted renderer geometry.
 - Hosts may provide only edge-inset geometry for unavailable viewport space. Canvas
@@ -109,11 +131,20 @@ Canvas owns document and editor semantics independently of Project and Agent.
   duplicate commits only after its transient preview ends. Title, Group appearance,
   generation-tool preference, mention edge, and intrinsic-media geometry edits use
   closed application commands; Renderer code must not submit a general node patch.
-- Canvas owns one resource presentation-size policy. A prepared image's trusted
+- Canvas owns one resource presentation-size policy. A prepared image/video's trusted
   intrinsic dimensions must determine the first `canvas.resources.add` geometry;
   renderer ghosts may use independently decoded hints through that same policy but
   those hints never enter an intent. Normal media load must not create a second
   geometry write when the committed size already matches the intrinsic fit.
+- Prepared runtime state is rebound to created authority by exact persisted resource
+  identity, kind, and title; receipt entity order is not command-item order. An
+  ambiguous duplicate never crosses runtime state between nodes and falls back to
+  hydration.
+- A known-node resource invalidation marks and rehydrates only that exact mutable
+  subset. Canonical stale projection and local-preview handoff retries must not turn
+  one resource refresh into a full-Canvas hydration pass. Marking stale is confined
+  to the request snapshot: an already-ready mounted resource remains connected and
+  editable until the hydrated runtime states replace that subset atomically.
 - A pointer drop carries one explicit center-origin anchor already projected into
   Canvas coordinates. Canvas uses the first prepared resource's final presentation
   size to normalize it once to the durable top-left placement; non-pointer callers

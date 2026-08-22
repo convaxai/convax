@@ -204,7 +204,6 @@ describe("canvas history", () => {
     expect(cloned.nodes[0]?.data.metadata).not.toBe(node.data.metadata)
   })
 
-
   test("keeps file and agent as internal roles while hiding generic and agent insertion", () => {
     const registry = createDefaultCanvasNodeRegistry()
     expect(registry.list().map((definition) => definition.type)).toEqual(["file", "agent"])
@@ -345,7 +344,7 @@ describe("canvas history", () => {
       resourceState: { status: "ready", text: "# Brief" },
     })
     expect(node.data).not.toHaveProperty("format")
-    expect(node.style).toEqual({ width: 360, height: 240 })
+    expect(node.style).toEqual({ width: 320, height: 180 })
     expect(
       createMediaNode({
         position: { x: 0, y: 0 },

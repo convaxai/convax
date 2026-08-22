@@ -1,6 +1,7 @@
 import {
   CanvasResourcePartialFailureError,
   type CanvasApplicationService,
+  type CanvasDocumentRef,
   type CanvasResourceBusinessService,
   type CanvasResourcePreparationResult,
   type CanvasResourceSource,
@@ -29,6 +30,8 @@ import {
   type CanvasResourcePartialFailureResponse,
 } from "../canvas-resource-private-contract"
 import {
+  canvasResourceHydrationMaximumTargetCount,
+  canvasResourceHydrationMaximumTargetIdLength,
   canvasResourceHydrateStaleIpcChannel,
   canvasResourceIpcChannel,
   canvasResourceLocalFileRegisterIpcChannel,
@@ -49,7 +52,7 @@ type CanvasDocumentHydrator = Pick<ProjectCanvasResourceHydrator, "hydrate"> &
 interface CanvasDocumentIpcOptions {
   isTrustedSender: (event: IpcMainInvokeEvent) => boolean
   prepareProjectCanvasAccess?: (projectId: string) => () => void
-  resolveActiveCanvas?: (event: IpcMainInvokeEvent) => Promise<ActiveCanvasScope | null>
+  sessions?: Pick<CanvasCollaborationSessionOwner, "requireRendererLease">
 }
 
 export function registerCanvasDocumentIpc(
@@ -95,25 +98,29 @@ export function registerCanvasDocumentIpc(
     )
   })
   disposers.push(() => ipcMain.removeHandler(canvasDocumentIpcChannels.execute))
-  if (hydrator?.hydrateStale && options.resolveActiveCanvas) {
+  if (hydrator?.hydrateStale && options.sessions) {
     const hydrateStale = hydrator.hydrateStale.bind(hydrator)
-    const resolveActiveCanvas = options.resolveActiveCanvas
+    const sessions = options.sessions
     ipcMain.handle(canvasResourceHydrateStaleIpcChannel, async (event, value: unknown) => {
       if (!options.isTrustedSender(event)) throw new Error("Canvas IPC request came from an untrusted renderer")
       const input = requireCanvasResourceHydrateStaleRequest(value)
-      const active = await resolveActiveCanvas(event)
-      if (!active || active.canvasId !== input.canvasId) {
-        throw new Error("Canvas resource refresh does not match the invoking window's live Workbench scope")
-      }
-      const loaded = await application.query({ canvasId: active.canvasId, scopeId: active.projectId })
+      const rendererActorId = `desktop:renderer:${event.sender.id}`
+      const requireLiveLease = () =>
+        sessions.requireRendererLease({
+          ref: input.ref,
+          rendererActorId,
+          sessionId: input.sessionId,
+        })
+      requireLiveLease()
+      const loaded = await application.query(input.ref)
+      requireLiveLease()
+      const staleDocument = input.nodeIds ? loaded.projection : markProjectCanvasResourcesStale(loaded.projection)
       const hydrated = await hydrateStale({
-        document: markProjectCanvasResourcesStale(loaded.projection),
-        projectId: active.projectId,
+        document: staleDocument,
+        ...(input.nodeIds === undefined ? {} : { nodeIds: input.nodeIds }),
+        projectId: input.ref.scopeId,
       })
-      const current = await resolveActiveCanvas(event)
-      if (!sameActiveCanvasScope(active, current)) {
-        throw new Error("Canvas resource refresh does not match the invoking window's live Workbench scope")
-      }
+      requireLiveLease()
       return hydrated
     })
     disposers.push(() => ipcMain.removeHandler(canvasResourceHydrateStaleIpcChannel))
@@ -152,15 +159,67 @@ function requireRendererCommandRequest(value: unknown): CanvasRendererCommandReq
   return value as CanvasRendererCommandRequest
 }
 
-function requireCanvasResourceHydrateStaleRequest(value: unknown) {
+interface CanvasResourceHydrateStaleRequest {
+  readonly ref: CanvasDocumentRef
+  readonly sessionId: Id128
+  readonly nodeIds?: readonly string[]
+}
+
+function requireCanvasResourceHydrateStaleRequest(value: unknown): CanvasResourceHydrateStaleRequest {
   if (!isRecord(value)) throw new Error("Canvas resource refresh request must be an object")
   for (const key of Object.keys(value)) {
-    if (key !== "canvasId") {
+    if (key !== "ref" && key !== "sessionId" && key !== "nodeIds") {
       throw new Error(`Canvas resource refresh request contains unsupported field: ${key}`)
     }
   }
-  const canvasId = requireNonEmptyString(value.canvasId, "Canvas resource refresh canvas id")
-  return { canvasId }
+  if (!("ref" in value) || !("sessionId" in value)) {
+    throw new Error("Canvas resource refresh request is missing its mounted session scope")
+  }
+  const ref = requireCanvasResourceHydrationRef(value.ref)
+  const sessionId = parseId128(value.sessionId)
+  if (value.nodeIds === undefined) return Object.freeze({ ref, sessionId })
+  if (
+    !Array.isArray(value.nodeIds) ||
+    value.nodeIds.length === 0 ||
+    value.nodeIds.length > canvasResourceHydrationMaximumTargetCount
+  ) {
+    throw new Error("Canvas resource refresh target node ids are invalid")
+  }
+  const nodeIds = value.nodeIds.map((nodeId) => {
+    const id = requireNonEmptyString(nodeId, "Canvas resource refresh target node id")
+    if (
+      id !== id.trim() ||
+      id.length > canvasResourceHydrationMaximumTargetIdLength ||
+      /[\u0000-\u001f\u007f]/u.test(id)
+    ) {
+      throw new Error("Canvas resource refresh target node id is invalid")
+    }
+    return id
+  })
+  if (new Set(nodeIds).size !== nodeIds.length) {
+    throw new Error("Canvas resource refresh target node ids must be unique")
+  }
+  return Object.freeze({ ref, sessionId, nodeIds: Object.freeze(nodeIds) })
+}
+
+function requireCanvasResourceHydrationRef(value: unknown): CanvasDocumentRef {
+  if (!isRecord(value)) throw new Error("Canvas resource refresh reference is invalid")
+  const keys = Object.keys(value)
+  if (keys.length !== 2 || keys.some((key) => key !== "canvasId" && key !== "scopeId")) {
+    throw new Error("Canvas resource refresh reference is invalid")
+  }
+  const canvasId = requireCanvasResourceHydrationIdentity(value.canvasId, "Canvas id")
+  const scopeId = requireCanvasResourceHydrationIdentity(value.scopeId, "Canvas scope id")
+  return Object.freeze({ canvasId, scopeId })
+}
+
+function requireCanvasResourceHydrationIdentity(value: unknown, label: string): string {
+  const identity = requireNonEmptyString(value, label)
+  if (identity !== identity.trim() || identity.length > canvasResourceHydrationMaximumTargetIdLength) {
+    throw new Error(`${label} is invalid`)
+  }
+  if (/[\u0000-\u001f\u007f]/u.test(identity)) throw new Error(`${label} is invalid`)
+  return identity
 }
 
 interface ActiveCanvasScope {
@@ -327,7 +386,12 @@ export interface CanvasResourceBusinessDiagnostic {
   readonly byteLength: number
   readonly callCount: number
   readonly durationMs: number
-  readonly stage: "canvas-prepare" | "canvas-submit" | "response-projection-invalidation"
+  readonly stage:
+    | "canvas-prepare"
+    | "canvas-submit"
+    | "relink-prepare"
+    | "relink-submit"
+    | "response-projection-invalidation"
 }
 
 export function registerCanvasResourceIpc(
@@ -355,6 +419,28 @@ export function registerCanvasResourceIpc(
       localFileTokens.delete(oldest)
     }
   }
+  const trace = async <T>(
+    stage: CanvasResourceBusinessDiagnostic["stage"],
+    byteLength: number,
+    operation: () => Promise<T>,
+  ): Promise<T> => {
+    if (!options.diagnostics) return operation()
+    const startedAt = performance.now()
+    try {
+      return await operation()
+    } finally {
+      try {
+        options.diagnostics.record({
+          byteLength,
+          callCount: 1,
+          durationMs: performance.now() - startedAt,
+          stage,
+        })
+      } catch {
+        /* Diagnostics never affect a Canvas command. */
+      }
+    }
+  }
 
   ipcMain.handle(canvasResourceLocalFileRegisterIpcChannel, (event, value: unknown) => {
     if (!options.isTrustedSender(event)) throw new Error("Canvas IPC request came from an untrusted renderer")
@@ -373,28 +459,6 @@ export function registerCanvasResourceIpc(
       throw new Error("Canvas resource request does not match the invoking window's live Workbench scope")
     }
     return (async () => {
-      const trace = async <T>(
-        stage: CanvasResourceBusinessDiagnostic["stage"],
-        byteLength: number,
-        operation: () => Promise<T>,
-      ): Promise<T> => {
-        if (!options.diagnostics) return operation()
-        const startedAt = performance.now()
-        try {
-          return await operation()
-        } finally {
-          try {
-            options.diagnostics.record({
-              byteLength,
-              callCount: 1,
-              durationMs: performance.now() - startedAt,
-              stage,
-            })
-          } catch {
-            /* Diagnostics never affect a Canvas command. */
-          }
-        }
-      }
       const sourceBytes = options.diagnostics
         ? input.sources.reduce(
             (total, source) =>
@@ -413,18 +477,22 @@ export function registerCanvasResourceIpc(
         sources: input.sources,
       }
       let sourcePrepared: CanvasResourcePreparationResult | undefined
+      const sourcePreparation =
+        input.externalFiles.length > 0 && input.sources.length > 0
+          ? trace("canvas-prepare", sourceBytes, () => {
+              if (!preparation.prepare) throw new Error("Canvas resource source preparation is unavailable")
+              return preparation.prepare({
+                canvasId: active.canvasId,
+                scopeId: active.projectId,
+                sources: input.sources,
+              })
+            }).then(
+              (prepared) => ({ prepared, status: "fulfilled" as const }),
+              (reason: unknown) => ({ reason, status: "rejected" as const }),
+            )
+          : undefined
       let result
       try {
-        if (input.externalFiles.length > 0 && input.sources.length > 0) {
-          if (!preparation.prepare) throw new Error("Canvas resource source preparation is unavailable")
-          sourcePrepared = await trace("canvas-prepare", sourceBytes, () =>
-            preparation.prepare!({
-              canvasId: active.canvasId,
-              scopeId: active.projectId,
-              sources: input.sources,
-            }),
-          )
-        }
         result = input.pending
           ? await (() => {
               if (!resources.createPendingResource) throw new Error("Pending Canvas resource creation is unavailable")
@@ -443,14 +511,25 @@ export function registerCanvasResourceIpc(
           : input.externalFiles.length
             ? await preparation.withAdmittedLocalFiles(
                 { files: input.externalFiles, projectId: active.projectId },
-                (localPrepared: CanvasResourcePreparationResult) =>
-                  resources.addPreparedResources(
-                    sourcePrepared ? { ...request, sources: [] } : request,
-                    mergeCanvasResourcePreparation(sourcePrepared, localPrepared),
-                  ),
+                async (localPrepared: CanvasResourcePreparationResult) => {
+                  if (!sourcePreparation) return resources.addPreparedResources(request, localPrepared)
+                  const settled = await sourcePreparation
+                  if (settled.status === "rejected") throw settled.reason
+                  sourcePrepared = settled.prepared
+                  return resources.addPreparedResources(
+                    { ...request, sources: [] },
+                    mergeCanvasResourcePreparation(localPrepared, sourcePrepared),
+                  )
+                },
               )
             : await trace("canvas-submit", sourceBytes, () => resources.addResources(request))
-      } catch (error) {
+      } catch (caught) {
+        let error = caught
+        if (sourcePreparation && !sourcePrepared) {
+          const settled = await sourcePreparation
+          if (settled.status === "fulfilled") sourcePrepared = settled.prepared
+          else error = settled.reason
+        }
         console.error("Canvas resource mutation failed", error)
         const failure =
           error instanceof CanvasResourcePartialFailureError || !sourcePrepared?.retainedOnFailure
@@ -500,48 +579,56 @@ export function registerCanvasResourceIpc(
       try {
         let result
         if (input.source.kind === "local-file") {
-          const key = localFileTokenKey(event, input.source.sourceToken)
+          const localSource = input.source
+          const key = localFileTokenKey(event, localSource.sourceToken)
           pruneLocalFileTokens()
           const token = localFileTokens.get(key)
           if (!token || token.expiresAt < Date.now()) {
             throw new Error("Local file authorization has expired or is invalid")
           }
           localFileTokens.delete(key)
-          result = await preparation.withAdmittedLocalFiles(
-            {
-              files: [
-                {
-                  ...(input.source.mediaType === undefined ? {} : { mediaType: input.source.mediaType }),
-                  name: input.source.name,
-                  sourceId: "relink",
-                  sourcePath: token.sourcePath,
-                },
-              ],
-              projectId: active.projectId,
-            },
-            async (prepared) => {
-              requireCompatibleRelinkPreparation(live.node, prepared)
-              await recheckLiveRelinkScope(event, active, input.nodeId, live.reference, options)
-              return relinkPreparedResource(request, prepared)
-            },
+          result = await trace("relink-prepare", 0, () =>
+            preparation.withAdmittedLocalFiles(
+              {
+                files: [
+                  {
+                    ...(localSource.mediaType === undefined ? {} : { mediaType: localSource.mediaType }),
+                    name: localSource.name,
+                    sourceId: "relink",
+                    sourcePath: token.sourcePath,
+                  },
+                ],
+                projectId: active.projectId,
+              },
+              async (prepared) => {
+                requireCompatibleRelinkPreparation(live.node, prepared)
+                await recheckLiveRelinkScope(event, active, input.nodeId, live.reference, options)
+                return trace("relink-submit", 0, () => relinkPreparedResource(request, prepared))
+              },
+            ),
           )
         } else {
+          const hostSource = input.source
           if (!preparation.prepare) throw new Error("Canvas resource relink preparation is unavailable")
-          const prepared = await preparation.prepare({
-            canvasId: active.canvasId,
-            scopeId: active.projectId,
-            sources: [{ ...input.source, sourceId: "relink" }],
-          })
+          const prepared = await trace("relink-prepare", 0, () =>
+            preparation.prepare!({
+              canvasId: active.canvasId,
+              scopeId: active.projectId,
+              sources: [{ ...hostSource, sourceId: "relink" }],
+            }),
+          )
           requireCompatibleRelinkPreparation(live.node, prepared)
           await recheckLiveRelinkScope(event, active, input.nodeId, live.reference, options)
-          result = await relinkPreparedResource(request, prepared)
+          result = await trace("relink-submit", 0, () => relinkPreparedResource(request, prepared))
         }
-        const delivery = await options.sessions.deliverApplicationCommit({
-          ref: { canvasId: active.canvasId, scopeId: active.projectId },
-          rendererActorId: `desktop:renderer:${event.sender.id}`,
-          sessionId: input.sessionId,
-          result,
-        })
+        const delivery = await trace("response-projection-invalidation", 0, () =>
+          options.sessions.deliverApplicationCommit({
+            ref: { canvasId: active.canvasId, scopeId: active.projectId },
+            rendererActorId: `desktop:renderer:${event.sender.id}`,
+            sessionId: input.sessionId,
+            result,
+          }),
+        )
         return {
           delivery,
           operationReceipt: result.operationReceipt,

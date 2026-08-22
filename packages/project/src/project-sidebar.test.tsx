@@ -1,5 +1,10 @@
 import { describe, expect, mock, test } from "bun:test"
-import type { ProjectFilesController, ProjectFilesControllerSnapshot } from "@convax/project-files"
+import {
+  parseProjectEntryDrag,
+  PROJECT_ENTRY_DRAG_TYPE,
+  type ProjectFilesController,
+  type ProjectFilesControllerSnapshot,
+} from "@convax/project-files"
 import { Window } from "happy-dom"
 import { act } from "react"
 import { createRoot, type Root } from "react-dom/client"
@@ -7,7 +12,11 @@ import { renderToStaticMarkup } from "react-dom/server"
 import type { ProjectController, ProjectControllerSnapshot } from "./controller"
 import { fitProjectFilename } from "./project-filename"
 import { ProjectSidebar } from "./project-sidebar"
-import { captureProjectVideoThumbnail, type ProjectFilePreviewHandle } from "./project-sidebar-items"
+import {
+  captureProjectImageThumbnail,
+  captureProjectVideoThumbnail,
+  type ProjectFilePreviewHandle,
+} from "./project-sidebar-items"
 
 const emptySnapshot: ProjectControllerSnapshot = {
   activeProjectId: null,
@@ -483,9 +492,9 @@ describe("ProjectSidebar", () => {
     const selectEntry = mock(() => undefined)
     const openEntry = mock(async () => undefined)
     const onFileActivate = mock(() => undefined)
-    const resolveFileThumbnailUrl = mock(async ({ path }: { path: string }) =>
-      path.endsWith(".png") ? "data:image/png;base64,cHJldmlldw==" : null,
-    )
+    const resolveFileThumbnailUrl = mock(() => {
+      throw new Error("The preview lease must own production image thumbnail decoding")
+    })
     const releasePreview = mock(async () => undefined)
     const openFilePreview = mock(async ({ path }: { path: string; projectId: string; purpose: string }) => ({
       release: releasePreview,
@@ -514,6 +523,13 @@ describe("ProjectSidebar", () => {
             videoHeight: { configurable: true, value: 720 },
             videoWidth: { configurable: true, value: 1_280 },
           })
+        }
+        if (name === "img") {
+          Object.defineProperties(element, {
+            naturalHeight: { configurable: true, value: 900 },
+            naturalWidth: { configurable: true, value: 1_600 },
+          })
+          queueMicrotask(() => element.dispatchEvent(new Event("load")))
         }
         return element
       },
@@ -556,6 +572,7 @@ describe("ProjectSidebar", () => {
         ),
       )
       await act(async () => {
+        await Bun.sleep(0)
         await Promise.resolve()
         await Promise.resolve()
       })
@@ -567,18 +584,23 @@ describe("ProjectSidebar", () => {
 
       const row = container.querySelector<HTMLElement>('[data-project-entry-path="Media/reference.png"]')!
       const thumbnail = row.querySelector<HTMLImageElement>("img")
-      expect(thumbnail?.src).toBe("data:image/png;base64,cHJldmlldw==")
-      expect(resolveFileThumbnailUrl).toHaveBeenCalledTimes(1)
+      expect(thumbnail?.src).toBe("data:image/jpeg;base64,bW91bnQtY292ZXI=")
+      expect(resolveFileThumbnailUrl).not.toHaveBeenCalled()
       expect(
         container.querySelector<HTMLElement>('[data-project-entry-path="Media/source.mp4"]')?.querySelector("img")?.src,
       ).toBe("data:image/jpeg;base64,bW91bnQtY292ZXI=")
-      expect(drawImage).toHaveBeenCalledTimes(1)
+      expect(drawImage).toHaveBeenCalledTimes(2)
+      expect(openFilePreview).toHaveBeenCalledWith({
+        path: "Media/reference.png",
+        projectId: "project-1",
+        purpose: "thumbnail",
+      })
       expect(openFilePreview).toHaveBeenCalledWith({
         path: "Media/source.mp4",
         projectId: "project-1",
         purpose: "thumbnail",
       })
-      expect(releasePreview).toHaveBeenCalledTimes(1)
+      expect(releasePreview).toHaveBeenCalledTimes(2)
 
       await act(async () => row.click())
       expect(selectEntry).toHaveBeenCalledWith("Media/reference.png", { range: false, toggle: false })
@@ -605,9 +627,284 @@ describe("ProjectSidebar", () => {
         await Bun.sleep(110)
       })
       expect(document.querySelector('[data-project-file-preview="Media/source.mp4"]')).toBeNull()
-      expect(releasePreview).toHaveBeenCalledTimes(2)
+      expect(releasePreview).toHaveBeenCalledTimes(3)
+
+      const dragData = new Map<string, string>()
+      const dragStart = new Event("dragstart", { bubbles: true })
+      Object.defineProperty(dragStart, "dataTransfer", {
+        value: {
+          effectAllowed: "none",
+          setData(type: string, value: string) {
+            dragData.set(type, value)
+          },
+        },
+      })
+      await act(async () => row.dispatchEvent(dragStart))
+      expect(parseProjectEntryDrag(dragData.get(PROJECT_ENTRY_DRAG_TYPE) ?? "")?.entries).toEqual([
+        {
+          kind: "file",
+          name: "reference.png",
+          path: "Media/reference.png",
+          presentation: {
+            intrinsicHeight: 900,
+            intrinsicWidth: 1_600,
+            mediaKind: "image",
+            thumbnailDataUrl: "data:image/jpeg;base64,bW91bnQtY292ZXI=",
+          },
+        },
+      ])
+
+      const videoDragData = new Map<string, string>()
+      const videoDragStart = new Event("dragstart", { bubbles: true })
+      Object.defineProperty(videoDragStart, "dataTransfer", {
+        value: {
+          effectAllowed: "none",
+          setData(type: string, value: string) {
+            videoDragData.set(type, value)
+          },
+        },
+      })
+      await act(async () => videoRow.dispatchEvent(videoDragStart))
+      expect(parseProjectEntryDrag(videoDragData.get(PROJECT_ENTRY_DRAG_TYPE) ?? "")?.entries).toEqual([
+        {
+          kind: "file",
+          name: "source.mp4",
+          path: "Media/source.mp4",
+          presentation: {
+            intrinsicHeight: 720,
+            intrinsicWidth: 1_280,
+            mediaKind: "video",
+            thumbnailDataUrl: "data:image/jpeg;base64,bW91bnQtY292ZXI=",
+          },
+        },
+      ])
     } finally {
       Object.defineProperty(document, "createElement", { configurable: true, value: originalCreateElement })
+      if (root) await act(async () => root?.unmount())
+      container.remove()
+      await restoreWindow()
+    }
+  })
+
+  test("keeps legacy thumbnail resolvers compatible while normalizing structured intrinsic metadata", async () => {
+    const restoreWindow = installTestWindow()
+    const container = document.createElement("div")
+    document.body.append(container)
+    let root: Root | undefined
+    const entries = [
+      {
+        kind: "file" as const,
+        modifiedAt: 21,
+        name: "structured.png",
+        parentPath: "",
+        path: "Media/structured.png",
+        size: 21,
+      },
+      {
+        kind: "file" as const,
+        modifiedAt: 22,
+        name: "legacy.png",
+        parentPath: "",
+        path: "Media/legacy.png",
+        size: 22,
+      },
+      {
+        kind: "file" as const,
+        modifiedAt: 23,
+        name: "broken.png",
+        parentPath: "",
+        path: "Media/broken.png",
+        size: 23,
+      },
+    ]
+    const resolveFileThumbnailUrl = mock(({ path }: { path: string }) => {
+      if (path.endsWith("structured.png")) {
+        return {
+          dataUrl: "data:image/png;base64,c3RydWN0dXJlZA==",
+          intrinsicHeight: 600,
+          intrinsicWidth: 800,
+        }
+      }
+      if (path.endsWith("legacy.png")) return "data:image/png;base64,bGVnYWN5"
+      throw new Error("synchronous thumbnail resolver failure")
+    })
+    const selectEntry = mock(() => undefined)
+    const filesSnapshot: ProjectFilesControllerSnapshot = {
+      ...activeFilesSnapshot,
+      listings: {
+        "": {
+          entries,
+          path: "",
+          projectId: "project-1",
+        },
+      },
+    }
+    try {
+      root = createRoot(container)
+      await act(async () =>
+        root?.render(
+          <ProjectSidebar
+            controller={
+              {
+                getSnapshot: () => activeSnapshot,
+                initialize: async () => undefined,
+                subscribe: () => () => undefined,
+              } as unknown as ProjectController
+            }
+            filesController={
+              {
+                getSnapshot: () => filesSnapshot,
+                selectEntry,
+                subscribe: () => () => undefined,
+              } as unknown as ProjectFilesController
+            }
+            presentation="workspace"
+            resolveFileThumbnailUrl={resolveFileThumbnailUrl}
+          />,
+        ),
+      )
+      await act(async () => {
+        await Bun.sleep(0)
+        await Promise.resolve()
+      })
+
+      expect(
+        container
+          .querySelector<HTMLElement>('[data-project-entry-path="Media/structured.png"]')
+          ?.querySelector<HTMLImageElement>("img")?.src,
+      ).toBe("data:image/png;base64,c3RydWN0dXJlZA==")
+      expect(
+        container
+          .querySelector<HTMLElement>('[data-project-entry-path="Media/legacy.png"]')
+          ?.querySelector<HTMLImageElement>("img")?.src,
+      ).toBe("data:image/png;base64,bGVnYWN5")
+      expect(
+        container
+          .querySelector<HTMLElement>('[data-project-entry-path="Media/broken.png"]')
+          ?.querySelector<HTMLImageElement>("img"),
+      ).toBeNull()
+      expect(resolveFileThumbnailUrl).toHaveBeenCalledTimes(3)
+
+      const dragEntry = async (path: string) => {
+        const data = new Map<string, string>()
+        const dragStart = new Event("dragstart", { bubbles: true })
+        Object.defineProperty(dragStart, "dataTransfer", {
+          value: {
+            effectAllowed: "none",
+            setData(type: string, value: string) {
+              data.set(type, value)
+            },
+          },
+        })
+        await act(async () =>
+          container.querySelector<HTMLElement>(`[data-project-entry-path="${path}"]`)?.dispatchEvent(dragStart),
+        )
+        return parseProjectEntryDrag(data.get(PROJECT_ENTRY_DRAG_TYPE) ?? "")?.entries[0]
+      }
+      expect(await dragEntry("Media/structured.png")).toMatchObject({
+        presentation: {
+          intrinsicHeight: 600,
+          intrinsicWidth: 800,
+          mediaKind: "image",
+          thumbnailDataUrl: "data:image/png;base64,c3RydWN0dXJlZA==",
+        },
+      })
+      expect(await dragEntry("Media/legacy.png")).not.toHaveProperty("presentation")
+    } finally {
+      if (root) await act(async () => root?.unmount())
+      container.remove()
+      await restoreWindow()
+    }
+  })
+
+  test("releases an image-thumbnail lease after decode failure", async () => {
+    const restoreWindow = installTestWindow()
+    const originalCreateElement = document.createElement.bind(document)
+    Object.defineProperty(document, "createElement", {
+      configurable: true,
+      value: (name: string, options?: ElementCreationOptions) => {
+        const element = originalCreateElement(name, options)
+        if (name === "img") queueMicrotask(() => element.dispatchEvent(new Event("error")))
+        return element
+      },
+    })
+    const release = mock(async () => undefined)
+    try {
+      await expect(
+        captureProjectImageThumbnail(
+          { path: "Media/invalid.png", projectId: "project-1" },
+          async () => ({ release, url: "convax-project-preview://lease/invalid" }),
+          new AbortController().signal,
+        ),
+      ).rejects.toThrow("could not be decoded")
+      expect(release).toHaveBeenCalledTimes(1)
+    } finally {
+      Object.defineProperty(document, "createElement", { configurable: true, value: originalCreateElement })
+      await restoreWindow()
+    }
+  })
+
+  test("releases an image-thumbnail lease when its row unmounts during open", async () => {
+    const restoreWindow = installTestWindow()
+    const container = document.createElement("div")
+    document.body.append(container)
+    let root: Root | undefined
+    let resolveOpen!: (handle: ProjectFilePreviewHandle) => void
+    const opened = new Promise<ProjectFilePreviewHandle>((resolve) => {
+      resolveOpen = resolve
+    })
+    const release = mock(async () => undefined)
+    const openFilePreview = mock(() => opened)
+    const imageEntry = {
+      kind: "file" as const,
+      modifiedAt: 24,
+      name: "unmounted.png",
+      parentPath: "",
+      path: "Media/unmounted.png",
+      size: 24,
+    }
+    const filesSnapshot: ProjectFilesControllerSnapshot = {
+      ...activeFilesSnapshot,
+      listings: { "": { entries: [imageEntry], path: "", projectId: "project-1" } },
+    }
+    try {
+      root = createRoot(container)
+      await act(async () =>
+        root?.render(
+          <ProjectSidebar
+            controller={
+              {
+                getSnapshot: () => activeSnapshot,
+                initialize: async () => undefined,
+                subscribe: () => () => undefined,
+              } as unknown as ProjectController
+            }
+            filesController={
+              {
+                getSnapshot: () => filesSnapshot,
+                subscribe: () => () => undefined,
+              } as unknown as ProjectFilesController
+            }
+            openFilePreview={openFilePreview}
+            presentation="workspace"
+          />,
+        ),
+      )
+      expect(openFilePreview).toHaveBeenCalledWith({
+        path: "Media/unmounted.png",
+        projectId: "project-1",
+        purpose: "thumbnail",
+      })
+
+      await act(async () => root?.unmount())
+      root = undefined
+      await act(async () => {
+        resolveOpen({ release, url: "convax-project-preview://lease/unmounted" })
+        await Promise.resolve()
+        await Promise.resolve()
+      })
+      expect(release).toHaveBeenCalledTimes(1)
+    } finally {
       if (root) await act(async () => root?.unmount())
       container.remove()
       await restoreWindow()

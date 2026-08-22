@@ -373,7 +373,7 @@ class MountedDesktopCanvasRendererSession implements DesktopCanvasRendererSessio
       this.#visualHistory.bindStagedRoot(stagedRoot, receipt.operationId, before, after)
     } else if (stagedRoot) {
       this.#visualHistory.rejectStagedRoot(stagedRoot)
-    } else if (after) {
+    } else if (after && receipt.semanticRoot) {
       this.#visualHistory.record(receipt.operationId, before, after)
     }
   }

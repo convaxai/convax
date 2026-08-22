@@ -49,9 +49,9 @@ This package owns the durable Project aggregate and native Project adapters.
 - `ProjectSidebar` composes injected controllers and owns only Project-specific UI,
   including its internal Canvases/Files vertical split.
 - `ProjectSidebar` requests bounded row covers independently from full previews.
-  Mounted video rows use a bounded-concurrency thumbnail-purpose lease, capture one
-  small Chromium frame, and immediately release it; they never wait for hover. A
-  delayed hover owns its own disposable full-preview handle. Unmount cancels queued
+  Mounted image and video rows use a bounded-concurrency thumbnail-purpose lease,
+  capture one small Chromium cover, and immediately release it; they never wait for
+  hover. A delayed hover owns its own disposable full-preview handle. Unmount cancels queued
   cover work, and rows never retain complete-media data URLs.
 - Browser-safe entry points never import Node modules. Native I/O stays under
   `src/node/**` and performs real-path/containment validation.
@@ -68,9 +68,17 @@ This package owns the durable Project aggregate and native Project adapters.
   caller-selectable provenance.
 - Project Canvas media inspection addresses the admitted portable resource
   reference, not the original external path. Project/node opens the exact stable
-  Project file or verified managed blob; a Desktop-supplied decoder may inspect
-  those bytes before the Canvas resource command is constructed. Never persist the
-  decoder result as Project authority or accept renderer dimensions as proof.
+  Project file or verified managed blob once, without routing those bytes through a
+  renderer-facing data URL. A stable Project-file read carries the SHA-256 it
+  verified while reading; the process-local ProjectIndex file application may reuse
+  that optional digest without copying or hashing the complete bytes again, while
+  callers without it retain the defensive copy-and-hash path and the durable blob
+  publisher always verifies bytes against the resulting reference. Proof publication and a Desktop-supplied bounded
+  image/video header inspector may consume that same exact-byte identity
+  concurrently before the Canvas
+  resource command is constructed; `media-read` and `media-inspect` diagnostics
+  cover those stages. Never persist the inspection result as Project authority or
+  accept renderer dimensions as proof.
 - Managed-asset admission, reference admission and GC use one Desktop-composed
   `ProjectManagedAssetStore` and its Project-scoped in-process asset mutex. GC derives
   liveness from the validated ProjectIndex current-resource projection, waits
@@ -86,7 +94,14 @@ This package owns the durable Project aggregate and native Project adapters.
   Project Canvas hydration may attach a concrete Project reference transiently, but
   must restore canonical Canvas metadata before returning. External-tool staging uses
   the same Project-owned exact-proof resolver and never infers a path or managed-blob
-  class outside this owner boundary. `ProjectBlobReplicationStoreV2`
+  class outside this owner boundary. Project/canvas is the sole owner that classifies
+  a projected node as Project-hydratable: it accepts either one valid legacy concrete
+  reference or one valid canonical Canvas resource reference, enforces file/folder
+  kind compatibility, and resolves the canonical form through current ProjectIndex
+  state. A targeted stale projection must honor the caller's exact node-id predicate,
+  leave unrelated resources unchanged, tolerate already-ready or concurrently deleted
+  targets, and reject an existing target whose host-owned resource metadata is invalid.
+  `ProjectBlobReplicationStoreV2`
   may cache exact bytes and rebuild a
   local presence index, but it cannot choose a version. Receive is one resumable
   contiguous transfer prefix; full length/SHA-256, create-new publication, file and

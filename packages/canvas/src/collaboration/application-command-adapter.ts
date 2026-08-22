@@ -430,7 +430,7 @@ export function adaptCanvasApplicationCommand(input: {
             items: Object.freeze([Object.freeze({
               title: command.label,
               expectedClass: command.kind,
-              size: Object.freeze(command.size === undefined ? { width: 240, height: 180 } : { ...command.size }),
+              size: Object.freeze(command.size === undefined ? getCanvasResourcePresentationSize(command.kind) : { ...command.size }),
               generationRun,
             })]),
             relation,
@@ -689,7 +689,7 @@ function adaptPendingResourceCreate(
         Object.freeze({
           title: command.label,
           expectedClass: command.kind,
-          size: Object.freeze({ width: 240, height: 180 }),
+          size: Object.freeze(getCanvasResourcePresentationSize(command.kind)),
         }),
       ]),
       relation,

@@ -7,7 +7,10 @@ import { canvasProjectionResourceMetadataKey } from "@convax/canvas/collaboratio
 import { createCanvasDocument, createMediaNode, createTextNode } from "@convax/canvas/core"
 import { encodeBase64url, ordinarySha256, parseId128, parseProjectId } from "@convax/collaboration"
 import { projectResourceReferenceKey } from "../../canvas/project-resources"
-import { projectIndexResourceReferenceDigest, type ProjectIndexResourceReference } from "../../collaboration/project-index"
+import {
+  projectIndexResourceReferenceDigest,
+  type ProjectIndexResourceReference,
+} from "../../collaboration/project-index"
 import { NodeProjectManager } from "../project-manager"
 import { ProjectCanvasResourceHydrator } from "./project-canvas-resource-hydrator"
 import { ProjectManagedAssetStore } from "./project-managed-asset-store"
@@ -322,13 +325,17 @@ describe("ProjectCanvasResourceHydrator", () => {
       },
       {
         currentResources: {
-          async queryCurrentBlobDigests() { return new Set([reference.blob.digest]) },
+          async queryCurrentBlobDigests() {
+            return new Set([reference.blob.digest])
+          },
           async queryCurrentResources() {
-            return [{
-              materializedPath: "assets/images/hero.png",
-              reference,
-              storageClass: "project-file" as const,
-            }]
+            return [
+              {
+                materializedPath: "assets/images/hero.png",
+                reference,
+                storageClass: "project-file" as const,
+              },
+            ]
           },
         },
         maximumMediaBytes: 1024,
@@ -357,10 +364,21 @@ describe("ProjectCanvasResourceHydrator", () => {
             state: { status: "stale" },
           },
         }),
+        createMediaNode({
+          id: "untouched",
+          position: { x: 20, y: 0 },
+          resource: {
+            id: "untouched-resource",
+            kind: "image",
+            metadata: { [canvasProjectionResourceMetadataKey]: resource },
+            name: "untouched.png",
+            state: { status: "stale" },
+          },
+        }),
       ],
     })
 
-    const hydrated = await canonicalHydrator.hydrateStale({ document, projectId })
+    const hydrated = await canonicalHydrator.hydrateStale({ document, nodeIds: ["hero"], projectId })
 
     expect(hydrated.nodes[0]!.data.metadata).toEqual({
       [canvasProjectionResourceMetadataKey]: resource,
@@ -371,6 +389,66 @@ describe("ProjectCanvasResourceHydrator", () => {
       name: "hero.png",
       status: "ready",
       url: expect.stringContaining("convax-asset://"),
+    })
+    expect(hydrated.nodes[1]).toBe(document.nodes[1])
+    expect(hydrated.nodes[1]!.data.resourceState).toEqual({ status: "stale" })
+  })
+
+  test("hydrates the first stale canonical new-text projection into an immediately editable runtime", async () => {
+    const bytes = Buffer.from("# New note", "utf8")
+    await fs.mkdir(path.join(projectRoot, "Notes"), { recursive: true })
+    await fs.writeFile(path.join(projectRoot, "Notes", "new-note.md"), bytes)
+    const reference = currentProjectReference(projectId, bytes, "text/markdown")
+    const resource = {
+      format: "convax.canvas-resource-ref" as const,
+      uri: reference.canonicalUri,
+      mediaClass: "text" as const,
+      mime: reference.blob.mime,
+      byteLength: reference.blob.byteLength,
+      contentDigest: reference.blob.digest,
+      ownerProofDigest: projectIndexResourceReferenceDigest(reference),
+    }
+    let currentResourceQueries = 0
+    const canonicalHydrator = new ProjectCanvasResourceHydrator(manager, assets, () => "unused", {
+      currentResources: {
+        async queryCurrentBlobDigests() {
+          return new Set([reference.blob.digest])
+        },
+        async queryCurrentResources() {
+          currentResourceQueries += 1
+          return [{ materializedPath: "Notes/new-note.md", reference, storageClass: "project-file" as const }]
+        },
+      },
+    })
+    const metadata = { [canvasProjectionResourceMetadataKey]: resource }
+    const document = createCanvasDocument({
+      id: "canvas-new-text-first-projection",
+      nodes: [
+        createTextNode({
+          id: "new-text",
+          metadata,
+          name: "new-note.md",
+          position: { x: 0, y: 0 },
+          resourceState: { mediaType: "text/markdown", name: "new-note.md", status: "stale" },
+        }),
+      ],
+    })
+
+    const hydrated = await canonicalHydrator.hydrateStale({
+      document,
+      nodeIds: ["new-text"],
+      projectId,
+    })
+
+    expect(currentResourceQueries).toBe(1)
+    expect(hydrated.nodes[0]!.data.metadata).toBe(metadata)
+    expect(hydrated.nodes[0]!.data.resourceState).toEqual({
+      contentRevision: reference.blob.digest,
+      editableText: true,
+      mediaType: "text/markdown",
+      name: "new-note.md",
+      status: "ready",
+      text: "# New note",
     })
   })
 
@@ -397,7 +475,9 @@ describe("ProjectCanvasResourceHydrator", () => {
       },
       {
         currentResources: {
-          async queryCurrentBlobDigests() { return new Set([reference.blob.digest]) },
+          async queryCurrentBlobDigests() {
+            return new Set([reference.blob.digest])
+          },
           async queryCurrentResources() {
             return [{ materializedPath: null, reference, storageClass: "managed-blob" as const }]
           },
@@ -416,20 +496,22 @@ describe("ProjectCanvasResourceHydrator", () => {
     }
     const document = createCanvasDocument({
       id: "canvas-canonical-managed-resource",
-      nodes: [createMediaNode({
-        id: "managed",
-        position: { x: 0, y: 0 },
-        resource: {
-          id: "managed-resource",
-          kind: "image",
-          metadata: { [canvasProjectionResourceMetadataKey]: resource },
-          name: "managed.png",
-          state: { status: "stale" },
-        },
-      })],
+      nodes: [
+        createMediaNode({
+          id: "managed",
+          position: { x: 0, y: 0 },
+          resource: {
+            id: "managed-resource",
+            kind: "image",
+            metadata: { [canvasProjectionResourceMetadataKey]: resource },
+            name: "managed.png",
+            state: { status: "stale" },
+          },
+        }),
+      ],
     })
 
-    const hydrated = await canonicalHydrator.hydrateStale({ document, projectId })
+    const hydrated = await canonicalHydrator.hydrateStale({ document, nodeIds: ["managed"], projectId })
 
     expect(hydrated.nodes[0]!.data.metadata).toEqual({ [canvasProjectionResourceMetadataKey]: resource })
     expect(hydrated.nodes[0]!.data.resourceState).toMatchObject({
@@ -438,6 +520,65 @@ describe("ProjectCanvasResourceHydrator", () => {
       status: "ready",
       url: `convax-asset://${projectId}/managed-asset?sha256=${managed.sha256}`,
     })
+  })
+
+  test("treats ready and deleted targeted-resource races as no-ops but rejects a live invalid target", async () => {
+    const bytes = Buffer.from("ready", "utf8")
+    const reference = currentProjectReference(projectId, bytes, "text/markdown")
+    const resource = {
+      format: "convax.canvas-resource-ref" as const,
+      uri: reference.canonicalUri,
+      mediaClass: "text" as const,
+      mime: reference.blob.mime,
+      byteLength: reference.blob.byteLength,
+      contentDigest: reference.blob.digest,
+      ownerProofDigest: projectIndexResourceReferenceDigest(reference),
+    }
+    let currentResourceQueries = 0
+    const targetedHydrator = new ProjectCanvasResourceHydrator(manager, assets, () => "unused", {
+      currentResources: {
+        async queryCurrentBlobDigests() {
+          return new Set([reference.blob.digest])
+        },
+        async queryCurrentResources() {
+          currentResourceQueries += 1
+          return [{ materializedPath: "Notes/ready.md", reference, storageClass: "project-file" as const }]
+        },
+      },
+    })
+    const readyNode = createTextNode({
+      id: "ready",
+      metadata: { [canvasProjectionResourceMetadataKey]: resource },
+      position: { x: 0, y: 0 },
+      resourceState: { editableText: true, status: "ready", text: "ready" },
+    })
+    const readyDocument = createCanvasDocument({ id: "canvas-ready-race", nodes: [readyNode] })
+
+    const raced = await targetedHydrator.hydrateStale({
+      document: readyDocument,
+      nodeIds: ["ready", "deleted-before-main-query"],
+      projectId,
+    })
+
+    expect(currentResourceQueries).toBe(0)
+    expect(raced.nodes[0]).toBe(readyNode)
+    expect(raced.nodes[0]!.data.resourceState).toEqual({ editableText: true, status: "ready", text: "ready" })
+
+    const invalidDocument = createCanvasDocument({
+      id: "canvas-invalid-target",
+      nodes: [
+        createTextNode({
+          id: "invalid",
+          metadata: { [canvasProjectionResourceMetadataKey]: { ...resource, contentDigest: "invalid" } },
+          position: { x: 0, y: 0 },
+          resourceState: { status: "stale" },
+        }),
+      ],
+    })
+    await expect(
+      targetedHydrator.hydrateStale({ document: invalidDocument, nodeIds: ["invalid"], projectId }),
+    ).rejects.toThrow("not a Project-hydratable resource")
+    expect(currentResourceQueries).toBe(0)
   })
 
   test("does not reinterpret a current but unmaterialized Project file as a managed asset", async () => {
@@ -455,10 +596,14 @@ describe("ProjectCanvasResourceHydrator", () => {
     const canonicalHydrator = new ProjectCanvasResourceHydrator(
       manager,
       assets,
-      () => { throw new Error("Unmaterialized Project file must not receive a runtime URL") },
+      () => {
+        throw new Error("Unmaterialized Project file must not receive a runtime URL")
+      },
       {
         currentResources: {
-          async queryCurrentBlobDigests() { return new Set([reference.blob.digest]) },
+          async queryCurrentBlobDigests() {
+            return new Set([reference.blob.digest])
+          },
           async queryCurrentResources() {
             return [{ materializedPath: null, reference, storageClass: "project-file" as const }]
           },
@@ -467,17 +612,19 @@ describe("ProjectCanvasResourceHydrator", () => {
     )
     const document = createCanvasDocument({
       id: "canvas-declared-missing-resource",
-      nodes: [createMediaNode({
-        id: "missing",
-        position: { x: 0, y: 0 },
-        resource: {
-          id: "missing-resource",
-          kind: "image",
-          metadata: { [canvasProjectionResourceMetadataKey]: resource },
-          name: "missing.png",
-          state: { status: "stale" },
-        },
-      })],
+      nodes: [
+        createMediaNode({
+          id: "missing",
+          position: { x: 0, y: 0 },
+          resource: {
+            id: "missing-resource",
+            kind: "image",
+            metadata: { [canvasProjectionResourceMetadataKey]: resource },
+            name: "missing.png",
+            state: { status: "stale" },
+          },
+        }),
+      ],
     })
 
     const hydrated = await canonicalHydrator.hydrateStale({ document, projectId })
@@ -537,7 +684,11 @@ describe("ProjectCanvasResourceHydrator", () => {
   })
 })
 
-function currentProjectReference(projectIdValue: string, bytes: Uint8Array, mime: string): ProjectIndexResourceReference {
+function currentProjectReference(
+  projectIdValue: string,
+  bytes: Uint8Array,
+  mime: string,
+): ProjectIndexResourceReference {
   const projectId = parseProjectId(projectIdValue)
   const projectEpoch = parseId128(encodeBase64url(new Uint8Array(16).fill(1)))
   const digest = ordinarySha256(bytes)

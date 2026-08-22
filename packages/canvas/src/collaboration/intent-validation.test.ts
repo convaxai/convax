@@ -5,7 +5,7 @@ import { applyCanvasCandidateIntent } from "./reducer"
 import type { CanvasTypedIntentUnion } from "./types"
 import { derivedNodeRef } from "./validation"
 import { encodeCanvasCanonicalState } from "./ydoc"
-import { context, newCanvas, U0, VALID_FACTS } from "./test-fixtures.test"
+import { context, createAgent, newCanvas, nodeDataGuard, U0, VALID_FACTS } from "./test-fixtures.test"
 
 describe("Canvas v2 closed typed-intent admission", () => {
   test("closes all 25 discriminators and rejects document replacement/version/raw Yjs fields", () => {
@@ -25,6 +25,47 @@ describe("Canvas v2 closed typed-intent admission", () => {
       expect(() => assertCanvasTypedIntent({ ...intent, ...extra })).toThrow()
     expect(() => assertCanvasTypedIntent({ ...intent, format: "convax.typed-intent/1" })).toThrow()
     expect(() => assertCanvasTypedIntent({ ...intent, kind: "canvas.nodes.delete" })).toThrow()
+  })
+
+  test("keeps update-data on its original exact wire shape", () => {
+    const document = newCanvas()
+    const node = createAgent(document, context(2, 2, 1), "before")
+    const originalShape = {
+      format: "convax.typed-intent",
+      kind: "canvas.nodes.update-data",
+      guard: { node: nodeDataGuard(document, node), resourceProof: null },
+      body: {
+        node,
+        data: { format: "convax.canvas-node-data", kind: "agent", title: "after", instructions: null },
+      },
+    }
+
+    expect(() => assertCanvasTypedIntent(originalShape)).not.toThrow()
+    expect(decodeCanvasTypedIntent(encodeRestrictedJcs(originalShape))).toEqual(originalShape)
+    expect(() =>
+      assertCanvasTypedIntent({
+        ...originalShape,
+        body: { ...originalShape.body, size: { height: 180, width: 320 } },
+      }),
+    ).toThrow()
+    expect(() =>
+      assertCanvasTypedIntent({
+        ...originalShape,
+        body: { ...originalShape.body, size: null },
+      }),
+    ).toThrow()
+    expect(() =>
+      assertCanvasTypedIntent({
+        ...originalShape,
+        body: { ...originalShape.body, size: { height: 0, width: 320 } },
+      }),
+    ).toThrow()
+    expect(() =>
+      assertCanvasTypedIntent({
+        ...originalShape,
+        body: { ...originalShape.body, unexpected: true },
+      }),
+    ).toThrow()
   })
 
   test("rejects nested field tampering before candidate mutation", () => {

@@ -56,15 +56,15 @@ export class CanvasVisualHistoryCoordinator {
   }
 
   record(rootOperationId: string, before: CanvasVisualHistoryAuthority, after: CanvasVisualHistoryAuthority): void {
-    if (!rootOperationId || !hasPresentationDifference(before.document, after.document)) return
+    if (!rootOperationId) return
     if (this.#pending.length > 0) this.reset()
     this.#entries.splice(this.#cursor)
     this.#entries.push({
       entryKey: `committed:${rootOperationId}`,
       rootOperationId,
       provisional: false,
-      before: cloneAuthority(before),
-      after: cloneAuthority(after),
+      before: retainAuthority(before),
+      after: retainAuthority(after),
     })
     while (this.#entries.length > this.#maximumEntries) this.#entries.shift()
     this.#cursor = this.#entries.length
@@ -107,8 +107,8 @@ export class CanvasVisualHistoryCoordinator {
     if (!entry || !entry.provisional || !rootOperationId) return false
     entry.rootOperationId = rootOperationId
     entry.provisional = false
-    entry.before = cloneAuthority(actualBefore)
-    entry.after = actualAfter ? cloneAuthority(actualAfter) : null
+    entry.before = retainAuthority(actualBefore)
+    entry.after = actualAfter ? retainAuthority(actualAfter) : null
     this.#refreshPendingPredictions(entry)
     return true
   }
@@ -171,8 +171,8 @@ export class CanvasVisualHistoryCoordinator {
       this.reset()
       return false
     }
-    if (prediction.direction === "undo") entry.before = cloneAuthority(actualAuthority)
-    else entry.after = cloneAuthority(actualAuthority)
+    if (prediction.direction === "undo") entry.before = retainAuthority(actualAuthority)
+    else entry.after = retainAuthority(actualAuthority)
     this.overlay.settle(prediction.token)
     const pendingIndex = this.#pending.findIndex((candidate) => candidate.token === prediction.token)
     if (pendingIndex >= 0) this.#pending.splice(pendingIndex, 1)
@@ -204,15 +204,14 @@ export class CanvasVisualHistoryCoordinator {
     before: CanvasVisualHistoryAuthority | null,
     after: CanvasVisualHistoryAuthority | null,
   ): string | null {
-    if (before && after && !hasPresentationDifference(before.document, after.document)) return null
     this.#entries.splice(this.#cursor)
     const entryKey = `provisional:${commandId}`
     this.#entries.push({
       entryKey,
       rootOperationId: commandId,
       provisional: true,
-      before: before ? cloneAuthority(before) : null,
-      after: after ? cloneAuthority(after) : null,
+      before: before ? retainAuthority(before) : null,
+      after: after ? retainAuthority(after) : null,
     })
     while (this.#entries.length > this.#maximumEntries) this.#entries.shift()
     this.#cursor = this.#entries.length
@@ -351,34 +350,22 @@ function canvasNodePresentationSnapshot(node: CanvasNode, parentPresentationKey 
   })
 }
 
-function cloneAuthority(authority: CanvasVisualHistoryAuthority): CanvasVisualHistoryAuthority {
+/**
+ * Session projections are immutable replacement values. Visual history retains
+ * those authority values instead of synchronously cloning the complete Canvas in
+ * an input event. Presentation deltas still clone the one affected node when an
+ * undo/redo prediction is actually rendered.
+ */
+function retainAuthority(authority: CanvasVisualHistoryAuthority): CanvasVisualHistoryAuthority {
   return Object.freeze({
-    document: structuredClone(authority.document),
-    edgeEntities: Object.freeze(
-      authority.edgeEntities.map((entry) =>
-        Object.freeze({
-          edgeId: entry.edgeId,
-          entity: Object.freeze({ ...entry.entity }),
-        }),
-      ),
-    ),
-    nodeEntities: Object.freeze(
-      authority.nodeEntities.map((entry) =>
-        Object.freeze({
-          nodeId: entry.nodeId,
-          entity: Object.freeze({ ...entry.entity }),
-        }),
-      ),
-    ),
+    document: authority.document,
+    edgeEntities: authority.edgeEntities,
+    nodeEntities: authority.nodeEntities,
   })
 }
 
 function sameEdgePresentation(left: CanvasDocument["edges"][number], right: CanvasDocument["edges"][number]) {
   return left.source === right.source && left.target === right.target && left.data?.label === right.data?.label
-}
-
-function hasPresentationDifference(left: CanvasDocument, right: CanvasDocument): boolean {
-  return JSON.stringify(left) !== JSON.stringify(right)
 }
 
 function sameNodePresentation(left: CanvasNode, right: CanvasNode): boolean {
@@ -405,6 +392,13 @@ function applyRendererGeometryPresentation(
     const update = updates.get(node.id)
     const entity = entities.get(node.id)
     if (!update || !entity || entity.incarnation !== update.node.incarnation) return node
+    const positionChanged =
+      update.position !== undefined && (node.position.x !== update.position.x || node.position.y !== update.position.y)
+    const sizeChanged =
+      update.size !== undefined &&
+      update.size !== null &&
+      (node.style?.width !== update.size.width || node.style?.height !== update.size.height)
+    if (!positionChanged && !sizeChanged) return node
     changed = true
     return {
       ...node,
@@ -413,7 +407,7 @@ function applyRendererGeometryPresentation(
     }
   })
   if (!changed) return null
-  return cloneAuthority({
+  return retainAuthority({
     document: { ...authority.document, nodes },
     edgeEntities: authority.edgeEntities,
     nodeEntities: authority.nodeEntities,

@@ -1,7 +1,7 @@
 import { createContext, type ReactNode, useContext, useSyncExternalStore } from "react"
 import type { ToolInputField, ToolInputValue } from "@convax/ui"
 import type { CanvasGenerationTargetGuard, CanvasResourceAnchorOrigin, CanvasResourceSource } from "./application"
-import type { CanvasDocument, CanvasNode, CanvasPoint } from "./types"
+import type { CanvasDocument, CanvasNode, CanvasPoint, CanvasSize } from "./types"
 
 export { CanvasTextResourceConflictError } from "./application/errors"
 
@@ -33,6 +33,18 @@ export interface CanvasResourceMutationRequest {
   transfer?: CanvasResourceMutationTransfer
 }
 
+/**
+ * Host-neutral, renderer-only presentation for an optimistic resource card.
+ * It is never command input or authoritative Canvas geometry.
+ */
+export interface CanvasOptimisticResourcePresentation {
+  intrinsicSize: CanvasSize
+  mediaKind: "audio" | "image" | "video"
+  /** Short-lived renderer-safe URL used only by the presentation overlay. */
+  previewUrl?: string
+  title: string
+}
+
 export interface CanvasResourceMutationService {
   add(input: CanvasResourceMutationRequest): Promise<{
     /** The host already installed the same-frame authoritative projection. */
@@ -40,6 +52,12 @@ export interface CanvasResourceMutationService {
     createdNodeIds: readonly string[]
     warnings: readonly string[]
   }>
+  /** Results align with the request's files followed by resolved sources. */
+  preparePresentation?(
+    input: CanvasResourceMutationRequest,
+  ):
+    | readonly (CanvasOptimisticResourcePresentation | null)[]
+    | Promise<readonly (CanvasOptimisticResourcePresentation | null)[]>
   relink?(input: {
     file?: File
     nodeId: string
@@ -53,9 +71,12 @@ export interface CanvasResourceMutationService {
 }
 
 export interface CanvasResourceHydrationService {
-  markStale(document: CanvasDocument): CanvasDocument
+  markStale(document: CanvasDocument, shouldInvalidate?: CanvasResourceInvalidationPredicate): CanvasDocument
   hydrateStale(input: { document: CanvasDocument; signal: AbortSignal }): Promise<CanvasDocument>
 }
+
+/** Host-supplied narrowing for a resource change whose affected Canvas nodes are known. */
+export type CanvasResourceInvalidationPredicate = (node: CanvasDocument["nodes"][number]) => boolean
 
 export interface CanvasFolderBrowseEntry {
   /** Host-opaque identifier that is valid only for the owning folder node. */
@@ -542,6 +563,7 @@ function inferCanvasGenerationInputRole(node: CanvasNode): CanvasGenerationInput
   if (node.data.kind !== "image" && node.data.kind !== "video" && node.data.kind !== "audio") return undefined
   const resourceState = node.data.resourceState
   if (!resourceState || typeof resourceState !== "object") return undefined
+  if ("localPreview" in resourceState && resourceState.localPreview === true) return undefined
   if (!("url" in resourceState) || typeof resourceState.url !== "string" || !resourceState.url.trim()) return undefined
   if (node.data.kind === "image") return "reference_image"
   if (node.data.kind === "video") return "reference_video"

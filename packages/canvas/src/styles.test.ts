@@ -69,6 +69,20 @@ describe("Canvas file-card assistant sizing", () => {
     expect(interactiveMediaRule).not.toContain("0 0 0 8px")
   })
 
+  test("applies focused node chrome immediately across optimistic-authority handoff", async () => {
+    const styles = await Bun.file(new URL("./styles.css", import.meta.url)).text()
+    const nodeSurfaceRule = cssRule(styles, ".convax-canvas .convax-node__surface")
+    const focusedConnectionRule =
+      styles.match(/\.convax-canvas \.convax-node\.is-selected > \.convax-node__connection,[\s\S]*?\{[^}]+\}/)?.[0] ??
+      ""
+
+    expect(nodeSurfaceRule).toContain("transition: opacity var(--canvas-motion-feedback)")
+    expect(nodeSurfaceRule).not.toContain("border-color var(--canvas-motion-feedback)")
+    expect(nodeSurfaceRule).not.toContain("box-shadow var(--canvas-motion-feedback)")
+    expect(focusedConnectionRule).toContain(".react-flow__node.selected")
+    expect(focusedConnectionRule).toContain("transition: none")
+  })
+
   test("gives the expanded editor a calm global paper surface without fixed toolbar chrome", async () => {
     const styles = await Bun.file(new URL("./styles.css", import.meta.url)).text()
     const expandedEditorRule =

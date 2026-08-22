@@ -34,11 +34,17 @@ export type ProjectFilePreviewOpener = (input: {
   purpose: ProjectFilePreviewPurpose
 }) => Promise<ProjectFilePreviewHandle>
 
-interface QueuedVideoThumbnailTask {
+interface QueuedMediaThumbnailTask {
   reject(error: unknown): void
-  resolve(value: string): void
-  run(): Promise<string>
+  resolve(value: ProjectMediaThumbnail): void
+  run(): Promise<ProjectMediaThumbnail>
   signal: AbortSignal
+}
+
+export interface ProjectMediaThumbnail {
+  dataUrl: string
+  intrinsicHeight: number
+  intrinsicWidth: number
 }
 
 const codeExtensions = new Set(["css", "html", "js", "jsx", "mjs", "ts", "tsx"])
@@ -48,10 +54,10 @@ const videoExtensions = new Set(["m4v", "mov", "mp4", "webm"])
 const audioExtensions = new Set(["aac", "flac", "m4a", "mp3", "ogg", "opus", "wav"])
 
 const textPreviewCache = new Map<string, ProjectTextPreviewContents>()
-const maximumConcurrentVideoThumbnails = 2
-const videoThumbnailTimeoutMs = 15_000
-const queuedVideoThumbnailTasks: QueuedVideoThumbnailTask[] = []
-let activeVideoThumbnailTasks = 0
+const maximumConcurrentMediaThumbnails = 2
+const mediaThumbnailTimeoutMs = 15_000
+const queuedMediaThumbnailTasks: QueuedMediaThumbnailTask[] = []
+let activeMediaThumbnailTasks = 0
 
 export function FilePreviewPortal(props: {
   controller: ProjectFilesController
@@ -242,7 +248,7 @@ export function captureProjectVideoThumbnail(
   openPreview: ProjectFilePreviewOpener,
   signal: AbortSignal,
 ) {
-  return queueVideoThumbnail(signal, async () => {
+  return queueMediaThumbnail(signal, async () => {
     throwIfAborted(signal)
     const handle = await openPreview({ ...input, purpose: "thumbnail" })
     try {
@@ -254,11 +260,28 @@ export function captureProjectVideoThumbnail(
   })
 }
 
+export function captureProjectImageThumbnail(
+  input: { path: string; projectId: string },
+  openPreview: ProjectFilePreviewOpener,
+  signal: AbortSignal,
+) {
+  return queueMediaThumbnail(signal, async () => {
+    throwIfAborted(signal)
+    const handle = await openPreview({ ...input, purpose: "thumbnail" })
+    try {
+      throwIfAborted(signal)
+      return await captureImagePoster(handle.url, signal)
+    } finally {
+      await safelyReleasePreview(handle)
+    }
+  })
+}
+
 function captureVideoPoster(url: string, signal: AbortSignal) {
-  return new Promise<string>((resolve, reject) => {
+  return new Promise<ProjectMediaThumbnail>((resolve, reject) => {
     const video = document.createElement("video")
     let settled = false
-    const finish = (error?: unknown, poster?: string) => {
+    const finish = (error?: unknown, poster?: ProjectMediaThumbnail) => {
       if (settled) return
       settled = true
       clearTimeout(timeout)
@@ -273,10 +296,7 @@ function captureVideoPoster(url: string, signal: AbortSignal) {
     const onAbort = () => finish(abortError())
     const onError = () => finish(new Error("Project video thumbnail could not be decoded"))
     const onLoadedData = () => finish(undefined, videoPosterDataUrl(video))
-    const timeout = setTimeout(
-      () => finish(new Error("Project video thumbnail timed out")),
-      videoThumbnailTimeoutMs,
-    )
+    const timeout = setTimeout(() => finish(new Error("Project video thumbnail timed out")), mediaThumbnailTimeoutMs)
 
     signal.addEventListener("abort", onAbort, { once: true })
     video.addEventListener("error", onError, { once: true })
@@ -294,14 +314,43 @@ function captureVideoPoster(url: string, signal: AbortSignal) {
   })
 }
 
-function queueVideoThumbnail(signal: AbortSignal, run: () => Promise<string>) {
+function captureImagePoster(url: string, signal: AbortSignal) {
+  return new Promise<ProjectMediaThumbnail>((resolve, reject) => {
+    const image = document.createElement("img")
+    let settled = false
+    const finish = (error?: unknown, poster?: ProjectMediaThumbnail) => {
+      if (settled) return
+      settled = true
+      clearTimeout(timeout)
+      signal.removeEventListener("abort", onAbort)
+      image.removeEventListener("error", onError)
+      image.removeEventListener("load", onLoad)
+      image.removeAttribute("src")
+      if (error) reject(error)
+      else if (poster) resolve(poster)
+      else reject(new Error("Project image thumbnail frame is unavailable"))
+    }
+    const onAbort = () => finish(abortError())
+    const onError = () => finish(new Error("Project image thumbnail could not be decoded"))
+    const onLoad = () => finish(undefined, imagePosterDataUrl(image))
+    const timeout = setTimeout(() => finish(new Error("Project image thumbnail timed out")), mediaThumbnailTimeoutMs)
+
+    signal.addEventListener("abort", onAbort, { once: true })
+    image.addEventListener("error", onError, { once: true })
+    image.addEventListener("load", onLoad, { once: true })
+    image.crossOrigin = "anonymous"
+    image.src = url
+  })
+}
+
+function queueMediaThumbnail(signal: AbortSignal, run: () => Promise<ProjectMediaThumbnail>) {
   if (signal.aborted) return Promise.reject(abortError())
-  return new Promise<string>((resolve, reject) => {
-    const task: QueuedVideoThumbnailTask = { reject, resolve, run, signal }
+  return new Promise<ProjectMediaThumbnail>((resolve, reject) => {
+    const task: QueuedMediaThumbnailTask = { reject, resolve, run, signal }
     const onAbort = () => {
-      const index = queuedVideoThumbnailTasks.indexOf(task)
+      const index = queuedMediaThumbnailTasks.indexOf(task)
       if (index < 0) return
-      queuedVideoThumbnailTasks.splice(index, 1)
+      queuedMediaThumbnailTasks.splice(index, 1)
       reject(abortError())
     }
     signal.addEventListener("abort", onAbort, { once: true })
@@ -309,43 +358,60 @@ function queueVideoThumbnail(signal: AbortSignal, run: () => Promise<string>) {
       signal.removeEventListener("abort", onAbort)
       return run()
     }
-    queuedVideoThumbnailTasks.push(task)
-    drainVideoThumbnailQueue()
+    queuedMediaThumbnailTasks.push(task)
+    drainMediaThumbnailQueue()
   })
 }
 
-function drainVideoThumbnailQueue() {
-  while (activeVideoThumbnailTasks < maximumConcurrentVideoThumbnails) {
-    const task = queuedVideoThumbnailTasks.shift()
+function drainMediaThumbnailQueue() {
+  while (activeMediaThumbnailTasks < maximumConcurrentMediaThumbnails) {
+    const task = queuedMediaThumbnailTasks.shift()
     if (!task) return
     if (task.signal.aborted) {
       task.reject(abortError())
       continue
     }
-    activeVideoThumbnailTasks += 1
+    activeMediaThumbnailTasks += 1
     void task
       .run()
       .then(task.resolve, task.reject)
       .finally(() => {
-        activeVideoThumbnailTasks -= 1
-        drainVideoThumbnailQueue()
+        activeMediaThumbnailTasks -= 1
+        drainMediaThumbnailQueue()
       })
   }
 }
 
-function videoPosterDataUrl(video: HTMLVideoElement) {
+function videoPosterDataUrl(video: HTMLVideoElement): ProjectMediaThumbnail | undefined {
   if (video.videoWidth < 1 || video.videoHeight < 1) return undefined
+  return mediaPosterDataUrl(video, video.videoWidth, video.videoHeight)
+}
+
+function imagePosterDataUrl(image: HTMLImageElement): ProjectMediaThumbnail | undefined {
+  if (image.naturalWidth < 1 || image.naturalHeight < 1) return undefined
+  return mediaPosterDataUrl(image, image.naturalWidth, image.naturalHeight)
+}
+
+function mediaPosterDataUrl(
+  media: CanvasImageSource,
+  intrinsicWidth: number,
+  intrinsicHeight: number,
+): ProjectMediaThumbnail | undefined {
   try {
     const canvas = document.createElement("canvas")
     canvas.height = 40
     canvas.width = 40
     const context = canvas.getContext("2d")
     if (!context) return undefined
-    const scale = Math.max(canvas.width / video.videoWidth, canvas.height / video.videoHeight)
-    const width = video.videoWidth * scale
-    const height = video.videoHeight * scale
-    context.drawImage(video, (canvas.width - width) / 2, (canvas.height - height) / 2, width, height)
-    return canvas.toDataURL("image/jpeg", 0.78)
+    const scale = Math.max(canvas.width / intrinsicWidth, canvas.height / intrinsicHeight)
+    const width = intrinsicWidth * scale
+    const height = intrinsicHeight * scale
+    context.drawImage(media, (canvas.width - width) / 2, (canvas.height - height) / 2, width, height)
+    return {
+      dataUrl: canvas.toDataURL("image/jpeg", 0.78),
+      intrinsicHeight,
+      intrinsicWidth,
+    }
   } catch {
     return undefined
   }

@@ -715,10 +715,9 @@
   border-radius: var(--canvas-node-radius);
   background: var(--canvas-node-background);
   box-shadow: var(--canvas-floating-shadow);
-  transition:
-    border-color var(--canvas-motion-feedback) var(--canvas-motion-ease-standard),
-    box-shadow var(--canvas-motion-feedback) var(--canvas-motion-ease-standard),
-    opacity var(--canvas-motion-feedback) var(--canvas-motion-ease-standard);
+  /* Focus is state, not decoration: it must survive optimistic-authority
+     handoff without fading out and back in on the replacement DOM identity. */
+  transition: opacity var(--canvas-motion-feedback) var(--canvas-motion-ease-standard);
 }
 
 .convax-canvas .convax-node__surface--media {
@@ -1625,6 +1624,13 @@
 .convax-canvas .convax-node__connection.valid {
   opacity: 1;
   pointer-events: all;
+}
+
+.convax-canvas .convax-node.is-selected > .convax-node__connection,
+.convax-canvas .react-flow__node.selected .convax-node > .convax-node__connection,
+.convax-canvas .convax-node.is-selected > .convax-node__connection .convax-node__connection-icon,
+.convax-canvas .react-flow__node.selected .convax-node > .convax-node__connection .convax-node__connection-icon {
+  transition: none;
 }
 
 .convax-canvas .convax-node[data-canvas-node-entry-phase="pending-focus"].is-selected > .convax-node__connection,

@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test"
 import { connectCanvasNodes } from "../commands"
 import { createAgentNode, createCanvasDocument, createGroupNode, createMediaNode, createTextNode } from "../document"
+import { getCanvasResourcePresentationSize } from "../media-sizing"
 import type { CanvasAddResourcesCommand } from "./commands"
 import {
   applyCanvasBusinessCommand,
@@ -111,7 +112,7 @@ describe("canvas application commands", () => {
         resourceState: { status: "ready", text: "# Campaign brief" },
       },
       position: { x: 380, y: 36 },
-      style: { height: 240, width: 360 },
+      style: { height: 180, width: 320 },
     })
     expect(applied.document.nodes.find((node) => node.id === "text_node")?.data).not.toHaveProperty("format")
     expect(applied.document.edges.map((edge) => [edge.source, edge.target])).toEqual([
@@ -344,9 +345,7 @@ describe("canvas application commands", () => {
       connection: { source: group.id, target: card.id },
       type: "nodes.connect",
     })
-    expect(connected.document.edges).toEqual([
-      expect.objectContaining({ source: group.id, target: card.id }),
-    ])
+    expect(connected.document.edges).toEqual([expect.objectContaining({ source: group.id, target: card.id })])
 
     const related = applyCanvasBusinessCommand(document, {
       items: [
@@ -359,9 +358,7 @@ describe("canvas application commands", () => {
       relation: { anchorNodeIds: [group.id], mode: "connect" },
       type: "resources.add",
     })
-    expect(related.document.edges).toEqual([
-      expect.objectContaining({ source: group.id, target: "new-text" }),
-    ])
+    expect(related.document.edges).toEqual([expect.objectContaining({ source: group.id, target: "new-text" })])
 
     const nested = applyCanvasBusinessCommand(document, {
       items: [
@@ -470,7 +467,8 @@ describe("canvas application commands", () => {
           metadata: {},
           resourceState: { status: "ready", ...(kind === "text" ? { text: "" } : { url: "" }) },
         },
-        position: { x: 304, y: 0 },
+        position: { x: 344, y: 0 },
+        style: getCanvasResourcePresentationSize(kind),
         type: "file",
       })
       expect(applied.document.edges).toEqual([

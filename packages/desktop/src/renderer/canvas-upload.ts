@@ -1,6 +1,6 @@
-import type { CanvasResourceMutationRequest } from "@convax/canvas"
+import type { CanvasOptimisticResourcePresentation, CanvasResourceMutationRequest } from "@convax/canvas"
 import type { CanvasResourceSource } from "@convax/canvas/application"
-import { parseProjectEntryDrag, PROJECT_ENTRY_DRAG_TYPE } from "@convax/project-files/drag"
+import { parseProjectEntryDrag, PROJECT_ENTRY_DRAG_TYPE, type ProjectEntryDragEntry } from "@convax/project-files/drag"
 import type { CanvasResourceAddInput, CanvasResourceClient } from "../desktop-protocol"
 
 export interface CanvasUploadSources {
@@ -27,8 +27,7 @@ export interface CanvasUploadMutationRequest extends CanvasResourceMutationReque
   projectId: string
 }
 
-export interface CanvasUploadMutationHost
-  extends Pick<CanvasResourceClient, "add" | "createLocalFileToken"> {
+export interface CanvasUploadMutationHost extends Pick<CanvasResourceClient, "add" | "createLocalFileToken"> {
   createCommandId(): string
   createSourceId(): string
   sessionId: CanvasResourceAddInput["sessionId"]
@@ -54,10 +53,41 @@ export function resolveCanvasUploadItems(request: CanvasUploadRequest, host: Can
   return { localFiles, sources }
 }
 
-export async function addCanvasUploadResources(
-  request: CanvasUploadMutationRequest,
-  host: CanvasUploadMutationHost,
-) {
+/**
+ * Resolves presentation-only Project drag hints. The result is aligned with the
+ * mutation's local files followed by its explicit and drag-resolved sources.
+ */
+export function resolveCanvasUploadPresentations(
+  request: Pick<CanvasResourceMutationRequest, "files" | "signal" | "sources" | "transfer">,
+  host: Pick<CanvasUploadHost, "projectId">,
+): readonly (CanvasOptimisticResourcePresentation | null)[] {
+  throwIfAborted(request.signal)
+  const dragged = parseProjectEntryDrag(request.transfer?.data[PROJECT_ENTRY_DRAG_TYPE] ?? "")
+  const draggedPresentations =
+    dragged?.projectId === host.projectId ? dragged.entries.map(mapProjectEntryDragPresentation) : []
+  return Object.freeze([
+    ...(request.files ?? []).map(() => null),
+    ...request.sources.map(() => null),
+    ...draggedPresentations,
+  ])
+}
+
+export function mapProjectEntryDragPresentation(
+  entry: ProjectEntryDragEntry,
+): CanvasOptimisticResourcePresentation | null {
+  if (!entry.presentation) return null
+  return Object.freeze({
+    intrinsicSize: Object.freeze({
+      height: entry.presentation.intrinsicHeight,
+      width: entry.presentation.intrinsicWidth,
+    }),
+    mediaKind: entry.presentation.mediaKind,
+    previewUrl: entry.presentation.thumbnailDataUrl,
+    title: entry.name,
+  })
+}
+
+export async function addCanvasUploadResources(request: CanvasUploadMutationRequest, host: CanvasUploadMutationHost) {
   throwIfAborted(request.signal)
   const transport = resolveCanvasUploadItems(
     {

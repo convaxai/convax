@@ -488,6 +488,35 @@ describe("built-in node toolbar visibility", () => {
     expect(markup).not.toContain("data-node-resizer")
   })
 
+  test("renders an optimistic image preview on its first frame instead of a generic placeholder", () => {
+    const imageGhost = createMediaNode({
+      id: "ghost-image",
+      position: { x: 0, y: 0 },
+      resource: {
+        id: "ghost-image",
+        kind: "image",
+        metadata: {},
+        name: "preview.png",
+        state: { status: "ready", url: "blob:optimistic-image-preview" },
+      },
+    })
+    const markup = renderWithEditor(selection([]), false, (props) => <BuiltinCanvasNode {...props} />, false, {
+      node: {
+        ...imageGhost,
+        data: {
+          ...imageGhost.data,
+          [canvasOptimisticGhostDataKey]: true,
+          status: "pending",
+        },
+      },
+    })
+
+    expect(markup).toContain('data-canvas-optimistic-ghost="image"')
+    expect(markup).toContain('src="blob:optimistic-image-preview"')
+    expect(markup).not.toContain('data-canvas-optimistic-placeholder="pending"')
+    expect(markup).not.toContain("data-file-renderer")
+  })
+
   test("renders a known empty text ghost as the final text-card shell instead of a loading placeholder", () => {
     const textGhost = createTextNode({
       id: "ghost-text",

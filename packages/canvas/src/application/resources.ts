@@ -1,4 +1,6 @@
 import { getCanvasResourcePresentationSize } from "../media-sizing"
+import { canvasResourceProofMetadataKey } from "../collaboration/application-command-adapter"
+import { canvasProjectionResourceMetadataKey } from "../collaboration/projection"
 import type { CanvasPendingResourceKind, CanvasPoint, CanvasSize, CanvasUploadItem } from "../types"
 import {
   CanvasCommandValidationError,
@@ -530,6 +532,10 @@ export class CanvasResourceBusinessService {
       envelope: { actor: request.actor, command, commandId: request.commandId },
       scopeId: request.scopeId,
     }
+    const preparedRuntimeStates = command.items.map(({ item }) => ({
+      bindingKey: preparedResourceRuntimeBindingKey(item),
+      state: structuredClone(item.state),
+    }))
     if (businessStartedAt !== undefined) {
       try {
         this.diagnostics?.record({
@@ -547,7 +553,10 @@ export class CanvasResourceBusinessService {
         ...(request.beforeCommit ? { beforeCommit: request.beforeCommit } : {}),
         ...(request.signal ? { signal: request.signal } : {}),
       })
-      return { ...result, warnings: [...(prepared.warnings ?? []), ...result.warnings] }
+      return {
+        ...projectPreparedResourceRuntimeStates(result, preparedRuntimeStates),
+        warnings: [...(prepared.warnings ?? []), ...result.warnings],
+      }
     } catch (error) {
       throwPartialFailureIfRetained(error, prepared.retainedOnFailure)
     }
@@ -887,6 +896,87 @@ function validatePositiveSize(size: CanvasSize, label: string) {
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value) && typeof value === "object" && !Array.isArray(value)
+}
+
+/**
+ * Resource runtime state is deliberately absent from the durable Canvas
+ * snapshot. Once the authoritative commit has succeeded, retain the exact
+ * validated preparation result in the returned view instead of immediately
+ * reading the same host resource again. Operation receipts sort result entities
+ * by canonical entity key, so their order cannot bind prepared items to created
+ * nodes. Match the exact persisted resource identity and title instead. An
+ * ambiguous duplicate set is attached only when every runtime state is equal;
+ * otherwise hydration remains the safe authority and no state crosses nodes.
+ * Main separately binds this view to the session's authoritative metadata
+ * before renderer delivery.
+ */
+function projectPreparedResourceRuntimeStates(
+  result: CanvasApplicationCommandResult,
+  prepared: readonly {
+    bindingKey: string | null
+    state: CanvasUploadItem["state"]
+  }[],
+): CanvasApplicationCommandResult {
+  if (!result.changed || prepared.length === 0 || prepared.length !== result.createdNodeIds.length) return result
+  const createdNodeIds = new Set(result.createdNodeIds)
+  if (createdNodeIds.size !== prepared.length) return result
+
+  const preparedByBinding = new Map<string, (typeof prepared)[number][]>()
+  for (const item of prepared) {
+    if (item.bindingKey === null) continue
+    const matches = preparedByBinding.get(item.bindingKey) ?? []
+    matches.push(item)
+    preparedByBinding.set(item.bindingKey, matches)
+  }
+  const nodesByBinding = new Map<string, (typeof result.document.nodes)[number][]>()
+  for (const node of result.document.nodes) {
+    if (!createdNodeIds.has(node.id)) continue
+    const bindingKey = projectedResourceRuntimeBindingKey(node)
+    if (bindingKey === null) continue
+    const matches = nodesByBinding.get(bindingKey) ?? []
+    matches.push(node)
+    nodesByBinding.set(bindingKey, matches)
+  }
+
+  const runtimeStateByNodeId = new Map<string, CanvasUploadItem["state"]>()
+  for (const [bindingKey, preparedMatches] of preparedByBinding) {
+    const nodeMatches = nodesByBinding.get(bindingKey)
+    if (!nodeMatches || nodeMatches.length !== preparedMatches.length) continue
+    const state = preparedMatches[0]!.state
+    const stateFingerprint = stableJson(state)
+    if (preparedMatches.some((candidate) => stableJson(candidate.state) !== stateFingerprint)) continue
+    for (const node of nodeMatches) runtimeStateByNodeId.set(node.id, state)
+  }
+
+  let changed = false
+  const nodes = result.document.nodes.map((node) => {
+    const state = runtimeStateByNodeId.get(node.id)
+    if (state === undefined || stableJson(node.data.resourceState) === stableJson(state)) return node
+    changed = true
+    return { ...node, data: { ...node.data, resourceState: structuredClone(state) } }
+  })
+  return changed ? { ...result, document: { ...result.document, nodes } } : result
+}
+
+function preparedResourceRuntimeBindingKey(item: CanvasUploadItem): string | null {
+  const proof = item.metadata[canvasResourceProofMetadataKey]
+  if (!isRecord(proof) || !isRecord(proof.resource)) return null
+  return resourceRuntimeBindingKey(item.kind, item.name ?? defaultPreparedResourceTitle(item.kind), proof.resource)
+}
+
+function projectedResourceRuntimeBindingKey(node: CanvasApplicationCommandResult["document"]["nodes"][number]) {
+  const metadata = isRecord(node.data.metadata) ? node.data.metadata : undefined
+  const resource = metadata?.[canvasProjectionResourceMetadataKey]
+  if (!isRecord(resource)) return null
+  return resourceRuntimeBindingKey(node.data.kind, node.data.label, resource)
+}
+
+function resourceRuntimeBindingKey(kind: string, title: string, resource: Record<string, unknown>) {
+  return stableJson({ kind, resource, title })
+}
+
+function defaultPreparedResourceTitle(kind: CanvasUploadItem["kind"]) {
+  return kind === "text" ? "Text" : kind === "folder" ? "Folder" : "Resource"
 }
 
 function stableJson(value: unknown): string {

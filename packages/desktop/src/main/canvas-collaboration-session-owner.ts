@@ -15,6 +15,8 @@ import {
   type CanvasSnapshot,
 } from "@convax/canvas/collaboration"
 import {
+  createCanvasNodeContentGuard,
+  matchesCanvasNodeContentGuard,
   queryCanvasNodes,
   type CanvasCommandActor,
   type CanvasApplicationCommand,
@@ -100,6 +102,15 @@ export interface CanvasCollaborationSessionOwner extends CanvasCollaborationAppl
     readonly actor: CanvasCommandActor
   }): Promise<CanvasSessionProjectionDto>
   close(input: { readonly ref: CanvasDocumentRef; readonly sessionId: Id128 }): void
+  /**
+   * Main-only admission check for a trusted renderer IPC edge. The renderer
+   * actor id is derived from WebContents and must own the exact live lease.
+   */
+  requireRendererLease(input: {
+    readonly ref: CanvasDocumentRef
+    readonly rendererActorId: string
+    readonly sessionId: Id128
+  }): void
   queryRenderer(ref: CanvasDocumentRef, sessionId: Id128): Promise<CanvasSessionProjectionDto>
   submitRenderer(input: {
     readonly ref: CanvasDocumentRef
@@ -220,6 +231,12 @@ export function createCanvasCollaborationSessionOwner(
       const lease = requireLease(input.ref, input.sessionId)
       revokeLease(lease, "unmount")
     },
+    requireRendererLease(input) {
+      const lease = requireLease(input.ref, input.sessionId)
+      if (lease.actor.kind !== "renderer" || lease.actor.id !== input.rendererActorId) {
+        throw new Error("Canvas renderer session is stale or belongs to another renderer")
+      }
+    },
     async queryRenderer(ref, sessionId) {
       const lease = requireLease(ref, sessionId)
       return exclusiveLease(lease, () => projectLease(lease))
@@ -294,10 +311,11 @@ export function createCanvasCollaborationSessionOwner(
             rememberDeliveredOperation(lease, receipt.operationId)
             recordLocalSemanticRoot(lease.owner, lease, "saved-locally", receipt, frameDigest)
           }
+          const projection = projectSnapshot(lease.owner, lease, snapshot)
           return Object.freeze({
             status: "accepted" as const,
             acceptedFrameDigest: frameDigest,
-            projection: projectSnapshot(lease.owner, lease, snapshot),
+            projection: mergeApplicationRuntimeResourceStates(projection, input.result, receipt),
           })
         })
       } catch {
@@ -880,6 +898,81 @@ function cachedCanvasProjection(snapshot: CanvasSnapshot): CachedCanvasProjectio
   })
   cachedCanvasProjections.set(snapshot, value)
   return value
+}
+
+/**
+ * Restores Main-prepared runtime presentation into the first post-commit
+ * projection without allowing that transient result to replace Canvas-owned
+ * identity, geometry, or durable node content.
+ */
+function mergeApplicationRuntimeResourceStates(
+  projection: CanvasSessionProjectionDto,
+  result: CanvasApplicationCommandResult,
+  receipt: BoundedOperationReceipt,
+): CanvasSessionProjectionDto {
+  if (result.document.id !== projection.document.id) return projection
+
+  const resultNodes = uniqueBy(result.document.nodes, (node) => node.id)
+  const projectedEntities = uniqueBy(projection.nodeEntities, (entry) => entry.nodeId)
+  const receiptEntities = uniqueBy(
+    receipt.resultEntities.filter(
+      (entity): entity is CanvasEntityRef & { readonly kind: "node" } => entity.kind === "node",
+    ),
+    (entity) => entity.id,
+  )
+  let changed = false
+  const nodes = projection.document.nodes.map((node) => {
+    const prepared = resultNodes.get(node.id)
+    const projectedEntity = projectedEntities.get(node.id)?.entity
+    const receiptEntity = receiptEntities.get(node.id)
+    if (
+      prepared === undefined ||
+      projectedEntity === undefined ||
+      receiptEntity === undefined ||
+      !sameCanvasEntity(projectedEntity, receiptEntity) ||
+      !isRuntimeResourceKind(node.data.kind) ||
+      !isRuntimeResourceKind(prepared.data.kind) ||
+      prepared.data.resourceState === undefined ||
+      !matchesCanvasNodeContentGuard(node, createCanvasNodeContentGuard(prepared))
+    ) {
+      return node
+    }
+    changed = true
+    return {
+      ...node,
+      data: { ...node.data, resourceState: structuredClone(prepared.data.resourceState) },
+    }
+  })
+  if (!changed) return projection
+  return Object.freeze({
+    ...projection,
+    document: { ...projection.document, nodes },
+  })
+}
+
+function uniqueBy<T>(values: readonly T[], keyOf: (value: T) => string): ReadonlyMap<string, T> {
+  const unique = new Map<string, T>()
+  const duplicates = new Set<string>()
+  for (const value of values) {
+    const key = keyOf(value)
+    if (unique.has(key)) {
+      unique.delete(key)
+      duplicates.add(key)
+    } else if (!duplicates.has(key)) {
+      unique.set(key, value)
+    }
+  }
+  return unique
+}
+
+function sameCanvasEntity(left: CanvasEntityRef, right: CanvasEntityRef): boolean {
+  return left.kind === right.kind && left.id === right.id && left.incarnation === right.incarnation
+}
+
+function isRuntimeResourceKind(kind: string): boolean {
+  return (
+    kind === "text" || kind === "image" || kind === "video" || kind === "audio" || kind === "file" || kind === "folder"
+  )
 }
 
 function normalizeActor(actor: CanvasCommandActor): CanvasCommandActor {

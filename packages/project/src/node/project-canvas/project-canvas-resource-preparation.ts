@@ -1,5 +1,5 @@
 import path from "node:path"
-import { ordinarySha256, parseProjectId } from "@convax/collaboration"
+import { ordinarySha256, parseDigest, parseProjectId, type Digest } from "@convax/collaboration"
 import { getCanvasTextFileFormat, type CanvasMediaKind, type CanvasUploadItem } from "@convax/canvas/core"
 import { canvasResourceProofMetadataKey, type CanvasResourceProofRef } from "@convax/canvas/collaboration"
 import type {
@@ -30,10 +30,31 @@ import { readStableProjectUtf8File } from "../stable-project-file"
 import { defaultProjectTextPublicationMaximumBytes } from "./project-file-publisher"
 import type { ProjectManagedAssetStore } from "./project-managed-asset-store"
 
+export interface ProjectCanvasStableFileBytes {
+  bytes: Uint8Array
+  exactDigest?: Digest
+  mimeType: string
+  name: string
+  path: string
+  size: number
+}
+
+interface ProjectCanvasExactMediaBytes {
+  bytes: Uint8Array
+  exactDigest?: Digest
+}
+
 export type ProjectCanvasResourceHost = Pick<
   ProjectFilesClient,
   "listDirectory" | "readFile" | "readFileInfo" | "readTextFile"
->
+> & {
+  /** Project/node fast path; renderer-safe Project Files callers retain readFile. */
+  readStableFileBytes?(input: {
+    path: string
+    projectId: string
+    signal?: AbortSignal
+  }): Promise<ProjectCanvasStableFileBytes>
+}
 
 export interface ProjectCanvasFilePublisher {
   publishText(input: {
@@ -55,7 +76,7 @@ export interface ProjectCanvasMediaInspection {
 export interface ProjectCanvasMediaInspector {
   inspect(input: {
     bytes: Uint8Array
-    kind: "image"
+    kind: "image" | "video"
     mimeType: string
     name: string
   }): Promise<ProjectCanvasMediaInspection>
@@ -63,6 +84,8 @@ export interface ProjectCanvasMediaInspector {
 
 export type ProjectCanvasResourcePreparationStage =
   | "resource-file-publication"
+  | "media-read"
+  | "media-inspect"
   | "initial-plan"
   | "blob-publication"
   | "pi-submit"
@@ -91,16 +114,24 @@ export class ProjectCanvasResourcePreparation implements CanvasResourcePreparati
 
   private async trace<T>(
     stage: ProjectCanvasResourcePreparationStage,
-    byteLength: number,
+    byteLength: number | ((result: T) => number),
     operation: () => Promise<T>,
   ): Promise<T> {
     if (!this.diagnostics) return operation()
     const startedAt = performance.now()
+    let measuredByteLength = typeof byteLength === "number" ? byteLength : 0
     try {
-      return await operation()
+      const result = await operation()
+      if (typeof byteLength === "function") measuredByteLength = byteLength(result)
+      return result
     } finally {
       try {
-        this.diagnostics.record({ byteLength, callCount: 1, durationMs: performance.now() - startedAt, stage })
+        this.diagnostics.record({
+          byteLength: measuredByteLength,
+          callCount: 1,
+          durationMs: performance.now() - startedAt,
+          stage,
+        })
       } catch {
         /* Diagnostics never affect resource publication. */
       }
@@ -240,36 +271,51 @@ export class ProjectCanvasResourcePreparation implements CanvasResourcePreparati
             : selectedFile
           const mimeType = normalizeMimeType(reference.kind === "managed-asset" ? reference.mediaType : file.mediaType)
           const kind = getCanvasTextFileFormat({ mimeType, name: file.name }) ? "text" : mediaKindForMimeType(mimeType)
-          const inspectionBytes =
-            kind === "image" && this.mediaInspector
-              ? reference.kind === "project-file"
-                ? await this.readExactProjectFileBytes(reference.path, input.projectId, mimeType)
-                : await this.readExactManagedImageBytes(reference, input.projectId)
+          const inspectionSource =
+            (kind === "image" || kind === "video") && this.mediaInspector
+              ? await this.trace(
+                  "media-read",
+                  (source) => source?.bytes.byteLength ?? 0,
+                  () =>
+                    reference.kind === "project-file"
+                      ? this.readExactProjectFileBytes(reference.path, input.projectId, mimeType)
+                      : this.readExactManagedMediaBytes(reference, input.projectId),
+                )
               : undefined
-          const proof =
+          const proofPromise =
             reference.kind === "project-file"
-              ? await this.publishProjectFileProof({
-                  ...(inspectionBytes === undefined ? {} : { exactBytes: inspectionBytes }),
+              ? this.publishProjectFileProof({
+                  ...(inspectionSource === undefined
+                    ? {}
+                    : {
+                        exactBytes: inspectionSource.bytes,
+                        ...(inspectionSource.exactDigest === undefined
+                          ? {}
+                          : { exactDigest: inspectionSource.exactDigest }),
+                      }),
                   mediaClass: kind,
                   mime: mimeType || "application/octet-stream",
                   path: reference.path,
                   projectId: input.projectId,
                 })
-              : await this.publishManagedAssetProof({
+              : this.publishManagedAssetProof({
                   mediaClass: kind,
                   mime: mimeType || "application/octet-stream",
                   projectId: input.projectId,
                   reference,
                 })
-          const inspection =
-            kind === "image" && this.mediaInspector && inspectionBytes
-              ? await this.mediaInspector.inspect({
-                  bytes: inspectionBytes,
-                  kind,
-                  mimeType,
-                  name: file.name,
-                })
-              : undefined
+          const inspectionPromise =
+            (kind === "image" || kind === "video") && this.mediaInspector && inspectionSource
+              ? this.trace("media-inspect", inspectionSource.bytes.byteLength, () =>
+                  this.mediaInspector!.inspect({
+                    bytes: inspectionSource.bytes,
+                    kind,
+                    mimeType,
+                    name: file.name,
+                  }),
+                )
+              : Promise.resolve<ProjectCanvasMediaInspection | undefined>(undefined)
+          const [proof, inspection] = await settleProofAndInspection(proofPromise, inspectionPromise)
           items.push(localPreparedItem(selectedFile.sourceId, file, reference, proof, inspection))
         }
         return commit({ items })
@@ -333,6 +379,7 @@ export class ProjectCanvasResourcePreparation implements CanvasResourcePreparati
           name: path.posix.basename(reference.path),
           state: {
             contentRevision: published.contentRevision,
+            editableText: true,
             status: "ready",
             text: source.text,
           },
@@ -389,26 +436,38 @@ export class ProjectCanvasResourcePreparation implements CanvasResourcePreparati
     }
 
     const kind = mediaKindForMimeType(mimeType)
-    const inspectionBytes =
-      kind === "image" && this.mediaInspector
-        ? await this.readExactProjectFileBytes(reference.path, projectId, mimeType)
+    const inspectionSource =
+      (kind === "image" || kind === "video") && this.mediaInspector
+        ? await this.trace(
+            "media-read",
+            (source) => source.bytes.byteLength,
+            () => this.readExactProjectFileBytes(reference.path, projectId, mimeType, signal),
+          )
         : undefined
-    const proof = await this.publishProjectFileProof({
-      ...(inspectionBytes === undefined ? {} : { exactBytes: inspectionBytes }),
+    const proofPromise = this.publishProjectFileProof({
+      ...(inspectionSource === undefined
+        ? {}
+        : {
+            exactBytes: inspectionSource.bytes,
+            ...(inspectionSource.exactDigest === undefined ? {} : { exactDigest: inspectionSource.exactDigest }),
+          }),
       mediaClass: kind,
       mime: mimeType || "application/octet-stream",
       path: reference.path,
       projectId,
     })
-    const inspection =
-      kind === "image" && this.mediaInspector && inspectionBytes
-        ? await this.mediaInspector.inspect({
-            bytes: inspectionBytes,
-            kind,
-            mimeType,
-            name: sourceInfo.name,
-          })
-        : undefined
+    const inspectionPromise =
+      (kind === "image" || kind === "video") && this.mediaInspector && inspectionSource
+        ? this.trace("media-inspect", inspectionSource.bytes.byteLength, () =>
+            this.mediaInspector!.inspect({
+              bytes: inspectionSource.bytes,
+              kind,
+              mimeType,
+              name: sourceInfo.name,
+            }),
+          )
+        : Promise.resolve<ProjectCanvasMediaInspection | undefined>(undefined)
+    const [proof, inspection] = await settleProofAndInspection(proofPromise, inspectionPromise)
     throwIfAborted(signal)
     return {
       item: {
@@ -428,8 +487,34 @@ export class ProjectCanvasResourcePreparation implements CanvasResourcePreparati
     }
   }
 
-  private async readExactProjectFileBytes(path: string, projectId: string, mimeType: string) {
+  private async readExactProjectFileBytes(
+    path: string,
+    projectId: string,
+    mimeType: string,
+    signal?: AbortSignal,
+  ): Promise<ProjectCanvasExactMediaBytes> {
+    if (this.project.readStableFileBytes) {
+      const contents = await this.project.readStableFileBytes({ path, projectId, ...(signal ? { signal } : {}) })
+      throwIfAborted(signal)
+      if (
+        contents.path !== path ||
+        !Number.isSafeInteger(contents.size) ||
+        contents.size < 0 ||
+        !(contents.bytes instanceof Uint8Array) ||
+        normalizeMimeType(contents.mimeType) !== mimeType
+      ) {
+        throw new Error("Project file identity changed during Canvas media inspection")
+      }
+      if (contents.bytes.byteLength !== contents.size) {
+        throw new Error("Project file size changed during Canvas media inspection")
+      }
+      return {
+        bytes: contents.bytes,
+        ...(contents.exactDigest === undefined ? {} : { exactDigest: parseDigest(contents.exactDigest) }),
+      }
+    }
     const contents = await this.project.readFile({ path, projectId })
+    throwIfAborted(signal)
     if (contents.path !== path || contents.size < 0 || normalizeMimeType(contents.mimeType) !== mimeType) {
       throw new Error("Project file identity changed during Canvas media inspection")
     }
@@ -437,17 +522,17 @@ export class ProjectCanvasResourcePreparation implements CanvasResourcePreparati
     if (bytes.byteLength !== contents.size) {
       throw new Error("Project file size changed during Canvas media inspection")
     }
-    return bytes
+    return { bytes }
   }
 
-  private async readExactManagedImageBytes(
+  private async readExactManagedMediaBytes(
     reference: Extract<ProjectResourceReference, { kind: "managed-asset" }>,
     projectId: string,
-  ) {
+  ): Promise<ProjectCanvasExactMediaBytes | undefined> {
     const handle = await this.assets.openForRead({ projectId, reference })
     try {
       if (handle.size > 64 * 1024 * 1024) return undefined
-      return await handle.readAll()
+      return { bytes: await handle.readAll() }
     } finally {
       await handle.close()
     }
@@ -474,6 +559,7 @@ export class ProjectCanvasResourcePreparation implements CanvasResourcePreparati
 
   private async publishProjectFileProof(input: {
     readonly exactBytes?: Uint8Array
+    readonly exactDigest?: Digest
     readonly initialPlan?: ProjectIndexFileMaterializationPlan
     readonly mediaClass: "text" | "image" | "video" | "audio" | "file"
     readonly mime: string
@@ -496,12 +582,13 @@ export class ProjectCanvasResourcePreparation implements CanvasResourcePreparati
     if (contents && contents.size !== bytes.byteLength) {
       throw new Error("Project file size changed during Canvas resource preparation")
     }
+    const exactDigest = input.exactDigest ?? ordinarySha256(bytes)
     let plan = input.initialPlan ?? (await this.indexFiles.queryFileMaterializationPlan({ projectId }))
     const existing = plan.entries.find((entry) => entry.path === input.path)
     if (existing?.kind === "directory") throw new Error("ProjectIndex path is a directory")
     if (
       existing?.reference &&
-      existing.reference.blob.digest === ordinarySha256(bytes) &&
+      existing.reference.blob.digest === exactDigest &&
       existing.reference.blob.byteLength === String(bytes.byteLength) &&
       existing.reference.blob.mime === input.mime
     ) {
@@ -514,6 +601,7 @@ export class ProjectCanvasResourcePreparation implements CanvasResourcePreparati
         projectId,
         path: input.path,
         exactBytes: bytes,
+        exactDigest,
         mime: input.mime,
         contentPolicy: contentPolicyForProjectFile(input.path, input.mediaClass),
         provenance: input.path === "Generated" || input.path.startsWith("Generated/") ? "generated" : "user",
@@ -660,6 +748,19 @@ function localPreparedItem(
     },
     width: inspection?.width,
   }
+}
+
+async function settleProofAndInspection(
+  proofPromise: Promise<Extract<CanvasResourceProofRef, { mode: "current-owner-state" }> | undefined>,
+  inspectionPromise: Promise<ProjectCanvasMediaInspection | undefined>,
+) {
+  const [proof, inspection] = await Promise.allSettled([proofPromise, inspectionPromise])
+  // Proof publication may durably mutate ProjectIndex. Always let both concurrent
+  // branches settle before exposing a failure, and choose proof errors first when
+  // both branches fail so the authority-side failure is deterministic.
+  if (proof.status === "rejected") throw proof.reason
+  if (inspection.status === "rejected") throw inspection.reason
+  return [proof.value, inspection.value] as const
 }
 
 function contentPolicyForProjectFile(

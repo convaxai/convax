@@ -25,6 +25,10 @@ function request(overrides: Record<string, unknown> = {}) {
 }
 
 const resourceSessionId = parseId128(encodeBase64url(new Uint8Array(16).fill(3)))
+const resourceHydrationScope = Object.freeze({
+  ref: Object.freeze({ canvasId: "canvas-main", scopeId: "project-one" }),
+  sessionId: resourceSessionId,
+})
 
 const operationReceipt = {
   format: "convax.canvas-operation-receipt" as const,
@@ -213,10 +217,58 @@ describe("preload Canvas resource client", () => {
     const invoke = mock(async () => hydrated)
     const { client } = setup(invoke)
 
-    await expect(client.hydrateStale({ canvasId: "canvas-main" })).resolves.toEqual(hydrated)
+    await expect(client.hydrateStale(resourceHydrationScope)).resolves.toEqual(hydrated)
     expect(invoke).toHaveBeenCalledWith(canvasResourceHydrateStaleIpcChannel, {
-      canvasId: "canvas-main",
+      ref: { canvasId: "canvas-main", scopeId: "project-one" },
+      sessionId: resourceSessionId,
     })
+  })
+
+  test("forwards a bounded target list for a targeted stale runtime hydration", async () => {
+    const hydrated = createCanvasDocument({ id: "canvas-main" })
+    const invoke = mock(async () => hydrated)
+    const { client } = setup(invoke)
+
+    await expect(
+      client.hydrateStale({ ...resourceHydrationScope, nodeIds: ["target-note", "target-image"] }),
+    ).resolves.toEqual(hydrated)
+    expect(invoke).toHaveBeenCalledWith(canvasResourceHydrateStaleIpcChannel, {
+      ref: { canvasId: "canvas-main", scopeId: "project-one" },
+      sessionId: resourceSessionId,
+      nodeIds: ["target-note", "target-image"],
+    })
+  })
+
+  test("rejects malformed or over-bound hydration targets before crossing IPC", async () => {
+    const invoke = mock(async () => createCanvasDocument({ id: "canvas-main" }))
+    const { client } = setup(invoke)
+
+    await expect(
+      client.hydrateStale({
+        ...resourceHydrationScope,
+        nodeIds: Array.from({ length: 4_097 }, (_, index) => `node-${index}`),
+      }),
+    ).rejects.toThrow("Could not refresh Canvas resources")
+    await expect(client.hydrateStale({ ...resourceHydrationScope, nodeIds: ["same", "same"] })).rejects.toThrow(
+      "Could not refresh Canvas resources",
+    )
+    await expect(client.hydrateStale({ ...resourceHydrationScope, nodeIds: ["x".repeat(257)] })).rejects.toThrow(
+      "Could not refresh Canvas resources",
+    )
+    await expect(
+      client.hydrateStale({
+        ...resourceHydrationScope,
+        ref: { ...resourceHydrationScope.ref, unsupported: true },
+      } as never),
+    ).rejects.toThrow("Could not refresh Canvas resources")
+    await expect(client.hydrateStale({ canvasId: "canvas-main", nodeIds: ["legacy"] } as never)).rejects.toThrow(
+      "Could not refresh Canvas resources",
+    )
+    await expect(
+      client.hydrateStale({ ...resourceHydrationScope, sessionId: "not-a-session" } as never),
+    ).rejects.toThrow("Could not refresh Canvas resources")
+
+    expect(invoke).not.toHaveBeenCalled()
   })
 
   test("reads a connected image using only Canvas guards and node ids", async () => {

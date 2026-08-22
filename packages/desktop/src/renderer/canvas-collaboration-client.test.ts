@@ -255,6 +255,78 @@ describe("Desktop Canvas renderer collaboration client", () => {
     client.dispose()
   })
 
+  test("keeps visual undo and redo aligned when a real edit is followed by no-op geometry", async () => {
+    const bridge = transport()
+    const noOpReceipt = {
+      ...receipt,
+      historyMaterialDigest: null,
+      operationId: id(5),
+      resultEntities: [],
+      semanticRoot: false,
+    }
+    let submitCount = 0
+    bridge.submit = mock(async ({ command: submitted }) => {
+      submitCount += 1
+      const next = projection(submitted.body.updates[0]!.position.x)
+      bridge.setProjection(next)
+      return {
+        acceptedFrameDigest: frameDigest(submitCount === 1 ? "d" : "e"),
+        operationReceipt: submitCount === 1 ? receipt : noOpReceipt,
+        projection: next,
+      }
+    })
+    let releaseUndo!: () => void
+    bridge.undo = mock(async () => {
+      await new Promise<void>((resolve) => {
+        releaseUndo = resolve
+      })
+      const next = projection(0, { canRedo: true, canUndo: false })
+      bridge.setProjection(next)
+      return {
+        acceptedFrameDigest: frameDigest("f"),
+        historyTransition: { direction: "undo" as const, rootOperationId: receipt.operationId },
+        operationReceipt: receipt,
+        projection: next,
+      }
+    })
+    let releaseRedo!: () => void
+    bridge.redo = mock(async () => {
+      await new Promise<void>((resolve) => {
+        releaseRedo = resolve
+      })
+      const next = projection(6, { canRedo: false, canUndo: true })
+      bridge.setProjection(next)
+      return {
+        acceptedFrameDigest: frameDigest("9"),
+        historyTransition: { direction: "redo" as const, rootOperationId: receipt.operationId },
+        operationReceipt: receipt,
+        projection: next,
+      }
+    })
+    const client = await openDesktopCanvasRendererSession({ ref, transport: bridge })
+
+    await client.submit(command(6))
+    await client.submit(command(6))
+
+    const pendingUndo = client.undo()
+    expect(client.visualOverlay?.getSnapshot().operations.at(-1)?.items).toMatchObject([
+      { kind: "replace-presentation", position: { x: 0, y: 0 } },
+    ])
+    await Promise.resolve()
+    releaseUndo()
+    await expect(pendingUndo).resolves.toEqual({ direction: "undo", rootOperationId: receipt.operationId })
+
+    const pendingRedo = client.redo()
+    expect(client.visualOverlay?.getSnapshot().operations.at(-1)?.items).toMatchObject([
+      { kind: "replace-presentation", position: { x: 6, y: 0 } },
+    ])
+    await Promise.resolve()
+    releaseRedo()
+    await expect(pendingRedo).resolves.toEqual({ direction: "redo", rootOperationId: receipt.operationId })
+    expect(client.getProjection().nodes[0]?.position.x).toBe(6)
+    client.dispose()
+  })
+
   test("accepts undo immediately while the geometry root is still crossing Main's durable barrier", async () => {
     const bridge = transport()
     let releaseSubmit!: () => void
@@ -282,7 +354,12 @@ describe("Desktop Canvas renderer collaboration client", () => {
     expect(client.canUndo()).toBeTrue()
     const pendingUndo = client.undo()
     expect(client.visualOverlay?.getSnapshot().operations[0]?.items).toMatchObject([
-      { kind: "replace-presentation", position: { x: 0, y: 0 }, size: { height: 160, width: 280 } },
+      {
+        entity: { entityId: "node-one", incarnation: id(2), kind: "node" },
+        kind: "replace-presentation",
+        position: { x: 0, y: 0 },
+        size: { height: 180, width: 320 },
+      },
     ])
     expect(bridge.undo).not.toHaveBeenCalled()
 
@@ -368,7 +445,11 @@ describe("Desktop Canvas renderer collaboration client", () => {
     })
     const client = await openDesktopCanvasRendererSession({ ref, transport: bridge })
 
-    const pendingApplication = client.executeApplication({ type: "nodes.setTitle", nodeId: entity.id, title: "Renamed" })
+    const pendingApplication = client.executeApplication({
+      type: "nodes.setTitle",
+      nodeId: entity.id,
+      title: "Renamed",
+    })
     expect(client.canUndo()).toBeTrue()
     const pendingUndo = client.undo()
     expect(client.visualOverlay?.getSnapshot().operations[0]?.items).toEqual([])
@@ -498,7 +579,12 @@ describe("Desktop Canvas renderer collaboration client", () => {
     expect(client.canRedo()).toBeTrue()
     const pendingRedo = client.redo()
     expect(client.visualOverlay?.getSnapshot().operations.at(-1)?.items).toMatchObject([
-      { kind: "replace-presentation", position: { x: 6, y: 0 }, size: { height: 160, width: 280 } },
+      {
+        entity: { entityId: "node-one", incarnation: id(2), kind: "node" },
+        kind: "replace-presentation",
+        position: { x: 6, y: 0 },
+        size: { height: 180, width: 320 },
+      },
     ])
     await Promise.resolve()
     releaseUndo()

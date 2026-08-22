@@ -14,9 +14,8 @@ import type {
   CanvasResourceRuntimeState,
   CanvasTextNodeData,
 } from "./types"
-import { getCanvasTextFileFormat } from "./file-import"
 import { isCanvasGroupFolded } from "./group-fold"
-import { fitCanvasMediaSizeWithinBounds } from "./media-sizing"
+import { getCanvasResourcePresentationSize } from "./media-sizing"
 
 /** Wide only at the persistence boundary so legacy node types never leak into the public model. */
 type PersistedCanvasNode = Node<CanvasNodeData, string>
@@ -101,10 +100,7 @@ export function createTextNode(input: {
     type: "file",
     position: input.position,
     data,
-    style:
-      getCanvasTextFileFormat({ mimeType: input.mimeType, name: input.name ?? "" }) === "markdown"
-        ? { width: 360, height: 240 }
-        : { width: 280, height: 160 },
+    style: getCanvasResourcePresentationSize("text"),
   }
 }
 
@@ -126,11 +122,10 @@ export function createMediaNode(input: {
     metadata: input.resource.metadata,
     resourceState: { ...input.resource.state },
   }
-  const boundedMedia =
-    input.resource.kind === "image" || input.resource.kind === "video"
-      ? fitCanvasMediaSizeWithinBounds(input.resource.width, input.resource.height)
-      : null
-  const size = boundedMedia ?? { height: 240, width: 320 }
+  const size = getCanvasResourcePresentationSize(input.resource.kind, {
+    height: input.resource.height,
+    width: input.resource.width,
+  })
   return {
     id: input.id ?? createCanvasId("node"),
     type: "file",

@@ -11,6 +11,7 @@ export function isCanvasOptimisticGhostNodeData(data: CanvasNode["data"]) {
 
 /** Last-mile adapter only. Returned values are never Canvas command inputs. */
 export function projectCanvasGhostNodeForReactFlow(ghost: CanvasGhostNode): CanvasNode {
+  const selected = ghost.focusVisible === true
   if (ghost.snapshot) {
     return {
       id: ghost.presentationKey,
@@ -22,14 +23,19 @@ export function projectCanvasGhostNodeForReactFlow(ghost: CanvasGhostNode): Canv
         [canvasOptimisticGhostDataKey]: true,
         status: "pending",
       } as unknown as CanvasNode["data"],
-      style: { height: ghost.snapshot.size.height, width: ghost.snapshot.size.width, opacity: 0.64 },
+      style: {
+        height: ghost.snapshot.size.height,
+        opacity: 0.64,
+        pointerEvents: "none",
+        width: ghost.snapshot.size.width,
+      },
       ...(ghost.snapshot.zIndex === undefined ? {} : { zIndex: ghost.snapshot.zIndex }),
       connectable: false,
       deletable: false,
       draggable: false,
       focusable: false,
       selectable: false,
-      selected: false,
+      selected,
     } as CanvasNode
   }
   const emptyCard = ghost.presentation.emptyCard === true
@@ -60,7 +66,7 @@ export function projectCanvasGhostNodeForReactFlow(ghost: CanvasGhostNode): Canv
               : {
                   mimeType: ghost.presentation.mimeType,
                   name: ghost.presentation.title,
-                  state: { status: "ready", url: "" },
+                  state: { status: "ready", url: ghost.presentation.previewUrl ?? "" },
                 }),
           },
         })
@@ -72,12 +78,12 @@ export function projectCanvasGhostNodeForReactFlow(ghost: CanvasGhostNode): Canv
     focusable: false,
     ...(ghost.parentPresentationKey ? { parentId: ghost.parentPresentationKey } : {}),
     selectable: false,
-    selected: false,
+    selected,
     style: {
       ...base.style,
       height: ghost.size.height,
+      pointerEvents: "none",
       width: ghost.size.width,
-      ...(emptyCard ? {} : { opacity: 0.64 }),
     },
     data: {
       ...base.data,

@@ -4,6 +4,7 @@ import {
   serializeProjectEntryDrag,
   type ProjectEntry,
   type ProjectEntryKind,
+  type ProjectFileThumbnail,
   type ProjectFilesController,
   type ProjectFilesControllerSnapshot,
 } from "@convax/project-files"
@@ -57,11 +58,14 @@ import {
   EntryIcon,
   FilePreviewPortal,
   InlineInput,
+  captureProjectImageThumbnail,
   captureProjectVideoThumbnail,
   getFilePreviewKind,
   type ProjectFilePreviewOpener,
 } from "./project-sidebar-items"
 import { bindProjectSwitcherDismissal } from "./project-switcher-dismissal"
+
+type ProjectFileThumbnailResolverResult = ProjectFileThumbnail | string | null
 
 export interface ProjectSidebarProps {
   className?: string
@@ -85,7 +89,10 @@ export interface ProjectSidebarProps {
   openFilePreview?: ProjectFilePreviewOpener
   onFileActivate?: (input: { entry: ProjectEntry; projectId: string }) => void
   presentation?: "sidebar" | "embedded-files" | "workspace" | "workspace-tabs"
-  resolveFileThumbnailUrl?: (input: { path: string; projectId: string }) => Promise<string | null> | string | null
+  resolveFileThumbnailUrl?: (input: {
+    path: string
+    projectId: string
+  }) => Promise<ProjectFileThumbnailResolverResult> | ProjectFileThumbnailResolverResult
   searchLabel?: string
 }
 
@@ -101,7 +108,7 @@ const minimumExpandedSectionSize = 112
 const sectionSplitterSize = 6
 const maximumFileThumbnailCacheCharacters = 4 * 1024 * 1024
 const maximumFilePreviewCacheEntries = 64
-const fileThumbnailUrlCache = new Map<string, string>()
+const fileThumbnailCache = new Map<string, ProjectFileThumbnail>()
 const emptyProjectFilesSnapshot: ProjectFilesControllerSnapshot = {
   error: null,
   expandedPaths: [],
@@ -1155,7 +1162,10 @@ function ProjectTreeNode(props: {
   onRequestDelete: (path: string) => void
   onStartRename: (entry: ProjectEntry) => void
   previewDisabled: boolean
-  resolveFileThumbnailUrl?: (input: { path: string; projectId: string }) => Promise<string | null> | string | null
+  resolveFileThumbnailUrl?: (input: {
+    path: string
+    projectId: string
+  }) => Promise<ProjectFileThumbnailResolverResult> | ProjectFileThumbnailResolverResult
   shouldSuppressClick: () => boolean
   snapshot: ProjectFilesControllerSnapshot
   workspaceStyle: boolean
@@ -1172,13 +1182,10 @@ function ProjectTreeNode(props: {
   const loading = snapshot.loadingPaths.includes(entry.path)
   const editing = props.editor?.kind === "rename" && props.editor.path === entry.path
   const previewKind = getFilePreviewKind(entry)
-  const previewCacheKey = snapshot.projectId
-    ? `${snapshot.projectId}\u0000${entry.path}\u0000${entry.modifiedAt}`
-    : null
-  const [thumbnailUrl, setThumbnailUrl] = useState<string | null>(() => {
-    if (previewKind === "markdown" || previewKind === "text") return ""
-    return previewCacheKey ? (fileThumbnailUrlCache.get(previewCacheKey) ?? null) : null
-  })
+  const previewCacheKey = snapshot.projectId ? projectFileThumbnailCacheKey(snapshot.projectId, entry) : null
+  const [thumbnail, setThumbnail] = useState<ProjectFileThumbnail | null>(() =>
+    previewCacheKey ? (fileThumbnailCache.get(previewCacheKey) ?? null) : null,
+  )
   const rowRef = useRef<HTMLDivElement | null>(null)
   const previewOpenTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const previewCloseTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
@@ -1187,45 +1194,47 @@ function ProjectTreeNode(props: {
 
   useEffect(() => {
     if (!previewKind || !snapshot.projectId || !previewCacheKey) {
-      setThumbnailUrl(null)
+      setThumbnail(null)
       return
     }
     if (previewKind === "markdown" || previewKind === "text") {
-      setThumbnailUrl("")
+      setThumbnail(null)
       return
     }
-    const cached = fileThumbnailUrlCache.get(previewCacheKey)
+    const cached = fileThumbnailCache.get(previewCacheKey)
     if (cached) {
-      setThumbnailUrl(cached)
+      setThumbnail(cached)
       return
     }
-    if (previewKind !== "video" && !props.resolveFileThumbnailUrl) {
-      setThumbnailUrl(null)
+    const canOpenMediaThumbnail = (previewKind === "image" || previewKind === "video") && Boolean(props.openFilePreview)
+    if (!canOpenMediaThumbnail && !props.resolveFileThumbnailUrl) {
+      setThumbnail(null)
       return
     }
     if (previewKind === "video" && !props.openFilePreview) {
-      setThumbnailUrl(null)
+      setThumbnail(null)
       return
     }
     const abortController = new AbortController()
-    setThumbnailUrl(null)
-    void Promise.resolve()
-      .then(() =>
-        previewKind === "video"
-          ? captureProjectVideoThumbnail(
-              { path: entry.path, projectId: snapshot.projectId! },
-              props.openFilePreview!,
-              abortController.signal,
-            )
-          : props.resolveFileThumbnailUrl?.({ path: entry.path, projectId: snapshot.projectId! }),
-      )
-      .then((url) => {
-        if (abortController.signal.aborted || !url) return
-        cacheFileThumbnail(previewCacheKey, url)
-        setThumbnailUrl(url)
+    setThumbnail(null)
+    const thumbnailPromise: Promise<ProjectFileThumbnail | null> = Promise.resolve().then(async () => {
+      const thumbnailInput = { path: entry.path, projectId: snapshot.projectId! }
+      if (previewKind === "image" && props.openFilePreview) {
+        return captureProjectImageThumbnail(thumbnailInput, props.openFilePreview, abortController.signal)
+      }
+      if (previewKind === "video") {
+        return captureProjectVideoThumbnail(thumbnailInput, props.openFilePreview!, abortController.signal)
+      }
+      return normalizeProjectFileThumbnail(await props.resolveFileThumbnailUrl?.(thumbnailInput))
+    })
+    void thumbnailPromise
+      .then((nextThumbnail) => {
+        if (abortController.signal.aborted || !nextThumbnail?.dataUrl) return
+        cacheFileThumbnail(previewCacheKey, nextThumbnail)
+        setThumbnail(nextThumbnail)
       })
       .catch(() => {
-        if (!abortController.signal.aborted) setThumbnailUrl(null)
+        if (!abortController.signal.aborted) setThumbnail(null)
       })
     return () => {
       abortController.abort()
@@ -1295,18 +1304,27 @@ function ProjectTreeNode(props: {
     const paths = selected ? snapshot.selectedPaths : [entry.path]
     const entries = paths.flatMap((path) => {
       const item = props.entryByPath.get(path)
-      return item ? [{ kind: item.kind, name: item.name, path: item.path }] : []
+      if (!item) return []
+      const presentation = snapshot.projectId
+        ? resolveProjectEntryDragPresentation(snapshot.projectId, item)
+        : undefined
+      return [
+        {
+          kind: item.kind,
+          name: item.name,
+          path: item.path,
+          ...(presentation ? { presentation } : {}),
+        },
+      ]
     })
     if (!selected) props.controller.selectEntry(entry.path, { range: false, toggle: false })
     event.dataTransfer.effectAllowed = "copyMove"
-    event.dataTransfer.setData(
-      PROJECT_ENTRY_DRAG_TYPE,
-      serializeProjectEntryDrag({
-        entries,
-        projectId: snapshot.projectId ?? "",
-        version: 1,
-      }),
-    )
+    const serialized = serializeBoundedProjectEntryDrag({
+      entries,
+      projectId: snapshot.projectId ?? "",
+      version: 1,
+    })
+    if (serialized) event.dataTransfer.setData(PROJECT_ENTRY_DRAG_TYPE, serialized)
     event.dataTransfer.setData("text/plain", entries.map((item) => item.path).join("\n"))
   }
   const row = (
@@ -1386,7 +1404,7 @@ function ProjectTreeNode(props: {
       ) : (
         <span className="size-6 shrink-0" />
       )}
-      <EntryIcon entry={entry} expanded={expanded} previewKind={previewKind} previewUrl={thumbnailUrl} />
+      <EntryIcon entry={entry} expanded={expanded} previewKind={previewKind} previewUrl={thumbnail?.dataUrl ?? null} />
       {editing ? (
         <InlineInput
           label={`Rename ${entry.name}`}
@@ -1569,21 +1587,75 @@ function TreeStateRow({
 
 function fileThumbnailUrlCacheCharacters() {
   let characters = 0
-  for (const url of fileThumbnailUrlCache.values()) characters += url.length
+  for (const thumbnail of fileThumbnailCache.values()) characters += thumbnail.dataUrl?.length ?? 0
   return characters
 }
 
-function cacheFileThumbnail(key: string, url: string) {
-  if (!url.startsWith("data:image/") || url.length > 256 * 1024) return
-  fileThumbnailUrlCache.set(key, url)
+function cacheFileThumbnail(key: string, thumbnail: ProjectFileThumbnail) {
+  const url = thumbnail.dataUrl
+  if (!url?.startsWith("data:image/") || url.length > 256 * 1024) return
+  fileThumbnailCache.set(key, Object.freeze({ ...thumbnail }))
   while (
-    fileThumbnailUrlCache.size > maximumFilePreviewCacheEntries ||
+    fileThumbnailCache.size > maximumFilePreviewCacheEntries ||
     fileThumbnailUrlCacheCharacters() > maximumFileThumbnailCacheCharacters
   ) {
-    const oldestKey = fileThumbnailUrlCache.keys().next().value
+    const oldestKey = fileThumbnailCache.keys().next().value
     if (typeof oldestKey !== "string") break
-    fileThumbnailUrlCache.delete(oldestKey)
+    fileThumbnailCache.delete(oldestKey)
   }
+}
+
+function normalizeProjectFileThumbnail(
+  value: ProjectFileThumbnailResolverResult | undefined,
+): ProjectFileThumbnail | null {
+  if (typeof value === "string") return { dataUrl: value }
+  if (!value || (value.dataUrl !== null && typeof value.dataUrl !== "string")) return null
+  return {
+    dataUrl: value.dataUrl,
+    ...(value.intrinsicHeight === undefined ? {} : { intrinsicHeight: value.intrinsicHeight }),
+    ...(value.intrinsicWidth === undefined ? {} : { intrinsicWidth: value.intrinsicWidth }),
+  }
+}
+
+function serializeBoundedProjectEntryDrag(payload: Parameters<typeof serializeProjectEntryDrag>[0]) {
+  try {
+    return serializeProjectEntryDrag(payload)
+  } catch {
+    try {
+      return serializeProjectEntryDrag({
+        ...payload,
+        entries: payload.entries.map(({ presentation: _presentation, ...entry }) => entry),
+      })
+    } catch {
+      return null
+    }
+  }
+}
+
+function projectFileThumbnailCacheKey(projectId: string, entry: Pick<ProjectEntry, "modifiedAt" | "path">) {
+  return `${projectId}\u0000${entry.path}\u0000${entry.modifiedAt}`
+}
+
+function resolveProjectEntryDragPresentation(projectId: string, entry: ProjectEntry) {
+  const mediaKind = getFilePreviewKind(entry)
+  if (mediaKind !== "audio" && mediaKind !== "image" && mediaKind !== "video") return undefined
+  const thumbnail = fileThumbnailCache.get(projectFileThumbnailCacheKey(projectId, entry))
+  if (
+    !thumbnail?.dataUrl ||
+    !validIntrinsicDimension(thumbnail.intrinsicWidth) ||
+    !validIntrinsicDimension(thumbnail.intrinsicHeight)
+  )
+    return undefined
+  return {
+    intrinsicHeight: thumbnail.intrinsicHeight,
+    intrinsicWidth: thumbnail.intrinsicWidth,
+    mediaKind,
+    thumbnailDataUrl: thumbnail.dataUrl,
+  }
+}
+
+function validIntrinsicDimension(value: unknown): value is number {
+  return Number.isSafeInteger(value) && Number(value) > 0 && Number(value) <= 1_000_000
 }
 
 function ProjectNameInput(props: {

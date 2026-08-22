@@ -3,7 +3,9 @@ import {
   compareUtf8,
   ordinarySha256,
   parseId128,
+  parseDigest,
   parseProjectId,
+  type Digest,
   type Id128,
   type OwnerIntentConstructionContext,
   type PreparedLocalIntent,
@@ -42,6 +44,7 @@ export interface ProjectIndexBlobPublicationPort {
     readonly reference: ProjectIndexResourceReference
     readonly admission: ProjectIndexManagedBlobAdmission
   }): Promise<void>
+  /** Verifies the exact bytes against the reference before reporting durable publication. */
   publish(input: {
     readonly reference: ProjectIndexResourceReference
     readonly exactBytes: Readonly<Uint8Array>
@@ -79,6 +82,11 @@ export interface ProjectIndexFileApplicationPort {
     readonly projectId: ProjectId
     readonly path: string
     readonly exactBytes: Readonly<Uint8Array>
+    /**
+     * Digest already verified while reading these exact process-local bytes.
+     * Omit for callers that require the defensive copy-and-hash path.
+     */
+    readonly exactDigest?: Digest
     readonly mime: string
     readonly contentPolicy: Exclude<ProjectContentPolicy, "none" | "immutable"> | "immutable"
     readonly provenance?: "user" | "generated"
@@ -197,11 +205,11 @@ export class ProjectIndexFileApplication implements ProjectIndexFileApplicationP
   async publishFile(input: Parameters<ProjectIndexFileApplicationPort["publishFile"]>[0]): Promise<ProjectIndexFileMutationResult> {
     this.requireProject(input.projectId)
     const target = parsePortablePath(input.path)
-    const exactBytes = new Uint8Array(input.exactBytes)
+    const exactBytes = input.exactDigest === undefined ? new Uint8Array(input.exactBytes) : input.exactBytes
     const blob: ProjectBlobRef = Object.freeze({
       format: "convax.blob-ref",
       algorithm: "sha256",
-      digest: ordinarySha256(exactBytes),
+      digest: input.exactDigest === undefined ? ordinarySha256(exactBytes) : parseDigest(input.exactDigest),
       byteLength: String(exactBytes.byteLength) as Uint64,
       mime: input.mime,
     })

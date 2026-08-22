@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test"
 import type { CanvasApplicationCommand, CanvasApplicationCommandRequest } from "../application"
 import { createCanvasGenerationTargetGuard } from "../application"
 import { getCanvasNodeGenerationRun } from "../generation-run"
+import { getCanvasResourcePresentationSize } from "../media-sizing"
 import { adaptCanvasApplicationCommand } from "./application-command-adapter"
 import { constructCanvasAuthoritativeIntent } from "./command-construction"
 import { applyOk, context, createAgent, createPendingFile, digest, newCanvas, VALID_FACTS } from "./test-fixtures.test"
@@ -501,11 +502,28 @@ describe("Canvas v2 application command adapter", () => {
     }
   })
 
+  test("uses the Canvas presentation-size policy for pending resource defaults", () => {
+    const document = newCanvas()
+    for (const [index, kind] of (["text", "image", "video", "audio"] as const).entries()) {
+      const manual = requireAdaptation(document, context(93, index + 1, index + 1), {
+        type: "resources.pending.create",
+        kind,
+        label: `Pending ${kind}`,
+        nodeId: `ignored-manual-${kind}`,
+        placement: { anchor: { x: 0, y: 0 } },
+      })
+      expect(manual.command).toMatchObject({
+        kind: "manual-resource-placeholders-create",
+        items: [{ expectedClass: kind, size: getCanvasResourcePresentationSize(kind) }],
+      })
+    }
+  })
+
   test("maps a proof-backed compatible file relink and applies the constructed intent", () => {
     const document = newCanvas()
     const node = createPendingFile(document, context(7, 1, 1), "Pending image")
     const proof = currentResourceProof("image", 70)
-    const item = resourceItem("image", proof, "Replacement.png")
+    const item = { ...resourceItem("image", proof, "Replacement.png"), height: 900, width: 1_600 }
     const operationContext = context(7, 2, 2)
 
     const mapped = requireAdaptation(document, operationContext, {
@@ -520,19 +538,38 @@ describe("Canvas v2 application command adapter", () => {
       title: "Replacement.png",
       proof,
     })
-    applyAdapted(document, operationContext, mapped.command)
+    const relinkRoot = applyAdapted(document, operationContext, mapped.command).semanticHistoryRoot
+    if (!relinkRoot) throw new Error("Relink did not create semantic history")
+    expect(relinkRoot.inverseTemplate.map((template) => template.op)).toEqual(["node.data"])
+    expect(relinkRoot.forwardTemplate.map((template) => template.op)).toEqual(["node.data"])
 
     const projected = projectCanvas(validateCanvasYDoc(document)).nodes.find(
       (candidate) => candidate.ref.id === node.id,
     )
     expect(projected).toMatchObject({
       role: "file",
+      size: { height: 120, width: 240 },
       data: {
         format: "convax.canvas-node-data",
         kind: "resource",
         title: "Replacement.png",
         resource: proof.resource,
       },
+    })
+
+    const undoContext = context(7, 3, 3)
+    const undo = materializeCanvasSemanticHistoryIntent(
+      validateCanvasYDoc(document),
+      undoContext,
+      "undo",
+      relinkRoot.rootOperationId,
+    )
+    if (undo === "rejected") throw new Error("Relink undo did not materialize")
+    applyOk(document, undoContext, undo, VALID_FACTS)
+    const undone = projectCanvas(validateCanvasYDoc(document)).nodes.find((candidate) => candidate.ref.id === node.id)
+    expect(undone).toMatchObject({
+      size: { height: 120, width: 240 },
+      data: { kind: "placeholder", title: "Pending image" },
     })
   })
 

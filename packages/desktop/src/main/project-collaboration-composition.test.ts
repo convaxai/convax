@@ -58,6 +58,12 @@ describe("Project collaboration composition", () => {
     const ref = { scopeId: PROJECT_A, canvasId: "canvas-main" }
     const opened = await harness.composition.canvasSessions.open({ ref, actor: { id: "renderer", kind: "renderer" } })
 
+    harness.composition.canvasSessions.requireRendererLease({
+      ref,
+      rendererActorId: "desktop:renderer:7",
+      sessionId: opened.sessionId,
+    })
+    expect(harness.requireRendererLease).toHaveBeenCalledTimes(1)
     await harness.composition.canvasSessions.queryRenderer(ref, opened.sessionId)
     expect(harness.queryRenderer).toHaveBeenCalledTimes(1)
 
@@ -120,6 +126,7 @@ function composition() {
     events.push("canvas:resume")
   })
   const close = mock(() => undefined)
+  const requireRendererLease = mock(() => undefined)
   const queryRenderer = mock(async () => Object.freeze({ sessionId: SESSION_A }) as never)
   const quiesceSessions = mock(async () => {
     events.push("canvas:quiesce")
@@ -143,6 +150,7 @@ function composition() {
   const canvasSessions: CanvasCollaborationSessionOwner = {
     open: mock(async () => Object.freeze({ sessionId: SESSION_A }) as never),
     close,
+    requireRendererLease,
     queryRenderer,
     submitRenderer: mock(async () => Object.freeze({ marker: "renderer-submit" }) as never),
     executeApplication: mock(async () => Object.freeze({ marker: "application-submit" }) as never),
@@ -181,6 +189,7 @@ function composition() {
     events,
     projectIndexes,
     queryRenderer,
+    requireRendererLease,
     queryResult,
     quiesceSessions,
     resume,

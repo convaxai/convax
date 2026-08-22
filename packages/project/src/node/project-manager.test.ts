@@ -59,9 +59,9 @@ describe("NodeProjectManager registry", () => {
     await fs.mkdir(otherRoot)
     await fs.rm(path.join(projectRoot, ".convax"), { force: true, recursive: true })
 
-    await expect(
-      manager.ensureRegisteredProjectPrivateStorage({ projectId, projectRoot: otherRoot }),
-    ).rejects.toThrow("differs from its durable registry binding")
+    await expect(manager.ensureRegisteredProjectPrivateStorage({ projectId, projectRoot: otherRoot })).rejects.toThrow(
+      "differs from its durable registry binding",
+    )
     await expect(fs.access(path.join(projectRoot, ".convax"))).rejects.toThrow()
     await expect(fs.access(path.join(otherRoot, ".convax"))).rejects.toThrow()
   })
@@ -113,8 +113,9 @@ describe("NodeProjectManager registry", () => {
     expect(await fs.readFile(legacyCatalog, "utf8")).toBe("legacy-catalog")
     expect(await fs.readFile(legacyDocument, "utf8")).toBe("legacy-document")
     expect(await fs.readFile(path.join(legacyRoot, "keep.md"), "utf8")).toBe("ordinary")
-    expect((await manager.listProjects()).find((project) => project.id === "project_legacy")?.recovery?.status)
-      .toBe("unsupported-project-data")
+    expect((await manager.listProjects()).find((project) => project.id === "project_legacy")?.recovery?.status).toBe(
+      "unsupported-project-data",
+    )
   })
 
   test("rejects an unsupported registered Project when it is opened again", async () => {
@@ -200,8 +201,12 @@ describe("NodeProjectManager registry", () => {
     const created = await manager.createProject({ name: "Fresh project", parentPath: workspaceRoot })
     expect(created.name).toBe("Fresh project")
     expect(await fs.stat(path.join(workspaceRoot, "Fresh project")).then((stat) => stat.isDirectory())).toBe(true)
-    expect(await fs.stat(path.join(workspaceRoot, "Fresh project", ".convax", "project.json")).then((stat) => stat.isFile())).toBe(true)
-    await expect(manager.createProject({ name: "Fresh project", parentPath: workspaceRoot })).rejects.toThrow("Project already exists")
+    expect(
+      await fs.stat(path.join(workspaceRoot, "Fresh project", ".convax", "project.json")).then((stat) => stat.isFile()),
+    ).toBe(true)
+    await expect(manager.createProject({ name: "Fresh project", parentPath: workspaceRoot })).rejects.toThrow(
+      "Project already exists",
+    )
   })
 
   test("does not adopt or overwrite an existing workspace directory", async () => {
@@ -210,7 +215,9 @@ describe("NodeProjectManager registry", () => {
     await fs.mkdir(existingRoot, { recursive: true })
     await fs.writeFile(path.join(existingRoot, "keep.txt"), "existing")
 
-    await expect(manager.createProject({ name: "storyboard", parentPath: workspaceRoot })).rejects.toThrow("Project already exists")
+    await expect(manager.createProject({ name: "storyboard", parentPath: workspaceRoot })).rejects.toThrow(
+      "Project already exists",
+    )
     expect(await fs.readFile(path.join(existingRoot, "keep.txt"), "utf8")).toBe("existing")
   })
 
@@ -223,7 +230,9 @@ describe("NodeProjectManager registry", () => {
 
     expect(results.filter((result) => result.status === "fulfilled")).toHaveLength(1)
     expect(results.filter((result) => result.status === "rejected")).toHaveLength(1)
-    expect((await manager.listProjects()).filter((project) => project.name.toLowerCase() === "concurrent")).toHaveLength(1)
+    expect(
+      (await manager.listProjects()).filter((project) => project.name.toLowerCase() === "concurrent"),
+    ).toHaveLength(1)
     expect((await fs.readdir(workspaceRoot)).filter((name) => name.toLowerCase() === "concurrent")).toHaveLength(1)
   })
 
@@ -395,6 +404,15 @@ describe("NodeProjectManager files", () => {
       exists: true,
     })
     expect((await manager.listDirectory({ projectId })).entries.map((entry) => entry.name)).toEqual(["assets"])
+    const stable = await manager.readStableFileBytes({ path: "assets/notes.txt", projectId })
+    expect(stable).toMatchObject({
+      exactDigest: createHash("sha256").update(Buffer.from("hello", "utf8")).digest("hex"),
+      mimeType: "text/plain",
+      name: "notes.txt",
+      path: "assets/notes.txt",
+      size: 5,
+    })
+    expect(stable.bytes).toEqual(Buffer.from("hello"))
     expect((await manager.readFile({ path: "assets/notes.txt", projectId })).dataUrl).toBe(
       "data:text/plain;base64,aGVsbG8=",
     )
@@ -606,9 +624,9 @@ describe("NodeProjectManager files", () => {
     const finalBytes = await fs.readFile(path.join(projectRoot, "brief.md"))
     const finalRevision = createHash("sha256").update(finalBytes).digest("hex")
     expect(success?.status === "fulfilled" && success.value.contentRevision).toBe(finalRevision)
-    expect(
-      conflict?.status === "rejected" && (conflict.reason as ProjectTextFileConflictError).actualRevision,
-    ).toBe(finalRevision)
+    expect(conflict?.status === "rejected" && (conflict.reason as ProjectTextFileConflictError).actualRevision).toBe(
+      finalRevision,
+    )
   })
 
   test("does not overwrite an external replacement staged before compare-and-replace commit", async () => {

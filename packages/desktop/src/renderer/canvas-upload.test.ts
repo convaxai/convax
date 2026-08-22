@@ -2,6 +2,7 @@ import { describe, expect, mock, test } from "bun:test"
 import { PROJECT_ENTRY_DRAG_TYPE, serializeProjectEntryDrag } from "@convax/project-files/drag"
 import {
   addCanvasUploadResources,
+  resolveCanvasUploadPresentations,
   resolveCanvasUploadItems,
   type CanvasUploadRequest,
 } from "./canvas-upload"
@@ -147,6 +148,49 @@ describe("desktop Canvas resource transport", () => {
       { kind: "host-file", path: "docs/brief.md", sourceId: "source-1" },
       { kind: "host-file", path: "assets/cover.png", sourceId: "source-2" },
       { kind: "host-directory", path: "design/references", sourceId: "source-3" },
+    ])
+  })
+
+  test("maps only bounded current-Project drag hints to host-neutral optimistic presentations", () => {
+    const drag = serializeProjectEntryDrag({
+      entries: [
+        {
+          kind: "file",
+          name: "cover.png",
+          path: "assets/cover.png",
+          presentation: {
+            intrinsicHeight: 900,
+            intrinsicWidth: 1_600,
+            mediaKind: "image",
+            thumbnailDataUrl: "data:image/png;base64,cHJldmlldw==",
+          },
+        },
+        { kind: "file", name: "brief.md", path: "docs/brief.md" },
+      ],
+      projectId: "project-a",
+      version: 1,
+    })
+
+    expect(
+      resolveCanvasUploadPresentations(
+        {
+          files: [new File(["local"], "local.png", { type: "image/png" })],
+          signal: new AbortController().signal,
+          sources: [{ kind: "host-file", path: "existing.png", sourceId: "existing" }],
+          transfer: { data: { [PROJECT_ENTRY_DRAG_TYPE]: drag }, types: [PROJECT_ENTRY_DRAG_TYPE] },
+        },
+        { projectId: "project-a" },
+      ),
+    ).toEqual([
+      null,
+      null,
+      {
+        intrinsicSize: { height: 900, width: 1_600 },
+        mediaKind: "image",
+        previewUrl: "data:image/png;base64,cHJldmlldw==",
+        title: "cover.png",
+      },
+      null,
     ])
   })
 

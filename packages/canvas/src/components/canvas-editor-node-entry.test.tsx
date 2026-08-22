@@ -23,6 +23,7 @@ let connectStart: ((event: MouseEvent, params: { handleId: string | null; nodeId
 let connectEnd: ((event: MouseEvent, state: { fromNode?: { id: string }; isValid: boolean }) => void) | undefined
 let nodesChange: ((changes: readonly { id: string; selected: boolean; type: "select" }[]) => void) | undefined
 let moveStart: ((event?: MouseEvent) => void) | undefined
+let relinkLocalFileAction: (() => void) | undefined
 const setViewport = mock(async (_viewport: unknown, _options?: { duration?: number }) => undefined)
 
 function Passthrough(props: { children?: ReactNode }) {
@@ -48,7 +49,13 @@ void mock.module("@convax/ui", () => ({
     asChild?: boolean
     size?: string
     variant?: string
-  }) => <button {...props}>{children}</button>,
+  }) => {
+    if (props["aria-label"] === "Relink local file" && props.onClick) {
+      const onClick = props.onClick
+      relinkLocalFileAction = () => (onClick as () => void)()
+    }
+    return <button {...props}>{children}</button>
+  },
   FolderGlyph: (props: { size?: string }) => (
     <span data-ui-folder-glyph="" data-ui-folder-glyph-size={props.size ?? "picker"} />
   ),
@@ -251,9 +258,21 @@ void mock.module("@xyflow/react", () => ({
 }))
 
 const [
-  { CanvasEditor },
-  { CanvasNodeChrome },
-  { createAgentNode, createCanvasDocument, createMediaNode, createTextNode, isCanvasEmptyMediaNodeData },
+  {
+    CanvasEditor,
+    canvasAuthorityMatchesOptimisticResourceBounds,
+    isCanvasAuthoritativeResourceReadyForOptimisticHandoff,
+  },
+  { BuiltinCanvasNode, CanvasNodeChrome },
+  {
+    createAgentNode,
+    createCanvasDocument,
+    createGroupNode,
+    createMediaNode,
+    createTextNode,
+    getCanvasNodePresentationSize,
+    isCanvasEmptyMediaNodeData,
+  },
   { createCanvasNodeRegistry },
   { createCanvasServices },
   { createCanvasViewRegistry },
@@ -267,6 +286,12 @@ const [
   import("../view"),
   import("../motion"),
 ])
+
+async function waitForAnimationFrames(count: number) {
+  for (let index = 0; index < count; index += 1) {
+    await new Promise<void>((resolve) => window.requestAnimationFrame(() => resolve()))
+  }
+}
 
 let nextNodeId = 0
 const createdNodes = new Map<string, CanvasNode>()
@@ -371,12 +396,14 @@ function installTestWindow(reducedMotion = false) {
     }),
   })
   const globals = {
+    cancelAnimationFrame: testWindow.cancelAnimationFrame.bind(testWindow),
     Element: testWindow.Element,
     Event: testWindow.Event,
     HTMLElement: testWindow.HTMLElement,
     MouseEvent: testWindow.MouseEvent,
     Node: testWindow.Node,
     document: testWindow.document,
+    requestAnimationFrame: testWindow.requestAnimationFrame.bind(testWindow),
     window: testWindow,
   }
   const originals = new Map<string, PropertyDescriptor | undefined>()
@@ -449,6 +476,120 @@ function createNodeEntryServices(session: NodeEntryCanvasSession) {
     },
   })
 }
+
+test("keeps an active ready text editor mounted while its request-only stale snapshot hydrates", async () => {
+  const restoreWindow = installTestWindow()
+  const editorRef = createRef<CanvasEditorHandle | null>()
+  let root: Root | undefined
+  renderNodes = true
+  const textNode = createTextNode({
+    id: "editable-note",
+    metadata: { resource: "Notes/editable.md" },
+    position: { x: 20, y: 40 },
+    resourceState: {
+      contentRevision: "a".repeat(64),
+      editableText: true,
+      status: "ready",
+      text: "Before refresh",
+    },
+  })
+  const session = new NodeEntryCanvasSession(
+    createCanvasDocument({ id: "ready-text-request-hydration", nodes: [textNode] }),
+  )
+  const hydrationRequests: Array<{
+    document: CanvasDocument
+    resolve(document: CanvasDocument): void
+  }> = []
+  const services = createCanvasServices({
+    hydration: {
+      hydrateStale({ document }) {
+        return new Promise<CanvasDocument>((resolve) => hydrationRequests.push({ document, resolve }))
+      },
+      markStale(document, shouldInvalidate) {
+        return {
+          ...document,
+          nodes: document.nodes.map((node) =>
+            shouldInvalidate?.(node)
+              ? { ...node, data: { ...node.data, resourceState: { status: "stale" as const } } }
+              : node,
+          ),
+        }
+      },
+    },
+  })
+
+  try {
+    const container = document.createElement("div")
+    document.body.append(container)
+    root = createRoot(container)
+    await act(async () => {
+      root?.render(
+        <CanvasEditor
+          nodeRegistry={createCanvasNodeRegistry([{ component: BuiltinCanvasNode, label: "File", type: "file" }])}
+          ref={editorRef}
+          services={services}
+          session={session}
+          viewScopeId="project-one"
+        />,
+      )
+      await waitForAnimationFrames(2)
+    })
+    await act(async () => {
+      nodesChange?.([{ id: textNode.id, selected: true, type: "select" }])
+      await waitForAnimationFrames(2)
+    })
+    const contenteditable = container.querySelector<HTMLElement>('[contenteditable="true"]')
+    expect(contenteditable).not.toBeNull()
+    contenteditable?.focus()
+    expect(document.activeElement).toBe(contenteditable)
+
+    let refresh!: Promise<void>
+    await act(async () => {
+      refresh = editorRef.current!.invalidateResources((node) => node.id === textNode.id)
+      await Promise.resolve()
+    })
+
+    expect(hydrationRequests).toHaveLength(1)
+    expect(hydrationRequests[0]!.document.nodes[0]!.data.resourceState).toEqual({ status: "stale" })
+    expect(renderedNodes[0]!.data.resourceState).toMatchObject({
+      editableText: true,
+      status: "ready",
+      text: "Before refresh",
+    })
+    expect(contenteditable?.isConnected).toBeTrue()
+    expect(container.querySelector<HTMLElement>('[contenteditable="true"]')).toBe(contenteditable)
+    expect(document.activeElement).toBe(contenteditable)
+
+    await act(async () => {
+      const request = hydrationRequests[0]!.document
+      hydrationRequests[0]!.resolve({
+        ...request,
+        nodes: request.nodes.map((node) => ({
+          ...node,
+          data: {
+            ...node.data,
+            resourceState: {
+              contentRevision: "b".repeat(64),
+              editableText: true,
+              status: "ready" as const,
+              text: "After refresh",
+            },
+          },
+        })),
+      })
+      await refresh
+    })
+
+    expect(renderedNodes[0]!.data.resourceState).toMatchObject({ status: "ready", text: "After refresh" })
+    expect(contenteditable?.isConnected).toBeTrue()
+    expect(container.querySelector<HTMLElement>('[contenteditable="true"]')).toBe(contenteditable)
+    expect(document.activeElement).toBe(contenteditable)
+    container.remove()
+  } finally {
+    if (root) await act(async () => root?.unmount())
+    await restoreWindow()
+  }
+})
 
 test("publishes hydrated resource state into the rendered transient document", async () => {
   const restoreWindow = installTestWindow()
@@ -589,6 +730,478 @@ test("publishes hydrated resource state into the rendered transient document", a
   }
 })
 
+test("reports a relink business failure before cancelling its local preview", async () => {
+  const restoreWindow = installTestWindow()
+  let root: Root | undefined
+  renderNodes = true
+  const node = createMediaNode({
+    id: "missing-image",
+    position: { x: 20, y: 40 },
+    resource: { id: "missing-image", kind: "image", metadata: {}, state: { status: "missing" } },
+  })
+  const session = new NodeEntryCanvasSession(createCanvasDocument({ id: "relink-failure", nodes: [node] }))
+  const notify = mock(() => undefined)
+  let operationSignal: AbortSignal | undefined
+  const relink = mock(async (input: { signal: AbortSignal }) => {
+    operationSignal = input.signal
+    throw new Error("relink rejected")
+  })
+  const nodeRegistry = createCanvasNodeRegistry([{ component: BuiltinCanvasNode, label: "File", type: "file" }])
+
+  try {
+    const container = document.createElement("div")
+    document.body.append(container)
+    root = createRoot(container)
+    await act(async () => {
+      root?.render(
+        <CanvasEditor
+          nodeRegistry={nodeRegistry}
+          services={createCanvasServices({
+            mutation: {
+              add: async () => ({ createdNodeIds: [], warnings: [] }),
+              relink,
+            },
+            notify: { show: notify },
+          })}
+          session={session}
+          viewScopeId="relink-failure"
+        />,
+      )
+      await Promise.resolve()
+    })
+    await act(async () => {
+      nodesChange?.([{ id: node.id, selected: true, type: "select" }])
+      await Promise.resolve()
+    })
+
+    const relinkButton = container.querySelector<HTMLButtonElement>('button[aria-label="Relink local file"]')
+    const picker = container.querySelector<HTMLInputElement>('input[data-canvas-resource-picker="relink"]')
+    expect(relinkButton).not.toBeNull()
+    expect(picker).not.toBeNull()
+    await act(async () => {
+      relinkButton?.click()
+      Object.defineProperty(picker, "files", {
+        configurable: true,
+        value: [new File(["image"], "replacement.png", { type: "image/png" })],
+      })
+      picker?.dispatchEvent(new Event("change", { bubbles: true }))
+      await Promise.resolve()
+      await Promise.resolve()
+      await Promise.resolve()
+    })
+
+    expect(relink).toHaveBeenCalledTimes(1)
+    expect(notify).toHaveBeenCalledWith({
+      description: "relink rejected",
+      kind: "error",
+      title: "Could not relink resource",
+    })
+    expect(operationSignal?.aborted).toBeTrue()
+  } finally {
+    if (root) await act(async () => root?.unmount())
+    await restoreWindow()
+  }
+})
+
+test("rehydrates the canonical resource after a superseding local relink preview fails", async () => {
+  const restoreWindow = installTestWindow()
+  const originalCreateObjectUrl = Object.getOwnPropertyDescriptor(URL, "createObjectURL")
+  const originalRevokeObjectUrl = Object.getOwnPropertyDescriptor(URL, "revokeObjectURL")
+  let nextObjectUrl = 0
+  const revokeObjectUrl = mock((_url: string) => undefined)
+  Object.defineProperty(URL, "createObjectURL", {
+    configurable: true,
+    value: () => `blob:relink-preview-${++nextObjectUrl}`,
+    writable: true,
+  })
+  Object.defineProperty(URL, "revokeObjectURL", {
+    configurable: true,
+    value: revokeObjectUrl,
+    writable: true,
+  })
+  let root: Root | undefined
+  renderNodes = true
+  relinkLocalFileAction = undefined
+  const node = createMediaNode({
+    id: "relinked-image",
+    position: { x: 20, y: 40 },
+    resource: { id: "relinked-image", kind: "image", metadata: {}, state: { status: "missing" } },
+  })
+  const session = new NodeEntryCanvasSession(createCanvasDocument({ id: "relink-preview-race", nodes: [node] }))
+  const relinkRequests: Array<{
+    reject(reason?: unknown): void
+    resolve(result: { authoritativeProjectionDelivered?: boolean; warnings: readonly string[] }): void
+  }> = []
+  const relink = mock(
+    async () =>
+      new Promise<{ authoritativeProjectionDelivered?: boolean; warnings: readonly string[] }>((resolve, reject) => {
+        relinkRequests.push({ reject, resolve })
+      }),
+  )
+  const hydrationRequests: Array<{
+    document: CanvasDocument
+    resolve(document: CanvasDocument): void
+  }> = []
+  const invalidatedNodeIds: string[][] = []
+  const services = createCanvasServices({
+    hydration: {
+      hydrateStale({ document }) {
+        return new Promise<CanvasDocument>((resolve) => hydrationRequests.push({ document, resolve }))
+      },
+      markStale(document, shouldInvalidate) {
+        const invalidated = document.nodes.filter((candidate) => shouldInvalidate?.(candidate) ?? true)
+        invalidatedNodeIds.push(invalidated.map((candidate) => candidate.id))
+        if (!shouldInvalidate) return document
+        return {
+          ...document,
+          nodes: document.nodes.map((candidate) =>
+            shouldInvalidate(candidate)
+              ? { ...candidate, data: { ...candidate.data, resourceState: { status: "stale" as const } } }
+              : candidate,
+          ),
+        }
+      },
+    },
+    mutation: {
+      add: async () => ({ createdNodeIds: [], warnings: [] }),
+      relink,
+    },
+  })
+
+  try {
+    const container = document.createElement("div")
+    document.body.append(container)
+    root = createRoot(container)
+    await act(async () => {
+      root?.render(
+        <CanvasEditor
+          nodeRegistry={createCanvasNodeRegistry([{ component: BuiltinCanvasNode, label: "File", type: "file" }])}
+          services={services}
+          session={session}
+          viewScopeId="relink-preview-race"
+        />,
+      )
+      await Promise.resolve()
+    })
+    await act(async () => {
+      nodesChange?.([{ id: node.id, selected: true, type: "select" }])
+      await Promise.resolve()
+    })
+
+    const selectRelinkFile = (name: string) => {
+      const picker = container.querySelector<HTMLInputElement>('input[data-canvas-resource-picker="relink"]')
+      relinkLocalFileAction?.()
+      Object.defineProperty(picker, "files", {
+        configurable: true,
+        value: [new File([name], name, { type: "image/png" })],
+      })
+      picker?.dispatchEvent(new Event("change", { bubbles: true }))
+    }
+
+    await act(async () => {
+      selectRelinkFile("first.png")
+      // A second picker result can be delivered before React has committed the
+      // first preview. Both operations still have to reconcile independently.
+      selectRelinkFile("second.png")
+      await Promise.resolve()
+      await Promise.resolve()
+    })
+    expect(relinkRequests).toHaveLength(2)
+    expect(renderedNodes[0]?.data.resourceState).toMatchObject({
+      localPreview: true,
+      url: "blob:relink-preview-2",
+    })
+    expect(revokeObjectUrl).toHaveBeenCalledWith("blob:relink-preview-1")
+
+    const firstCanonical = createMediaNode({
+      id: node.id,
+      position: node.position,
+      resource: {
+        id: "first-resource",
+        kind: "image",
+        metadata: { resourceRevision: "first" },
+        name: "first.png",
+        state: { status: "stale" },
+      },
+    })
+    await act(async () => {
+      session.publish(createCanvasDocument({ id: session.getProjection().id, nodes: [firstCanonical] }))
+      relinkRequests[0]!.resolve({ authoritativeProjectionDelivered: true, warnings: [] })
+      await Promise.resolve()
+      await Promise.resolve()
+      await Promise.resolve()
+    })
+    expect(hydrationRequests).toHaveLength(1)
+
+    await act(async () => {
+      const hydrated = hydrationRequests[0]!.document
+      hydrationRequests[0]!.resolve({
+        ...hydrated,
+        nodes: hydrated.nodes.map((candidate) => ({
+          ...candidate,
+          data: {
+            ...candidate.data,
+            resourceState: { status: "ready" as const, url: "convax-asset://project/first-resource" },
+          },
+        })),
+      })
+      await Promise.resolve()
+      await Promise.resolve()
+      await Promise.resolve()
+    })
+    expect(renderedNodes[0]?.data.resourceState).toMatchObject({
+      localPreview: true,
+      url: "blob:relink-preview-2",
+    })
+
+    await act(async () => {
+      relinkRequests[1]!.reject(new Error("second relink rejected"))
+      await Promise.resolve()
+      await Promise.resolve()
+      await Promise.resolve()
+      await Promise.resolve()
+    })
+
+    expect(renderedNodes[0]?.data.resourceState).toEqual({ status: "stale" })
+    expect(revokeObjectUrl).toHaveBeenCalledWith("blob:relink-preview-2")
+    expect(hydrationRequests).toHaveLength(2)
+    expect(invalidatedNodeIds.at(-1)).toEqual([node.id])
+
+    await act(async () => {
+      const hydrated = hydrationRequests[1]!.document
+      hydrationRequests[1]!.resolve({
+        ...hydrated,
+        nodes: hydrated.nodes.map((candidate) => ({
+          ...candidate,
+          data: {
+            ...candidate.data,
+            resourceState: { status: "ready" as const, url: "convax-asset://project/first-resource" },
+          },
+        })),
+      })
+      await Promise.resolve()
+      await Promise.resolve()
+    })
+    expect(renderedNodes[0]?.data.resourceState).toEqual({
+      status: "ready",
+      url: "convax-asset://project/first-resource",
+    })
+  } finally {
+    if (root) await act(async () => root?.unmount())
+    relinkLocalFileAction = undefined
+    if (originalCreateObjectUrl) Object.defineProperty(URL, "createObjectURL", originalCreateObjectUrl)
+    else Reflect.deleteProperty(URL, "createObjectURL")
+    if (originalRevokeObjectUrl) Object.defineProperty(URL, "revokeObjectURL", originalRevokeObjectUrl)
+    else Reflect.deleteProperty(URL, "revokeObjectURL")
+    await restoreWindow()
+  }
+})
+
+test("retries only the relink target when a successful local preview blocked canonical hydration", async () => {
+  const restoreWindow = installTestWindow()
+  const originalCreateObjectUrl = Object.getOwnPropertyDescriptor(URL, "createObjectURL")
+  const originalRevokeObjectUrl = Object.getOwnPropertyDescriptor(URL, "revokeObjectURL")
+  const revokeObjectUrl = mock((_url: string) => undefined)
+  Object.defineProperty(URL, "createObjectURL", {
+    configurable: true,
+    value: () => "blob:successful-relink-preview",
+    writable: true,
+  })
+  Object.defineProperty(URL, "revokeObjectURL", {
+    configurable: true,
+    value: revokeObjectUrl,
+    writable: true,
+  })
+  let root: Root | undefined
+  renderNodes = true
+  relinkLocalFileAction = undefined
+  const target = createMediaNode({
+    id: "target-image",
+    position: { x: 20, y: 40 },
+    resource: { id: "target-image", kind: "image", metadata: {}, state: { status: "missing" } },
+  })
+  const ready = createMediaNode({
+    id: "ready-image",
+    position: { x: 380, y: 40 },
+    resource: {
+      id: "ready-image",
+      kind: "image",
+      metadata: { resourceRevision: "ready" },
+      state: { status: "ready", url: "convax-asset://project/ready-image" },
+    },
+  })
+  const session = new NodeEntryCanvasSession(
+    createCanvasDocument({ id: "successful-relink-hydration", nodes: [target, ready] }),
+  )
+  let resolveRelink!: (result: { authoritativeProjectionDelivered?: boolean; warnings: readonly string[] }) => void
+  const relink = mock(
+    async () =>
+      new Promise<{ authoritativeProjectionDelivered?: boolean; warnings: readonly string[] }>((resolve) => {
+        resolveRelink = resolve
+      }),
+  )
+  const hydrationRequests: Array<{
+    document: CanvasDocument
+    resolve(document: CanvasDocument): void
+  }> = []
+  const invalidatedNodeIds: string[][] = []
+  const services = createCanvasServices({
+    hydration: {
+      hydrateStale({ document }) {
+        return new Promise<CanvasDocument>((resolve) => hydrationRequests.push({ document, resolve }))
+      },
+      markStale(document, shouldInvalidate) {
+        const invalidated = document.nodes.filter((candidate) => shouldInvalidate?.(candidate) ?? true)
+        invalidatedNodeIds.push(invalidated.map((candidate) => candidate.id))
+        return {
+          ...document,
+          nodes: document.nodes.map((candidate) =>
+            (shouldInvalidate?.(candidate) ?? true)
+              ? { ...candidate, data: { ...candidate.data, resourceState: { status: "stale" as const } } }
+              : candidate,
+          ),
+        }
+      },
+    },
+    mutation: {
+      add: async () => ({ createdNodeIds: [], warnings: [] }),
+      relink,
+    },
+  })
+
+  try {
+    const container = document.createElement("div")
+    document.body.append(container)
+    root = createRoot(container)
+    await act(async () => {
+      root?.render(
+        <CanvasEditor
+          nodeRegistry={createCanvasNodeRegistry([{ component: BuiltinCanvasNode, label: "File", type: "file" }])}
+          services={services}
+          session={session}
+          viewScopeId="successful-relink-hydration"
+        />,
+      )
+      await Promise.resolve()
+    })
+    await act(async () => {
+      nodesChange?.([{ id: target.id, selected: true, type: "select" }])
+      await Promise.resolve()
+    })
+
+    const picker = container.querySelector<HTMLInputElement>('input[data-canvas-resource-picker="relink"]')
+    await act(async () => {
+      relinkLocalFileAction?.()
+      Object.defineProperty(picker, "files", {
+        configurable: true,
+        value: [new File(["replacement"], "replacement.png", { type: "image/png" })],
+      })
+      picker?.dispatchEvent(new Event("change", { bubbles: true }))
+      await Promise.resolve()
+      await Promise.resolve()
+    })
+    expect(renderedNodes.find((node) => node.id === target.id)?.data.resourceState).toMatchObject({
+      localPreview: true,
+      url: "blob:successful-relink-preview",
+    })
+
+    const canonicalTarget = createMediaNode({
+      id: target.id,
+      position: target.position,
+      resource: {
+        id: "replacement-resource",
+        kind: "image",
+        metadata: { resourceRevision: "replacement" },
+        name: "replacement.png",
+        state: { status: "stale" },
+      },
+    })
+    await act(async () => {
+      session.publish(createCanvasDocument({ id: session.getProjection().id, nodes: [canonicalTarget, ready] }))
+      await Promise.resolve()
+      await Promise.resolve()
+    })
+    expect(hydrationRequests).toHaveLength(1)
+
+    await act(async () => {
+      const request = hydrationRequests[0]!.document
+      hydrationRequests[0]!.resolve({
+        ...request,
+        nodes: request.nodes.map((candidate) => ({
+          ...candidate,
+          data: {
+            ...candidate.data,
+            resourceState: {
+              status: "ready" as const,
+              url:
+                candidate.id === target.id
+                  ? "convax-asset://project/replacement"
+                  : "convax-asset://project/ready-image",
+            },
+          },
+        })),
+      })
+      await Promise.resolve()
+      await Promise.resolve()
+      await Promise.resolve()
+      await new Promise((resolve) => setTimeout(resolve, 0))
+    })
+    expect(renderedNodes.find((node) => node.id === target.id)?.data.resourceState).toMatchObject({
+      localPreview: true,
+    })
+    expect(renderedNodes.find((node) => node.id === ready.id)?.data.resourceState).toEqual({
+      status: "ready",
+      url: "convax-asset://project/ready-image",
+    })
+
+    await act(async () => {
+      resolveRelink({ authoritativeProjectionDelivered: true, warnings: [] })
+      await Promise.resolve()
+      await Promise.resolve()
+      await Promise.resolve()
+    })
+
+    expect(hydrationRequests).toHaveLength(2)
+    expect(invalidatedNodeIds.at(-1)).toEqual([target.id])
+    expect(
+      hydrationRequests[1]!.document.nodes.find((candidate) => candidate.id === ready.id)?.data.resourceState,
+    ).toEqual({ status: "ready", url: "convax-asset://project/ready-image" })
+
+    await act(async () => {
+      const request = hydrationRequests[1]!.document
+      hydrationRequests[1]!.resolve({
+        ...request,
+        nodes: request.nodes.map((candidate) =>
+          candidate.id === target.id
+            ? {
+                ...candidate,
+                data: {
+                  ...candidate.data,
+                  resourceState: { status: "ready" as const, url: "convax-asset://project/replacement" },
+                },
+              }
+            : candidate,
+        ),
+      })
+      await Promise.resolve()
+      await Promise.resolve()
+    })
+    expect(renderedNodes.find((node) => node.id === target.id)?.data.resourceState).toEqual({
+      status: "ready",
+      url: "convax-asset://project/replacement",
+    })
+    expect(revokeObjectUrl).toHaveBeenCalledWith("blob:successful-relink-preview")
+  } finally {
+    if (root) await act(async () => root?.unmount())
+    relinkLocalFileAction = undefined
+    if (originalCreateObjectUrl) Object.defineProperty(URL, "createObjectURL", originalCreateObjectUrl)
+    else Reflect.deleteProperty(URL, "createObjectURL")
+    if (originalRevokeObjectUrl) Object.defineProperty(URL, "revokeObjectURL", originalRevokeObjectUrl)
+    else Reflect.deleteProperty(URL, "revokeObjectURL")
+    await restoreWindow()
+  }
+})
+
 test("projects a dropped local file before the host mutation settles and reconciles it after authority arrives", async () => {
   const restoreWindow = installTestWindow()
   const editorRef = createRef<CanvasEditorHandle | null>()
@@ -645,6 +1258,7 @@ test("projects a dropped local file before the host mutation settles and reconci
       deletable: false,
       draggable: false,
       focusable: false,
+      selected: true,
       selectable: false,
     })
     expect(renderedNodes[0]?.id.startsWith("ghost-resource:")).toBeTrue()
@@ -668,12 +1282,17 @@ test("projects a dropped local file before the host mutation settles and reconci
       await Promise.resolve()
     })
 
+    expect(renderedNodes.map((node) => node.id)).toEqual([
+      "authoritative-image",
+      expect.stringMatching(/^ghost-resource:/),
+    ])
+    await act(async () => waitForAnimationFrames(2))
     expect(renderedNodes.map((node) => node.id)).toEqual(["authoritative-image"])
 
     const failedFile = new File(["video"], "failed.mp4", { type: "video/mp4" })
     await act(async () => {
       drop(failedFile)
-      await Promise.resolve()
+      await new Promise((resolve) => setTimeout(resolve, 90))
     })
     expect(renderedNodes).toHaveLength(2)
     expect(renderedNodes[1]).toMatchObject({ data: { kind: "video", name: "failed.mp4", status: "pending" } })
@@ -686,6 +1305,101 @@ test("projects a dropped local file before the host mutation settles and reconci
     expect(renderedNodes.map((node) => node.id)).toEqual(["authoritative-image"])
   } finally {
     if (root) await act(async () => root?.unmount())
+    await restoreWindow()
+  }
+})
+
+test("never publishes a shifted late image ghost after fast authority beats the renderer probe", async () => {
+  const restoreWindow = installTestWindow()
+  const originalCreateImageBitmap = Object.getOwnPropertyDescriptor(globalThis, "createImageBitmap")
+  let resolveBitmap: ((bitmap: ImageBitmap) => void) | undefined
+  const createImageBitmap = mock(
+    () =>
+      new Promise<ImageBitmap>((resolve) => {
+        resolveBitmap = resolve
+      }),
+  )
+  Object.defineProperty(globalThis, "createImageBitmap", {
+    configurable: true,
+    value: createImageBitmap,
+    writable: true,
+  })
+  const editorRef = createRef<CanvasEditorHandle | null>()
+  let root: Root | undefined
+  renderNodes = true
+  const session = new NodeEntryCanvasSession(createCanvasDocument({ id: "authority-before-image-probe" }))
+  const authoritative = createMediaNode({
+    id: "fast-authoritative-image",
+    position: { x: 0, y: 70 },
+    resource: {
+      id: "fast-authoritative-image",
+      kind: "image",
+      metadata: {},
+      name: "deferred.png",
+      state: { status: "ready" },
+    },
+  })
+  const mutation = mock(async () => {
+    session.publish(createCanvasDocument({ id: session.getProjection().id, nodes: [authoritative] }))
+    return {
+      authoritativeProjectionDelivered: true,
+      createdNodeIds: [authoritative.id],
+      warnings: [],
+    }
+  })
+
+  try {
+    const container = document.createElement("div")
+    document.body.append(container)
+    root = createRoot(container)
+    await act(async () => {
+      root?.render(
+        <CanvasEditor
+          nodeRegistry={createTestRegistry()}
+          ref={editorRef}
+          services={createCanvasServices({ mutation: { add: mutation } })}
+          session={session}
+          viewScopeId="authority-before-image-probe"
+        />,
+      )
+    })
+    const canvas = container.querySelector<HTMLElement>(".convax-canvas")!
+    const file = new File(["image"], "deferred.png", { type: "image/png" })
+
+    await act(async () => {
+      const event = new Event("drop", { bubbles: true })
+      Object.defineProperty(event, "clientX", { value: 120 })
+      Object.defineProperty(event, "clientY", { value: 160 })
+      Object.defineProperty(event, "dataTransfer", {
+        value: { files: [file], getData: () => "", types: ["Files"] },
+      })
+      canvas.dispatchEvent(event)
+      await Promise.resolve()
+      await Promise.resolve()
+    })
+
+    expect(createImageBitmap).toHaveBeenCalledTimes(1)
+    const immediateGhost = renderedNodes.find((node) => node.id.startsWith("ghost-resource:"))
+    expect(renderedNodes.map((node) => node.id)).toEqual([authoritative.id, expect.stringMatching(/^ghost-resource:/)])
+    expect(immediateGhost?.position).toEqual(authoritative.position)
+
+    await act(async () => {
+      resolveBitmap?.({ close: () => undefined, height: 900, width: 1_600 } as ImageBitmap)
+      await Promise.resolve()
+      await Promise.resolve()
+    })
+    expect(renderedNodes.map((node) => node.id)).toEqual([authoritative.id])
+
+    await act(async () => waitForAnimationFrames(2))
+    expect(renderedNodes.map((node) => node.id)).toEqual([authoritative.id])
+    expect(renderedNodes[0]?.position).toEqual(authoritative.position)
+  } finally {
+    if (root) await act(async () => root?.unmount())
+    if (originalCreateImageBitmap) {
+      Object.defineProperty(globalThis, "createImageBitmap", originalCreateImageBitmap)
+    } else {
+      Reflect.deleteProperty(globalThis, "createImageBitmap")
+    }
     await restoreWindow()
   }
 })
@@ -984,17 +1698,79 @@ test("lets the latest rapid node focus supersede unresolved camera motion", asyn
   }
 })
 
-test("places, focuses, and presents a top-toolbar-created empty node", async () => {
+test("does not apply a superseded reveal after a newer group focus request", async () => {
   const restoreWindow = installTestWindow()
+  const viewRegistry = createCanvasViewRegistry()
+  let root: Root | undefined
+  renderNodes = true
+
+  try {
+    const container = document.createElement("div")
+    document.body.append(container)
+    root = createRoot(container)
+    const child = (id: string, parentId: string) => ({
+      ...createMediaNode({
+        id,
+        position: { x: 20, y: 40 },
+        resource: { id, kind: "image", metadata: {}, state: { status: "ready" } },
+      }),
+      parentId,
+    })
+    await act(async () => {
+      root?.render(
+        <CanvasEditor
+          initialDocument={createCanvasDocument({
+            id: "rapid-group-focus",
+            nodes: [
+              createGroupNode({ id: "group-a", position: { x: 0, y: 0 }, width: 500, height: 360 }),
+              createGroupNode({ id: "group-b", position: { x: 700, y: 0 }, width: 500, height: 360 }),
+              child("child-a", "group-a"),
+              child("child-b", "group-b"),
+            ],
+          })}
+          nodeRegistry={createTestRegistry()}
+          services={createCanvasServices()}
+          viewId="main"
+          viewRegistry={viewRegistry}
+          viewScopeId="project-a"
+        />,
+      )
+    })
+
+    const request = (nodeId: string) =>
+      viewRegistry.execute({
+        command: { animation: "smooth", fit: "center", nodeIds: [nodeId], select: true, type: "nodes.reveal" },
+        expectedDocumentId: "rapid-group-focus",
+        expectedScopeId: "project-a",
+        viewId: "main",
+      })
+    let firstResult!: Awaited<ReturnType<typeof request>>
+    let secondResult!: Awaited<ReturnType<typeof request>>
+    await act(async () => {
+      const first = request("child-a")
+      const second = request("child-b")
+      ;[firstResult, secondResult] = await Promise.all([first, second])
+    })
+
+    expect(firstResult.snapshot.selectedNodeIds).not.toEqual(["child-a"])
+    expect(secondResult.snapshot.selectedNodeIds).toEqual(["child-b"])
+  } finally {
+    if (root) await act(async () => root?.unmount())
+    await restoreWindow()
+  }
+})
+
+test("places, focuses, and hands off a top-toolbar-created empty node without a second entrance", async () => {
+  const restoreWindow = installTestWindow()
+  const occupied = createMediaNode({
+    id: "occupied",
+    position: { x: 240, y: 200 },
+    resource: { id: "occupied", kind: "image", metadata: {}, state: { status: "ready" } },
+  })
+  const occupiedSize = getCanvasNodePresentationSize(occupied)
   const initial = createCanvasDocument({
     id: "header-create-focus",
-    nodes: [
-      createMediaNode({
-        id: "occupied",
-        position: { x: 240, y: 200 },
-        resource: { id: "occupied", kind: "image", metadata: {}, state: { status: "ready" } },
-      }),
-    ],
+    nodes: [occupied],
   })
   let authoritative = initial
   const session = new NodeEntryCanvasSession(initial)
@@ -1016,15 +1792,11 @@ test("places, focuses, and presents a top-toolbar-created empty node", async () 
                   ...authoritative,
                   nodes: [
                     ...authoritative.nodes,
-                    createMediaNode({
+                    createTextNode({
                       id: "header-created",
+                      metadata: {},
                       position: input.anchor,
-                      resource: {
-                        id: "header-created",
-                        kind: "image",
-                        metadata: {},
-                        state: { status: "ready" },
-                      },
+                      resourceState: { status: "ready", text: "" },
                     }),
                   ],
                 }
@@ -1060,26 +1832,122 @@ test("places, focuses, and presents a top-toolbar-created empty node", async () 
     expect(requestedAnchor!.x).toBeGreaterThanOrEqual(0)
     expect(requestedAnchor!.y).toBeGreaterThanOrEqual(0)
     expect(requestedAnchor!.x + 320).toBeLessThanOrEqual(1200)
-    expect(requestedAnchor!.y + 200).toBeLessThanOrEqual(800)
+    expect(requestedAnchor!.y + 180).toBeLessThanOrEqual(800)
     expect(
-      requestedAnchor!.x < 560 &&
-        requestedAnchor!.x + 320 > 240 &&
-        requestedAnchor!.y < 400 &&
-        requestedAnchor!.y + 200 > 200,
+      requestedAnchor!.x < occupied.position.x + occupiedSize.width &&
+        requestedAnchor!.x + 320 > occupied.position.x &&
+        requestedAnchor!.y < occupied.position.y + occupiedSize.height &&
+        requestedAnchor!.y + 180 > occupied.position.y,
     ).toBeFalse()
     expect(setViewport.mock.calls.some((call) => call[1]?.duration === 400)).toBeTrue()
     expect(
-      container.querySelector('[data-id="header-created"] .convax-node')?.getAttribute("data-canvas-node-entering"),
-    ).toBe("true")
+      container.querySelector('[data-id="header-created"] .convax-node')?.hasAttribute("data-canvas-node-entry-phase"),
+    ).toBeFalse()
     expect(
-      container.querySelector('[data-id="header-created"] .convax-node')?.getAttribute("data-canvas-node-entry-phase"),
-    ).toBe("entering")
+      container.querySelector('[data-id="header-created"] .convax-node')?.hasAttribute("data-canvas-node-entering"),
+    ).toBeFalse()
   } finally {
     setViewport.mockReset()
     setViewport.mockImplementation(async () => undefined)
     if (root) await act(async () => root?.unmount())
     await restoreWindow()
   }
+})
+
+test("keeps a focused ghost until the authoritative text surface has committed focus", async () => {
+  const testWindow = new Window({ url: "https://convax.test/" })
+  const testDocument = testWindow.document
+  const root = testDocument.createElement("div")
+  const container = testDocument.createElement("div")
+  container.className = "react-flow__node"
+  container.dataset.id = "authoritative-text"
+  const surface = testDocument.createElement("div")
+  surface.dataset.canvasNodeKind = "text"
+  const textEditor = testDocument.createElement("div")
+  textEditor.className = "convax-text-editor"
+  const prosemirror = testDocument.createElement("div")
+  prosemirror.className = "convax-text-editor__prosemirror"
+  textEditor.append(prosemirror)
+  surface.append(textEditor)
+  container.append(surface)
+  root.append(container)
+  const canvasDocument = createCanvasDocument({
+    id: "focused-handoff-readiness",
+    nodes: [
+      createTextNode({
+        id: "authoritative-text",
+        metadata: {},
+        position: { x: 20, y: 40 },
+        resourceState: { status: "ready", text: "" },
+      }),
+    ],
+  })
+
+  expect(
+    isCanvasAuthoritativeResourceReadyForOptimisticHandoff({
+      document: canvasDocument,
+      focusVisible: true,
+      nodeIds: ["authoritative-text"],
+      root,
+    }),
+  ).toBeFalse()
+  container.classList.add("selected")
+  expect(
+    isCanvasAuthoritativeResourceReadyForOptimisticHandoff({
+      document: canvasDocument,
+      focusVisible: true,
+      nodeIds: ["authoritative-text"],
+      root,
+    }),
+  ).toBeTrue()
+  prosemirror.remove()
+  expect(
+    isCanvasAuthoritativeResourceReadyForOptimisticHandoff({
+      document: canvasDocument,
+      focusVisible: true,
+      nodeIds: ["authoritative-text"],
+      root,
+    }),
+  ).toBeFalse()
+  await testWindow.happyDOM.close()
+})
+
+test("matches optimistic batch bounds independently of canonical receipt id order", () => {
+  const document = createCanvasDocument({
+    id: "reverse-bounds",
+    nodes: [
+      createTextNode({
+        id: "z-first",
+        metadata: {},
+        position: { x: 20, y: 40 },
+        resourceState: { status: "ready", text: "" },
+      }),
+      createTextNode({
+        id: "a-second",
+        metadata: {},
+        position: { x: 364, y: 40 },
+        resourceState: { status: "ready", text: "" },
+      }),
+    ],
+  })
+  const ghosts = [
+    {
+      kind: "ghost-node" as const,
+      position: { x: 20, y: 40 },
+      presentation: { nodeType: "text" as const, title: "First" },
+      presentationKey: "ghost-first",
+      size: { height: 180, width: 320 },
+    },
+    {
+      kind: "ghost-node" as const,
+      position: { x: 364, y: 40 },
+      presentation: { nodeType: "text" as const, title: "Second" },
+      presentationKey: "ghost-second",
+      size: { height: 180, width: 320 },
+    },
+  ]
+
+  expect(canvasAuthorityMatchesOptimisticResourceBounds(ghosts, ["a-second", "z-first"], document)).toBeTrue()
 })
 
 test("starts top-toolbar text focus from the optimistic node before the host mutation settles", async () => {
@@ -1148,10 +2016,195 @@ test("starts top-toolbar text focus from the optimistic node before the host mut
       await Promise.resolve()
       await Promise.resolve()
     })
+    expect(renderedNodes.map((node) => node.id)).toEqual([
+      "authoritative-text",
+      expect.stringMatching(/^ghost-resource:/),
+    ])
+    expect(renderedNodes.every((node) => node.selected)).toBeTrue()
+    await act(async () => waitForAnimationFrames(2))
     expect(renderedNodes.map((node) => node.id)).toEqual(["authoritative-text"])
+    expect(setViewport.mock.calls.filter((call) => call[1]?.duration === 400)).toHaveLength(1)
   } finally {
     setViewport.mockReset()
     setViewport.mockImplementation(async () => undefined)
+    if (root) await act(async () => root?.unmount())
+    await restoreWindow()
+  }
+})
+
+test("does not restart batch focus when receipt node ids reverse item order", async () => {
+  const restoreWindow = installTestWindow()
+  const session = new NodeEntryCanvasSession(createCanvasDocument({ id: "reverse-batch-bounds" }))
+  let root: Root | undefined
+  renderNodes = true
+
+  try {
+    const container = document.createElement("div")
+    document.body.append(container)
+    root = createRoot(container)
+    await act(async () => {
+      root?.render(
+        <CanvasEditor
+          nodeRegistry={createTestRegistry()}
+          services={createCanvasServices({
+            mutation: {
+              async add(input) {
+                const first = createTextNode({
+                  id: "z-first",
+                  metadata: {},
+                  position: input.anchor,
+                  resourceState: { status: "ready", text: "" },
+                })
+                const second = createTextNode({
+                  id: "a-second",
+                  metadata: {},
+                  position: { x: input.anchor.x + 344, y: input.anchor.y },
+                  resourceState: { status: "ready", text: "" },
+                })
+                session.publish({ ...session.getProjection(), nodes: [first, second] })
+                return {
+                  authoritativeProjectionDelivered: true,
+                  createdNodeIds: [second.id, first.id],
+                  warnings: [],
+                }
+              },
+            },
+          })}
+          session={session}
+          viewScopeId="reverse-batch-bounds"
+        />,
+      )
+      await Promise.resolve()
+    })
+    const canvas = container.querySelector<HTMLElement>(".convax-canvas")!
+    Object.defineProperty(canvas, "getBoundingClientRect", {
+      configurable: true,
+      value: () => ({ bottom: 800, height: 800, left: 0, right: 1_200, top: 0, width: 1_200 }),
+    })
+    setViewport.mockClear()
+
+    const picker = container.querySelector<HTMLInputElement>('input[data-canvas-resource-picker="upload"]')
+    await act(async () => {
+      Object.defineProperty(picker, "files", {
+        configurable: true,
+        value: [
+          new File(["First"], "first.txt", { type: "text/plain" }),
+          new File(["Second"], "second.txt", { type: "text/plain" }),
+        ],
+      })
+      picker?.dispatchEvent(new Event("change", { bubbles: true }))
+      await Promise.resolve()
+      await Promise.resolve()
+      await Promise.resolve()
+      await waitForAnimationFrames(4)
+    })
+
+    const authoritativeNodes = renderedNodes.filter((node) => !node.id.startsWith("ghost-resource:"))
+    expect(authoritativeNodes.map((node) => node.id)).toEqual(["z-first", "a-second"])
+    expect(authoritativeNodes.every((node) => node.selected)).toBeTrue()
+    expect(setViewport.mock.calls.filter((call) => call[1]?.duration === 400)).toHaveLength(1)
+  } finally {
+    setViewport.mockReset()
+    setViewport.mockImplementation(async () => undefined)
+    if (root) await act(async () => root?.unmount())
+    await restoreWindow()
+  }
+})
+
+test("keeps the latest created-node focus when two mutations settle in reverse order", async () => {
+  const restoreWindow = installTestWindow()
+  const session = new NodeEntryCanvasSession(createCanvasDocument({ id: "reverse-resource-focus" }))
+  const requests: Array<{
+    anchor: { x: number; y: number }
+    resolve: (value: {
+      authoritativeProjectionDelivered: true
+      createdNodeIds: readonly string[]
+      warnings: readonly string[]
+    }) => void
+  }> = []
+  let root: Root | undefined
+  renderNodes = true
+
+  try {
+    const container = document.createElement("div")
+    document.body.append(container)
+    root = createRoot(container)
+    await act(async () => {
+      root?.render(
+        <CanvasEditor
+          nodeRegistry={createTestRegistry()}
+          services={createCanvasServices({
+            mutation: {
+              add: async (input) =>
+                new Promise((resolve) => {
+                  requests.push({ anchor: input.anchor, resolve })
+                }),
+            },
+          })}
+          session={session}
+          viewScopeId="reverse-resource-focus"
+        />,
+      )
+    })
+    const canvas = container.querySelector<HTMLElement>(".convax-canvas")!
+    Object.defineProperty(canvas, "getBoundingClientRect", {
+      configurable: true,
+      value: () => ({ bottom: 800, height: 800, left: 0, right: 1200, top: 0, width: 1200 }),
+    })
+    const addText = async () => {
+      container.querySelector<HTMLButtonElement>('button[aria-label="Add node"]')?.click()
+      await Promise.resolve()
+      container.querySelector<HTMLButtonElement>('button[aria-label="Add Text"]')?.click()
+      await Promise.resolve()
+      await Promise.resolve()
+    }
+    await act(addText)
+    await act(addText)
+    expect(requests).toHaveLength(2)
+
+    const first = createTextNode({
+      id: "created-first",
+      metadata: {},
+      position: requests[0]!.anchor,
+      resourceState: { status: "ready", text: "" },
+    })
+    const second = createTextNode({
+      id: "created-second",
+      metadata: {},
+      position: requests[1]!.anchor,
+      resourceState: { status: "ready", text: "" },
+    })
+    await act(async () => {
+      session.publish({ ...session.getProjection(), nodes: [second] })
+      requests[1]!.resolve({
+        authoritativeProjectionDelivered: true,
+        createdNodeIds: [second.id],
+        warnings: [],
+      })
+      await Promise.resolve()
+      await Promise.resolve()
+      await Promise.resolve()
+    })
+    expect(renderedNodes.find((node) => node.id === second.id)?.selected).toBeTrue()
+
+    await act(async () => {
+      session.publish({ ...session.getProjection(), nodes: [second, first] })
+      requests[0]!.resolve({
+        authoritativeProjectionDelivered: true,
+        createdNodeIds: [first.id],
+        warnings: [],
+      })
+      await Promise.resolve()
+      await Promise.resolve()
+      await Promise.resolve()
+      await waitForAnimationFrames(2)
+    })
+    expect(renderedNodes.map((node) => ({ id: node.id, selected: Boolean(node.selected) }))).toContainEqual({
+      id: first.id,
+      selected: false,
+    })
+    expect(renderedNodes.find((node) => node.id === second.id)?.selected).toBeTrue()
+  } finally {
     if (root) await act(async () => root?.unmount())
     await restoreWindow()
   }
@@ -1539,8 +2592,8 @@ test("focuses a text node created after dragging a connection to empty canvas", 
 
     const created = container.querySelector<HTMLElement>('[data-id="drag-created-text"] .convax-node')
     expect(setViewport.mock.calls.some((call) => call[1]?.duration === 400)).toBeTrue()
-    expect(created?.dataset.canvasNodeEntering).toBe("true")
-    expect(created?.dataset.canvasNodeEntryPhase).toBe("entering")
+    expect(created?.hasAttribute("data-canvas-node-entering")).toBeFalse()
+    expect(created?.hasAttribute("data-canvas-node-entry-phase")).toBeFalse()
   } finally {
     setViewport.mockReset()
     setViewport.mockImplementation(async () => undefined)
@@ -1689,15 +2742,15 @@ test("applies the host-routed external drag hold and clears it before picker-cre
 
     const created = container.querySelector<HTMLElement>('[data-id="picker-created"] .convax-node')
     expect(container.querySelector("[data-canvas-selection-drag-hint]")).toBeNull()
-    expect(created?.dataset.canvasNodeEntryPhase).toBe("entering")
+    expect(created?.hasAttribute("data-canvas-node-entry-phase")).toBeFalse()
 
     await act(async () => {
       resolveCamera()
       await Promise.resolve()
       await Promise.resolve()
     })
-    expect(created?.dataset.canvasNodeEntering).toBe("true")
-    expect(created?.dataset.canvasNodeEntryPhase).toBe("entering")
+    expect(created?.hasAttribute("data-canvas-node-entering")).toBeFalse()
+    expect(created?.hasAttribute("data-canvas-node-entry-phase")).toBeFalse()
   } finally {
     setViewport.mockReset()
     setViewport.mockImplementation(async () => undefined)
@@ -1783,26 +2836,7 @@ test("focuses a context-menu-created empty text node at the click point", async 
     const created = container.querySelector<HTMLElement>('[data-id="context-created"] .convax-node')
     expect(requestedAnchor).toEqual({ x: 960, y: 640 })
     expect(setViewport.mock.calls.some((call) => call[1]?.duration === 400)).toBeTrue()
-    expect(created?.dataset.canvasNodeEntering).toBe("true")
-    expect(created?.dataset.canvasNodeEntryPhase).toBe("entering")
-
-    await act(async () => {
-      await new Promise<void>((resolve) => setTimeout(resolve, CANVAS_MOTION_DURATION.nodeEnter + 80))
-    })
-    expect(created?.dataset.canvasNodeEntering).toBe("true")
-
-    await act(async () => {
-      const shell = created?.querySelector(".convax-node__entry-shell")
-      shell?.dispatchEvent(animationEvent("convax-node-enter-start"))
-      shell?.dispatchEvent(animationEvent("convax-node-enter-end"))
-    })
-    expect(created?.dataset.canvasNodeEntering).toBe("true")
-
-    await act(async () => {
-      const toolbar = container.querySelector('[data-id="context-created"] .convax-node-toolbar')
-      toolbar?.dispatchEvent(animationEvent("convax-node-chrome-enter-start"))
-      toolbar?.dispatchEvent(animationEvent("convax-node-chrome-enter-end"))
-    })
+    expect(created?.hasAttribute("data-canvas-node-entry-phase")).toBeFalse()
     expect(created?.hasAttribute("data-canvas-node-entering")).toBeFalse()
   } finally {
     setViewport.mockReset()
@@ -1892,13 +2926,13 @@ test("keeps a context-menu-created node visible if the user navigates before opt
     })
 
     const created = container.querySelector<HTMLElement>('[data-id="context-created"] .convax-node')
-    expect(created?.dataset.canvasNodeEntryPhase).toBe("entering")
+    expect(created?.hasAttribute("data-canvas-node-entry-phase")).toBeFalse()
 
     await act(async () => {
       moveStart?.(new MouseEvent("mousedown"))
       await Promise.resolve()
     })
-    expect(created?.dataset.canvasNodeEntryPhase).toBe("entering")
+    expect(created?.hasAttribute("data-canvas-node-entry-phase")).toBeFalse()
   } finally {
     setViewport.mockReset()
     setViewport.mockImplementation(async () => undefined)
@@ -1987,15 +3021,15 @@ test("shows a context-menu-created node immediately if optimistic camera motion 
     })
 
     const created = container.querySelector<HTMLElement>('[data-id="context-created"] .convax-node')
-    expect(created?.dataset.canvasNodeEntryPhase).toBe("entering")
+    expect(created?.hasAttribute("data-canvas-node-entry-phase")).toBeFalse()
 
     await act(async () => {
       await new Promise<void>((resolve) =>
         setTimeout(resolve, CANVAS_MOTION_DURATION.postMutationReveal + CANVAS_NODE_ENTRY_FINISH_GRACE + 20),
       )
     })
-    expect(created?.dataset.canvasNodeEntryPhase).toBe("entering")
-    expect(created?.dataset.canvasNodeEntering).toBe("true")
+    expect(created?.hasAttribute("data-canvas-node-entry-phase")).toBeFalse()
+    expect(created?.hasAttribute("data-canvas-node-entering")).toBeFalse()
   } finally {
     setViewport.mockReset()
     setViewport.mockImplementation(async () => undefined)

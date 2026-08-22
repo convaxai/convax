@@ -3401,6 +3401,11 @@ function OptimisticCanvasGhostNode(props: NodeProps<CanvasNode>) {
   const pending = props.data.status === "pending"
   const emptyText = !pending && props.data.kind === "text"
   const emptyVisualMedia = !pending && (mediaKind === "image" || mediaKind === "video") ? mediaKind : undefined
+  const mediaData = mediaKind ? (props.data as CanvasMediaNodeData) : undefined
+  const previewMedia =
+    pending && mediaData && typeof mediaData.resourceState?.url === "string" && mediaData.resourceState.url.trim()
+      ? mediaData
+      : undefined
   return (
     <div
       aria-busy={pending || undefined}
@@ -3420,10 +3425,12 @@ function OptimisticCanvasGhostNode(props: NodeProps<CanvasNode>) {
       <div
         className={cn(
           "convax-node__surface size-full overflow-hidden border bg-card",
-          emptyVisualMedia && "convax-node__surface--media",
+          (emptyVisualMedia || previewMedia) && "convax-node__surface--media",
         )}
       >
-        {emptyText ? (
+        {previewMedia ? (
+          <MediaBody cutoutPresentation="idle" data={previewMedia} nodeId={props.id} selected={props.selected} />
+        ) : emptyText ? (
           <div
             aria-label="Start writing..."
             className="convax-text-editor size-full overflow-auto"
