@@ -738,6 +738,32 @@ describe("replicaDoc/candidateDoc durability", () => {
     kernel.dispose()
   })
 
+  test("retains the exact accepted post candidate without scheduling a duplicate clone", async () => {
+    let documentCreations = 0
+    const kernel = await openKernel(new MemoryPersistence(), {
+      createDocument: () => {
+        documentCreations += 1
+        return new Y.Doc()
+      },
+    })
+    const afterOpen = documentCreations
+    await commit(kernel, "retained-post-candidate", id(149))
+    const privateKernel = kernel as unknown as {
+      standbyCandidate: { document: Y.Doc } | null
+      standbyCandidateTimer: ReturnType<typeof setTimeout> | null
+    }
+    expect(documentCreations - afterOpen).toBe(1)
+    expect(privateKernel.standbyCandidate).not.toBeNull()
+    expect(privateKernel.standbyCandidateTimer).toBeNull()
+
+    const afterFirstCommit = documentCreations
+    await commit(kernel, "retained-post-candidate-next", id(150))
+    expect(documentCreations).toBe(afterFirstCommit)
+    expect(privateKernel.standbyCandidate).not.toBeNull()
+    expect(privateKernel.standbyCandidateTimer).toBeNull()
+    kernel.dispose()
+  })
+
   test("discards a standby candidate changed by a transaction and falls back to an exact clone", async () => {
     let documentCreations = 0
     const kernel = await openKernel(new MemoryPersistence(), {

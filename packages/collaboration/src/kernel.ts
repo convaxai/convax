@@ -482,6 +482,7 @@ export class CollaborationKernel {
           replicaId: authority.signerAuthority.replicaId,
         }),
     )
+    let candidateRetainedAsStandby = false
     try {
       const ownerContext = {
         scope: this.options.scope,
@@ -649,13 +650,23 @@ export class CollaborationKernel {
             this.options.projection?.publish({ scope: this.options.scope, frameDigest: frame.frameDigest }),
           )
         }
-        this.scheduleStandbyCandidate()
+        if (!canonical.ownsDocument) {
+          try {
+            candidateRetainedAsStandby = this.installStandbyCandidate(candidate)
+          } catch {
+            // The durable result and replicaDoc are already authoritative. A
+            // process-local acceleration miss may only fall back to rebuilding.
+            this.scheduleStandbyCandidate()
+          }
+        } else {
+          this.scheduleStandbyCandidate()
+        }
         return Object.freeze({ status: "saved-locally", frame, acceptedFrontierDigest: this.head.frontierDigest })
       } finally {
         if (canonical.ownsDocument) canonical.document.destroy()
       }
     } finally {
-      candidate.destroy()
+      if (!candidateRetainedAsStandby) candidate.destroy()
     }
   }
 
@@ -1171,14 +1182,7 @@ export class CollaborationKernel {
   private scheduleStandbyCandidate(): void {
     this.invalidateStandbyCandidate()
     if (this.disposed) return
-    const binding = Object.freeze({
-      scopeDigest: documentScopeDigest(this.options.scope),
-      durableHeadDigest: this.head.headDigest,
-      frontierDigest: this.head.frontierDigest,
-      fullUpdateDigest: this.headFullUpdateDigest,
-      stateVectorDigest: this.headStateVectorDigest,
-      documentGeneration: this.documentGeneration,
-    })
+    const binding = this.currentStandbyBinding()
     this.standbyCandidateTimer = setTimeout(() => {
       this.standbyCandidateTimer = null
       if (!this.matchesStandbyBinding(binding)) return
@@ -1195,6 +1199,28 @@ export class CollaborationKernel {
         // A rebuildable acceleration miss never changes local admission.
       }
     }, 0)
+  }
+
+  private installStandbyCandidate(document: Y.Doc): boolean {
+    this.invalidateStandbyCandidate()
+    if (this.disposed) return false
+    // The fast local candidate has already passed post-validation, canonical
+    // digesting, durable publication, and exact replica application. Retaining
+    // that isolated post-state as the next candidate avoids rebuilding the
+    // same Y.Doc on the Main thread after every accepted mutation.
+    this.standbyCandidate = createStandbyExactBaseCandidate(document, this.currentStandbyBinding())
+    return true
+  }
+
+  private currentStandbyBinding(): StandbyExactBaseBinding {
+    return Object.freeze({
+      scopeDigest: documentScopeDigest(this.options.scope),
+      durableHeadDigest: this.head.headDigest,
+      frontierDigest: this.head.frontierDigest,
+      fullUpdateDigest: this.headFullUpdateDigest,
+      stateVectorDigest: this.headStateVectorDigest,
+      documentGeneration: this.documentGeneration,
+    })
   }
 
   private consumeStandbyCandidate(

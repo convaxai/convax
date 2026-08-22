@@ -264,6 +264,49 @@ describe("ProjectIndex owner schema", () => {
     expect(reopenedValidationCalls()).toBeGreaterThan(0)
   })
 
+  test("transfers the exact validated snapshot without canonical acceleration evidence", () => {
+    const source = genesis()
+    const protocol = ownerProtocol()
+    const state = protocol.validateBase(source)
+    if (typeof state === "string") throw new Error("source validation rejected")
+    const target = rawCloneProjectIndexYDoc(source)
+    const targetValidationCalls = countFullProjectIndexValidations(target)
+
+    // A transaction boundary invalidates the source-side process cache even
+    // when no Yjs bytes changed. The validated state remains exact, and the
+    // transfer must still prove full source/target update equality.
+    source.transact(() => undefined, "empty-cache-invalidation")
+    selectedProjectIndexDocumentOwnerArtifactDefinition.installValidatedPostCache?.({
+      scope: {
+        projectId: "project-a" as never,
+        projectEpoch,
+        docKind: "project-index",
+        docId: "project-index",
+        shardEpoch,
+      },
+      source,
+      target,
+      state,
+      canonicalStateDigest: digest("uncertified-canonical-state"),
+      durableHeadDigest: digest("uncertified-durable-head"),
+    })
+
+    expect(typeof protocol.validateBase(target)).not.toBe("string")
+    expect(targetValidationCalls()).toBe(0)
+    expect(selectedProjectIndexDocumentOwnerArtifactDefinition.readCertifiedCanonicalDigest?.({
+      scope: {
+        projectId: "project-a" as never,
+        projectEpoch,
+        docKind: "project-index",
+        docId: "project-index",
+        shardEpoch,
+      },
+      document: target,
+      durableHeadDigest: digest("uncertified-durable-head"),
+      expectedCanonicalStateDigest: digest("uncertified-canonical-state"),
+    })).toBeNull()
+  })
+
   test("skips base canonical JCS only for the exact certified durable head", () => {
     const source = genesis()
     const target = rawCloneProjectIndexYDoc(source)

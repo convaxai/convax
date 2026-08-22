@@ -791,12 +791,14 @@ function installProjectIndexValidatedPostCache(input: Readonly<{
   readonly durableHeadDigest: Digest
 }>): void {
   if (input.scope.docKind !== "project-index" || input.scope.docId !== "project-index") return
+  const snapshot = projectIndexSnapshotFromValidatedOwnerState(input.state)
+  if (snapshot === null) return
   const source = cachedProjectIndexValidatedView(input.source)
-  if (source === null || source.snapshot !== input.state.value) return
+  if (source !== null && source.snapshot !== snapshot) return
   if (
-    source.snapshot.identity.projectId !== input.scope.projectId
-    || source.snapshot.identity.projectEpoch !== input.scope.projectEpoch
-    || source.snapshot.identity.shardEpoch !== input.scope.shardEpoch
+    snapshot.identity.projectId !== input.scope.projectId
+    || snapshot.identity.projectEpoch !== input.scope.projectEpoch
+    || snapshot.identity.shardEpoch !== input.scope.shardEpoch
   ) return
   const sourceRoot = currentProjectIndexRootIdentity(input.source)
   const targetRoot = currentProjectIndexRootIdentity(input.target)
@@ -809,24 +811,39 @@ function installProjectIndexValidatedPostCache(input: Readonly<{
     || targetKeys.length !== PROJECT_INDEX_ROOT_KEYS.length
     || PROJECT_INDEX_ROOT_KEYS.some((key, index) => sourceKeys[index] !== key || targetKeys[index] !== key)
   ) return
-  const fragments = projectIndexCanonicalFragments.get(source.snapshot)
-  if (fragments === undefined) return
-  if (fragments.evidence !== null) {
+  const fragments = projectIndexCanonicalFragments.get(snapshot)
+  if (fragments?.evidence !== null && fragments?.evidence !== undefined) {
     const certified = Object.freeze({ ...fragments, digest: input.canonicalStateDigest, certifiedDurableHeadDigest: input.durableHeadDigest })
-    projectIndexCanonicalFragments.set(source.snapshot, certified)
-    cacheProjectIndexValidatedView(input.target, source.snapshot, null, input.canonicalStateDigest, input.durableHeadDigest)
+    projectIndexCanonicalFragments.set(snapshot, certified)
+    cacheProjectIndexValidatedView(input.target, snapshot, null, input.canonicalStateDigest, input.durableHeadDigest)
     return
   }
-  if (source.canonicalStateBytes === null || fragments.bytes === null || fragments.digest === null) return
-  const bytesDigest = canonicalStateDigest(PROJECT_INDEX_PROTOCOL_SCHEMA_ARTIFACT_DIGEST, source.canonicalStateBytes)
   if (
-    bytesDigest !== input.canonicalStateDigest
-    || source.canonicalStateDigest !== bytesDigest
-    || fragments.digest !== bytesDigest
-    || !sameBytes(fragments.bytes, source.canonicalStateBytes)
-  ) return
-  projectIndexCanonicalFragments.set(source.snapshot, Object.freeze({ ...fragments, certifiedDurableHeadDigest: input.durableHeadDigest }))
-  cacheProjectIndexValidatedView(input.target, source.snapshot, source.canonicalStateBytes.slice(), bytesDigest, input.durableHeadDigest)
+    source !== null
+    && fragments !== undefined
+    && source.canonicalStateBytes !== null
+    && fragments.bytes !== null
+    && fragments.digest !== null
+  ) {
+    const bytesDigest = canonicalStateDigest(PROJECT_INDEX_PROTOCOL_SCHEMA_ARTIFACT_DIGEST, source.canonicalStateBytes)
+    if (
+      bytesDigest === input.canonicalStateDigest
+      && source.canonicalStateDigest === bytesDigest
+      && fragments.digest === bytesDigest
+      && sameBytes(fragments.bytes, source.canonicalStateBytes)
+    ) {
+      projectIndexCanonicalFragments.set(snapshot, Object.freeze({ ...fragments, certifiedDurableHeadDigest: input.durableHeadDigest }))
+      cacheProjectIndexValidatedView(input.target, snapshot, source.canonicalStateBytes.slice(), bytesDigest, input.durableHeadDigest)
+      return
+    }
+  }
+  // Canonical acceleration evidence may be unavailable even though the kernel
+  // has already validated the exact post-state and applied its exact update to
+  // replicaDoc. Transfer only the immutable validated snapshot in that case,
+  // and only after an exact full-update byte comparison. Canonical certification
+  // remains absent, so later canonical checks still fail closed independently.
+  if (!sameBytes(Y.encodeStateAsUpdate(input.source), Y.encodeStateAsUpdate(input.target))) return
+  cacheProjectIndexValidatedView(input.target, snapshot, null)
 }
 
 function readProjectIndexCertifiedCanonicalDigest(input: Readonly<{
