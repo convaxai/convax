@@ -11,7 +11,7 @@ import { workspaceSystemStatusIpcChannel } from "./workspace-system-status-contr
 
 describe("desktop IPC protocol compatibility", () => {
   test("tracks the Desktop preload bridge contract", () => {
-    expect(desktopProtocolVersion).toBe("convax.desktop-ipc/43")
+    expect(desktopProtocolVersion).toBe("convax.desktop-ipc/44")
     expect(workspaceSystemStatusIpcChannel).toBe("desktop:workspace-system-status")
     expect(canvasResourceIpcChannel).toBe("canvas:resource-add")
     expect(canvasResourceHydrateStaleIpcChannel).toBe("canvas:resource-hydrate-stale")
@@ -56,13 +56,13 @@ describe("desktop IPC protocol compatibility", () => {
   test("requires a restart when desktop protocol versions differ", async () => {
     await expect(
       checkDesktopProtocol({
-        getVersion: async () => "convax.desktop-ipc/42",
-        version: "convax.desktop-ipc/42",
+        getVersion: async () => "convax.desktop-ipc/43",
+        version: "convax.desktop-ipc/43",
       }),
     ).resolves.toEqual({
-      actualVersion: "convax.desktop-ipc/42",
+      actualVersion: "convax.desktop-ipc/43",
       component: "preload",
-      expectedVersion: "convax.desktop-ipc/43",
+      expectedVersion: "convax.desktop-ipc/44",
       status: "mismatch",
     })
 

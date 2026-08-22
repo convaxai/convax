@@ -1381,6 +1381,10 @@ try {
     }
   }
   if (summary.latencyMode !== true && summary.activeCanvasId && summary.projectId) {
+    // Window-scoped shortcuts are meaningful only for the foreground page.
+    // Other local Electron development windows must not make this isolated
+    // smoke nondeterministic by taking focus between the main flow and here.
+    await sendDebuggerCommand(rendererDebugger, "Page.bringToFront", {})
     const shortcutSmoke = (await evaluateStable(
       rendererDebugger,
       `(async () => {
@@ -1485,6 +1489,8 @@ try {
         () => initialTextElement.querySelector("[contenteditable]:not([contenteditable='false'])"),
         "created node input",
       )
+      window.focus()
+      await waitFor(() => document.hasFocus(), "foreground window focus")
       nodeInput.focus()
       await pressPrimary("f")
       await pressPrimary("z")
@@ -1496,6 +1502,13 @@ try {
         throw new Error("Canvas shortcuts leaked into a focused node input")
       }
 
+      // The isolated smoke can share a developer desktop with other Electron
+      // windows. Reassert focus immediately before the application shortcut so
+      // a background window cannot turn a synthetic key event into a false
+      // shortcut-routing failure.
+      window.focus()
+      await waitFor(() => document.hasFocus(), "application shortcut window focus")
+      nodeInput.focus()
       await pressPrimary("k")
       await waitFor(() => document.querySelector('[data-slot="command-menu"]'), "application command palette")
       await pressEscape()

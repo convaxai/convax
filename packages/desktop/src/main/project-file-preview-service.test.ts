@@ -79,6 +79,8 @@ test("keeps only one preview lease per renderer and returns a small image thumbn
   expect((await service.handle(new Request(second.url, { method: "HEAD" }))).status).toBe(200)
   await expect(service.thumbnail({ path: "Media/clip.mp4", projectId: "project-one" })).resolves.toEqual({
     dataUrl: "data:image/png;base64,small",
+    intrinsicHeight: 80,
+    intrinsicWidth: 80,
   })
   expect(createFromPath).toHaveBeenCalledWith(file)
   expect(resize).toHaveBeenCalledWith({ height: 40, quality: "better", width: 40 })
@@ -98,13 +100,12 @@ test("opens bounded video-thumbnail streams independently from the hover preview
   const service = previewService(file, "video/mp4", { createFromPath })
 
   await expect(
-    service.open(
-      { path: "Media/large.mp4", projectId: "project-one", purpose: "invalid" as "thumbnail" },
-      7,
-    ),
+    service.open({ path: "Media/large.mp4", projectId: "project-one", purpose: "invalid" as "thumbnail" }, 7),
   ).rejects.toThrow("purpose is invalid")
   await expect(service.thumbnail({ path: "Media/large.mp4", projectId: "project-one" })).resolves.toEqual({
     dataUrl: null,
+    intrinsicHeight: null,
+    intrinsicWidth: null,
   })
   const firstThumbnail = await service.open(
     { path: "Media/large.mp4", projectId: "project-one", purpose: "thumbnail" },
@@ -118,14 +119,8 @@ test("opens bounded video-thumbnail streams independently from the hover preview
     service.open({ path: "Media/large.mp4", projectId: "project-one", purpose: "thumbnail" }, 7),
   ).rejects.toThrow("thumbnail concurrency limit")
 
-  const firstPreview = await service.open(
-    { path: "Media/large.mp4", projectId: "project-one", purpose: "preview" },
-    7,
-  )
-  const secondPreview = await service.open(
-    { path: "Media/large.mp4", projectId: "project-one", purpose: "preview" },
-    7,
-  )
+  const firstPreview = await service.open({ path: "Media/large.mp4", projectId: "project-one", purpose: "preview" }, 7)
+  const secondPreview = await service.open({ path: "Media/large.mp4", projectId: "project-one", purpose: "preview" }, 7)
   expect((await service.handle(new Request(firstThumbnail.url, { method: "HEAD" }))).status).toBe(200)
   expect((await service.handle(new Request(secondThumbnail.url, { method: "HEAD" }))).status).toBe(200)
   expect((await service.handle(new Request(firstPreview.url, { method: "HEAD" }))).status).toBe(404)

@@ -1,6 +1,8 @@
 import { CanvasTextResourceConflictError } from "@convax/canvas/application/errors"
 import { parseCanvasDocument } from "@convax/canvas/core"
 import {
+  canvasResourceHydrationMaximumTargetCount,
+  canvasResourceHydrationMaximumTargetIdLength,
   canvasResourceHydrateStaleIpcChannel,
   canvasResourceIpcChannel,
   canvasResourceLocalFileRegisterIpcChannel,
@@ -11,6 +13,7 @@ import {
   type CanvasResourceAddResult,
   type CanvasResourceAddInput,
   type CanvasResourceClient,
+  type CanvasResourceHydrateStaleInput,
   type CanvasTextResourceClient,
 } from "../desktop-protocol"
 import {
@@ -176,12 +179,14 @@ export function createCanvasResourcePreloadClient(options: CanvasResourcePreload
     },
     async hydrateStale(input) {
       let result: unknown
+      let request: CanvasResourceHydrateStaleInput
       try {
-        result = await options.invoke(canvasResourceHydrateStaleIpcChannel, input)
+        request = requireCanvasResourceHydrateStaleInput(input)
+        result = await options.invoke(canvasResourceHydrateStaleIpcChannel, request)
       } catch {
         throw new Error("Could not refresh Canvas resources")
       }
-      const document = parseCanvasDocument(result, input.canvasId)
+      const document = parseCanvasDocument(result, request.ref.canvasId)
       if (!document) throw new Error("Canvas resource refresh response is invalid")
       return document
     },
@@ -331,6 +336,56 @@ async function invokeCanvasResourceRelink(
     operationReceipt: structuredClone(result.operationReceipt),
     warnings: result.warnings,
   }
+}
+
+function requireCanvasResourceHydrateStaleInput(value: unknown): CanvasResourceHydrateStaleInput {
+  if (!isRecord(value)) throw new Error("Canvas resource refresh input is invalid")
+  const keys = Object.keys(value)
+  if (
+    keys.length < 2 ||
+    keys.length > 3 ||
+    !keys.includes("ref") ||
+    !keys.includes("sessionId") ||
+    keys.some((key) => key !== "ref" && key !== "sessionId" && key !== "nodeIds")
+  ) {
+    throw new Error("Canvas resource refresh input is invalid")
+  }
+  if (!isRecord(value.ref)) throw new Error("Canvas resource refresh input is invalid")
+  const refKeys = Object.keys(value.ref)
+  if (
+    refKeys.length !== 2 ||
+    refKeys.some((key) => key !== "canvasId" && key !== "scopeId") ||
+    typeof value.ref.canvasId !== "string" ||
+    !value.ref.canvasId.trim() ||
+    typeof value.ref.scopeId !== "string" ||
+    !value.ref.scopeId.trim()
+  ) {
+    throw new Error("Canvas resource refresh input is invalid")
+  }
+  const ref = Object.freeze({ canvasId: value.ref.canvasId, scopeId: value.ref.scopeId })
+  const sessionId = requireId128Dto(value.sessionId, "Canvas resource refresh session id")
+  if (value.nodeIds === undefined) return Object.freeze({ ref, sessionId })
+  if (
+    !Array.isArray(value.nodeIds) ||
+    value.nodeIds.length === 0 ||
+    value.nodeIds.length > canvasResourceHydrationMaximumTargetCount
+  ) {
+    throw new Error("Canvas resource refresh input is invalid")
+  }
+  const nodeIds = value.nodeIds.map((nodeId) => {
+    if (
+      typeof nodeId !== "string" ||
+      !nodeId ||
+      nodeId !== nodeId.trim() ||
+      nodeId.length > canvasResourceHydrationMaximumTargetIdLength ||
+      /[\u0000-\u001f\u007f]/u.test(nodeId)
+    ) {
+      throw new Error("Canvas resource refresh input is invalid")
+    }
+    return nodeId
+  })
+  if (new Set(nodeIds).size !== nodeIds.length) throw new Error("Canvas resource refresh input is invalid")
+  return Object.freeze({ ref, sessionId, nodeIds: Object.freeze(nodeIds) })
 }
 
 function isStringArray(value: unknown): value is string[] {

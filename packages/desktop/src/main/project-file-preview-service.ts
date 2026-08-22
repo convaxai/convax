@@ -3,11 +3,7 @@ import { constants as fsConstants, type Stats } from "node:fs"
 import fs from "node:fs/promises"
 import { Readable } from "node:stream"
 
-import type {
-  ProjectFilePreviewLease,
-  ProjectFilePreviewPurpose,
-  ProjectFileThumbnail,
-} from "@convax/project-files"
+import type { ProjectFilePreviewLease, ProjectFilePreviewPurpose, ProjectFileThumbnail } from "@convax/project-files"
 
 import { projectFilePreviewScheme } from "../project-file-preview-contracts"
 import { parseSingleHttpByteRange } from "./http-byte-range"
@@ -110,25 +106,31 @@ export class ProjectFilePreviewService {
     ])
     await inspectRegularFile(file)
     const mimeType = normalizeMimeType(info.mimeType)
-    if (mimeType.startsWith("video/")) return { dataUrl: null }
+    if (mimeType.startsWith("video/")) {
+      return { dataUrl: null, intrinsicHeight: null, intrinsicWidth: null }
+    }
     let image: PreviewImage
     try {
       image = mimeType.startsWith("image/")
         ? this.input.images.createFromPath(file)
         : this.input.images.createFromPath("")
     } catch {
-      return { dataUrl: null }
+      return { dataUrl: null, intrinsicHeight: null, intrinsicWidth: null }
     }
-    if (image.isEmpty()) return { dataUrl: null }
+    if (image.isEmpty()) return { dataUrl: null, intrinsicHeight: null, intrinsicWidth: null }
     const size = image.getSize(1)
-    if (!positiveSize(size)) return { dataUrl: null }
+    if (!positiveSize(size)) return { dataUrl: null, intrinsicHeight: null, intrinsicWidth: null }
     const scale = Math.min(40 / size.width, 40 / size.height, 1)
     const resized = image.resize({
       height: Math.max(1, Math.round(size.height * scale)),
       quality: "better",
       width: Math.max(1, Math.round(size.width * scale)),
     })
-    return { dataUrl: resized.isEmpty() ? null : resized.toDataURL() }
+    return {
+      dataUrl: resized.isEmpty() ? null : resized.toDataURL(),
+      intrinsicHeight: Math.round(size.height),
+      intrinsicWidth: Math.round(size.width),
+    }
   }
 
   async handle(request: Request): Promise<Response> {

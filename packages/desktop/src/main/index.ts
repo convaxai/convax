@@ -1354,9 +1354,7 @@ function startApplication() {
         projectManager,
         projectFilePublisher,
         projectAssets,
-        createProjectCanvasMediaInspector({
-          decoder: nativeImage,
-        }),
+        createProjectCanvasMediaInspector(),
         collaborationFacade.projectIndexes,
         canvasResourceBusinessDiagnostics,
       )
@@ -2312,7 +2310,7 @@ function startApplication() {
       const disposeCanvasDocumentIpc = registerCanvasDocumentIpc(canvasApplication, canvasResourceHydrator, {
         ...ipcSecurity,
         prepareProjectCanvasAccess: (projectId) => projectAssetGcScheduler.prepareOpen(projectId),
-        resolveActiveCanvas,
+        sessions: collaborationCanvasSessions,
       })
       const disposeCanvasExternalMediaDragIpc = registerCanvasExternalMediaDragIpc(canvasExternalMediaDrag, {
         isTrustedSender: ipcSecurity.isTrustedSender,

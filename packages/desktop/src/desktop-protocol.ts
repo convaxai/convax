@@ -1,11 +1,13 @@
-import type { CanvasResourceSource } from "@convax/canvas/application"
+import type { CanvasDocumentRef, CanvasResourceSource } from "@convax/canvas/application"
 import type { BoundedOperationReceipt } from "@convax/canvas/collaboration"
 import type { CanvasDocument, CanvasPoint } from "@convax/canvas/core"
 import type { Digest, Id128 } from "@convax/collaboration"
 import type { CanvasSessionProjectionDto } from "./canvas-session-contracts"
 
 export const desktopProtocolChannel = "desktop:protocol-version"
-export const desktopProtocolVersion = "convax.desktop-ipc/43"
+export const desktopProtocolVersion = "convax.desktop-ipc/44"
+export const canvasResourceHydrationMaximumTargetCount = 4_096
+export const canvasResourceHydrationMaximumTargetIdLength = 256
 export const canvasResourceIpcChannel = "canvas:resource-add"
 export const canvasResourceHydrateStaleIpcChannel = "canvas:resource-hydrate-stale"
 export const canvasResourceLocalFileRegisterIpcChannel = "canvas:resource-local-file-register"
@@ -104,10 +106,16 @@ export interface CanvasConnectedImageReadResult {
   size: number
 }
 
+export interface CanvasResourceHydrateStaleInput {
+  ref: CanvasDocumentRef
+  sessionId: Id128
+  nodeIds?: readonly string[]
+}
+
 export interface CanvasResourceClient {
   add(input: CanvasResourceAddInput): Promise<CanvasResourceAddResult>
   createLocalFileToken(file: File): string
-  hydrateStale(input: { canvasId: string }): Promise<CanvasDocument>
+  hydrateStale(input: CanvasResourceHydrateStaleInput): Promise<CanvasDocument>
   readConnectedImage(input: CanvasConnectedImageReadInput): Promise<CanvasConnectedImageReadResult>
   relink(input: CanvasResourceRelinkInput): Promise<CanvasResourceRelinkResult>
   saveEditableCopy(input: CanvasResourceSaveEditableCopyInput): Promise<CanvasResourceRelinkResult>

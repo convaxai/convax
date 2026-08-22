@@ -116,6 +116,9 @@ export function createMainProjectCollaborationComposition(input: Readonly<{
       sessions.delete(parseId128(request.sessionId))
       bound.owner.close(request)
     },
+    requireRendererLease(request) {
+      return requireSession(request.ref, request.sessionId).owner.requireRendererLease(request)
+    },
     queryRenderer(ref, sessionId) {
       return requireSession(ref, sessionId).owner.queryRenderer(ref, sessionId)
     },

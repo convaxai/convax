@@ -19,11 +19,13 @@ import {
 import {
   ProjectIndexCanvasApplication,
   ProjectIndexFileApplication,
+  type ProjectIndexBlobPublicationPort,
   type ProjectCanvasGenesisStagingPort,
   type ProjectIndexCanvasApplicationPort,
   type ProjectIndexFactResolutionPort,
   type ProjectIndexFileApplicationPort,
   type ProjectIndexFileMaterializationProjectionPort,
+  type ProjectIndexManagedBlobAdmission,
 } from "@convax/project/canvas"
 import {
   PROJECT_INDEX_PROTOCOL_SCHEMA_ARTIFACT_DIGEST,
@@ -32,10 +34,7 @@ import {
   type ProjectIndexCurrentBlobReferencePort,
   type ProjectIndexCurrentResourceReferenceQueryPort,
 } from "@convax/project"
-import type {
-  NodeProjectCollaborationRuntimeCoordinator,
-  ProjectCollaborationRuntimeLease,
-} from "@convax/project/node"
+import type { NodeProjectCollaborationRuntimeCoordinator, ProjectCollaborationRuntimeLease } from "@convax/project/node"
 import {
   createEmptyProjectIndexGenesisCandidate,
   initializeUnteamedProjectIndexNativeStore,
@@ -72,6 +71,48 @@ import type {
 type ProjectIndexScope = DocumentScope & {
   readonly docKind: "project-index"
   readonly docId: "project-index"
+}
+
+const projectIndexBlobAdmissionChunkBytes = 1024 * 1024
+
+type BlobPublicationTrace = <T>(byteLength: number, operation: () => Promise<T>) => Promise<T>
+
+/**
+ * Adapts ProjectIndex's process-local exact byte view to the native streaming
+ * durability verifier. Each chunk is only a view over the caller-owned bytes;
+ * the blob store remains responsible for length, SHA-256, fsync and publication.
+ */
+export function createMainProjectIndexBlobPublicationPort(input: {
+  readonly blobs: Pick<ProjectBlobReplicationStore, "admitVerifiedStream">
+  readonly tracePublication?: BlobPublicationTrace
+}): ProjectIndexBlobPublicationPort {
+  const tracePublication: BlobPublicationTrace = input.tracePublication ?? ((_byteLength, operation) => operation())
+  const port: ProjectIndexBlobPublicationPort = {
+    admitManaged: ({ reference, admission }) =>
+      input.blobs.admitVerifiedStream(reference, admission).then(() => undefined),
+    publish: ({ reference, exactBytes }) => {
+      const admission: ProjectIndexManagedBlobAdmission = {
+        blob: reference.blob,
+        async readChunks(consume: Parameters<ProjectIndexManagedBlobAdmission["readChunks"]>[0], signal?: AbortSignal) {
+          signal?.throwIfAborted()
+          for (let offset = 0; offset < exactBytes.byteLength; offset += projectIndexBlobAdmissionChunkBytes) {
+            signal?.throwIfAborted()
+            await consume(
+              exactBytes.subarray(
+                offset,
+                Math.min(offset + projectIndexBlobAdmissionChunkBytes, exactBytes.byteLength),
+              ),
+            )
+          }
+          signal?.throwIfAborted()
+        },
+      }
+      return tracePublication(exactBytes.byteLength, () =>
+        input.blobs.admitVerifiedStream(reference, Object.freeze(admission)).then(() => undefined),
+      )
+    },
+  }
+  return Object.freeze(port)
 }
 
 export interface MainProjectIndexFirstRegistrationPort {
@@ -372,16 +413,12 @@ export class MainProjectIndexRuntimeRegistry
     return (await this.open(projectId)).application.submitRouteCommand({ ...input, projectId })
   }
 
-  async queryCurrentBlobDigests(
-    input: Parameters<ProjectIndexCurrentBlobReferencePort["queryCurrentBlobDigests"]>[0],
-  ) {
+  async queryCurrentBlobDigests(input: Parameters<ProjectIndexCurrentBlobReferencePort["queryCurrentBlobDigests"]>[0]) {
     const projectId = parseProjectId(input.projectId)
     return queryMainProjectIndexCurrentBlobDigests((await this.open(projectId)).application, { projectId })
   }
 
-  async queryCurrentResources(
-    input: Parameters<ProjectIndexCurrentBlobReferencePort["queryCurrentResources"]>[0],
-  ) {
+  async queryCurrentResources(input: Parameters<ProjectIndexCurrentBlobReferencePort["queryCurrentResources"]>[0]) {
     const projectId = parseProjectId(input.projectId)
     return (await this.open(projectId)).application.queryCurrentResources({ projectId })
   }
@@ -515,9 +552,10 @@ export class MainProjectIndexRuntimeRegistry
           recordAll: process.env.CONVAX_COLLABORATION_LATENCY_RECORD_ALL === "1",
           // Record-all is a benchmark mode. Avoid letting an O(outbox) sampler
           // contend with the following root and perturb the latency distribution.
-          sample: process.env.CONVAX_COLLABORATION_LATENCY_RECORD_ALL === "1"
-            ? () => ({})
-            : () => runtime!.persistence.sampleLatencyDiagnostics(registeredScope),
+          sample:
+            process.env.CONVAX_COLLABORATION_LATENCY_RECORD_ALL === "1"
+              ? () => ({})
+              : () => runtime!.persistence.sampleLatencyDiagnostics(registeredScope),
         }),
       })
       const application = new ProjectIndexCanvasApplication({
@@ -534,24 +572,24 @@ export class MainProjectIndexRuntimeRegistry
           return await operation()
         } finally {
           try {
-            console.warn("[convax:canvas-resource-latency]", JSON.stringify({
-              byteLength,
-              callCount: 1,
-              durationMs: performance.now() - startedAt,
-              stage: "blob-publication",
-            }))
-          } catch { /* Benchmark diagnostics never affect blob publication. */ }
+            console.warn(
+              "[convax:canvas-resource-latency]",
+              JSON.stringify({
+                byteLength,
+                callCount: 1,
+                durationMs: performance.now() - startedAt,
+                stage: "blob-publication",
+              }),
+            )
+          } catch {
+            /* Benchmark diagnostics never affect blob publication. */
+          }
         }
       }
       const fileApplication = new ProjectIndexFileApplication({
         session,
         facts: descriptor.facts,
-        blobs: {
-          admitManaged: ({ reference, admission }) =>
-            blobs.admitVerifiedStream(reference, admission).then(() => undefined),
-          publish: ({ reference, exactBytes }) => traceBlobPublication(exactBytes.byteLength, () =>
-            blobs.admitVerifiedBytes(reference, exactBytes).then(() => undefined)),
-        },
+        blobs: createMainProjectIndexBlobPublicationPort({ blobs, tracePublication: traceBlobPublication }),
         createOperationId: this.options.createOperationId,
       })
       const fileMaterializer = await ProjectIndexFileMaterializer.open({

@@ -323,14 +323,14 @@ collapsed into one path or hash identity. The native adapter currently lives in
 `@convax/project/node` because that adapter resolves Project bindings and real paths;
 it implements the `ProjectFilesClient` contract without moving file semantics back
 into `ProjectController`. Sidebar media presentation keeps bounded row covers and
-full hover previews separate. Image covers return directly as small data URLs. Each
-mounted video row may request a purpose-tagged, sender-scoped thumbnail lease;
-Chromium captures one bounded first-frame data URL and immediately releases that
-lease without waiting for hover. The independently delayed hover opens one full
-preview lease. Both lease kinds stream the native file through Main with HTTP
-byte-range support and are revoked on explicit close, navigation, renderer loss, or
-owner disposal; replacing a hover revokes only the prior hover lease. Full media
-bytes never cross Project Files IPC and preview eligibility has no file-size cutoff.
+full hover previews separate. Mounted image and video rows may request a
+purpose-tagged, sender-scoped thumbnail lease; Chromium decodes the image or first
+video frame into one bounded cover data URL and immediately releases that lease
+without waiting for hover. The independently delayed hover opens one full preview
+lease. Both lease kinds stream the native file through Main with HTTP byte-range
+support and are revoked on explicit close, navigation, renderer loss, or owner
+disposal; replacing a hover revokes only the prior hover lease. Full media bytes
+never cross Project Files IPC and preview eligibility has no file-size cutoff.
 
 ### Canvas
 
@@ -966,13 +966,14 @@ scoped Project-relative file as a stable regular file. GET/HEAD reopens that exa
 identity, supports one HTTP byte range, and aborts every active stream when its
 sender-owned lease closes. It carries no durable Project resource identity, is never
 persisted, and is not a replacement for `convax-asset:`. Renderer CSP admits it only
-as an `img-src` and `media-src` presentation source, never as `connect-src`. Image
-cover art is obtained independently through a bounded thumbnail IPC method. Mounted
-video rows use at most two concurrent purpose-tagged thumbnail leases per renderer;
-Chromium decodes one 40-pixel cover and immediately clears the media element and
-closes the lease. This never calls the potentially blocking operating-system
-video-thumbnail generator and never depends on hover. The full preview lease remains
-independent and replaces only another hover preview.
+as an `img-src` and `media-src` presentation source, never as `connect-src`.
+Mounted image and video rows use bounded-concurrency purpose-tagged thumbnail
+leases; Chromium decodes one 40-pixel cover and immediately clears the media element
+and closes the lease. This keeps normal sidebar rendering off potentially blocking
+operating-system thumbnail decoders and never depends on hover. The full preview
+lease remains independent and replaces only another hover preview. The older
+bounded-thumbnail method remains only a compatibility fallback for hosts that do
+not supply the lease opener.
 
 Marketplace caches are Desktop-owned, user-global, source-qualified, and
 non-authoritative. Current Builtin is empty, Official is an installation-owned
@@ -2078,8 +2079,11 @@ add its already-known presentation result; every other root receives its exact
 before/after presentation only from Main's accepted projection. Commands that require
 owner-derived node or edge identities never guess them; their operation-specific
 ghost remains the only pre-commit forward presentation.
-The provisional root contains a complete node presentation snapshot plus exact node
-and edge incarnation guards, never a Canvas document or command payload. Main still
+The provisional root retains immutable session-replacement projection references
+plus exact node and edge incarnation guards, never a deep-cloned Canvas document or
+command payload. It derives the affected presentation delta only when Undo/Redo
+needs to predict that transition. Staging a local command therefore never
+serializes or traverses the complete Canvas in the input event stack. Main still
 chooses and materializes undo/redo intent; the renderer binds the provisional entry
 to the returned durable operation id and accepts only the actual
 `historyTransition`. A failed/canceled root clears its speculative suffix and any
@@ -2092,6 +2096,19 @@ projection, including recreated ids and incarnations, before predicting another
 inverse. A geometry-only prediction overlays only position and size on the mounted
 node. It preserves current node-data identity so transient text and media runtime
 state cannot be replaced by a historical durable snapshot and visibly reload.
+
+Resource ghosts additionally act as a bounded first-paint shield. Their selected
+and focus presentation appears in the same renderer commit as the card; authority
+may replace them only after the corresponding media and focus surface has painted,
+with a bounded fallback for failed media. Matching ghost and authority bounds keep
+one in-flight camera motion instead of interrupting and restarting focus. This
+shield changes neither the authoritative document nor collaboration ordering.
+The mutation-start projection publishes the base ghost before Main submission or
+asynchronous media inspection. A probe may replace only the same operation token
+and presentation keys while authority is still pending, so a slow decode can never
+append a shifted ghost after the durable node has appeared. Selection and camera
+effects from overlapping create operations are latest-wins even when their durable
+responses arrive in reverse order.
 
 Node duplication submits only the selected live node ids and a bounded offset. The
 Canvas owner resolves the latest source identities and content, derives all clone
@@ -2146,14 +2163,27 @@ relationship creation, semantic guards, persistence, and optional view refresh a
 composed once. The UI and Agent call that same operation. A primitive remains
 available for precise low-level edits, but it is not the default product path. For
 an admitted image, Project owns a stable read of the exact Project file or managed
-blob, Desktop Main decodes those bytes through the platform image adapter, and
-Canvas applies its bounded intrinsic-size policy before constructing the one
-`canvas.resources.add` intent. The renderer may independently decode the dropped
-`File` only to size its non-authoritative ghost with that same Canvas policy; it
-waits for this presentation probe before showing a full card. The first durable node
-therefore already has its final fitted geometry, and ordinary media load does not
-issue a second geometry mutation. Inspection failure or an oversized/unsupported
-format falls back to the Canvas default size without trusting renderer dimensions.
+blob, Desktop Main inspects only bounded PNG, JPEG, GIF, WebP, BMP, MP4, MOV, WebM,
+or Matroska headers, and Canvas applies its bounded intrinsic-size policy before
+constructing the one `canvas.resources.add` intent. Main does not synchronously
+decode or decompress the complete media payload. The renderer may independently
+inspect a dropped `File` only to size its non-authoritative ghost with that same Canvas
+policy; this presentation probe runs concurrently with Main admission and durable
+mutation. A Project-sidebar image or video drag may reuse a bounded cached thumbnail
+and intrinsic-size hint for the same purpose, while Main still derives authority
+from the admitted bytes. The first durable node therefore already has its final
+fitted geometry, and ordinary media load does not issue a second geometry mutation.
+Inspection failure or an oversized/unsupported format falls back to the Canvas
+default size without trusting renderer dimensions.
+Prepared runtime state is matched to created nodes by exact persisted resource
+identity, kind, and title rather than receipt entity order. Main then binds that
+transient state to the fresh receipt entity/incarnation and an exact durable content
+guard before the first session projection; geometry, identity, metadata, edges, and
+all other authority still come only from the durable snapshot. Ambiguous duplicate
+bindings fail closed to ordinary hydration. A newly published text resource carries
+its verified content revision, text, and `editableText: true` in that prepared
+runtime state so the first delivered projection is immediately editable; a delivery
+miss falls back to the same targeted Project-owned canonical hydration path.
 For a pointer drop, Renderer projects the screen point into Canvas coordinates once
 and labels that anchor with the closed `center` origin. After Main preparation,
 Canvas uses the first resource's final presentation size to normalize the point to
@@ -2694,10 +2724,10 @@ Renderer sends only the current canonical locale and opaque connection id; Main
 updates the matching connection and emits a bounded command only when the value
 changed. Locale never grants a capability, widens scope, selects a Plugin snapshot,
 or becomes durable Main state.
-Project Files exposes separate bounded-thumbnail and media-lease behavior. Thumbnail
-IPC returns only a bounded image cover data URL. Video rows open a purpose-tagged
-ephemeral lease on mount, capture a bounded cover in Renderer, and close it
-immediately; a delayed hover uses an independent full-preview purpose. Lease open
+Project Files exposes separate bounded-thumbnail compatibility and media-lease
+behavior. Image and video rows open a purpose-tagged ephemeral lease on mount,
+capture a bounded cover in Renderer, and close it immediately; a delayed hover uses
+an independent full-preview purpose. Lease open
 returns only an opaque URL and id, close accepts only that id, and Main binds both
 purposes to the trusted sender with a two-thumbnail concurrency cap. Neither method
 exposes a native path or full media bytes through IPC.
@@ -2724,6 +2754,23 @@ one explicit refresh fallback. The incompatible bridge change is identified by
 `convax.desktop-ipc/38`; its Canvas session projection carries complete exact
 node- and edge-incarnation tables so guarded visual history cannot hide a reused
 React Flow id.
+
+Targeted Canvas resource rehydration carries the exact mounted Canvas `ref`, current
+session id, and only a bounded, unique list of Canvas node ids. Main derives the
+renderer actor from the trusted sender and synchronously validates that exact live
+owner lease before the authoritative query, immediately before hydration, and after
+hydration. It never issues a nested request to the same Renderer to rediscover
+Workbench scope. Main then passes those ids with the authoritative projection to the
+Project-owned hydrator.
+Project/canvas alone recognizes valid legacy concrete references and valid canonical
+Canvas resource references, enforces node-kind and directory compatibility, resolves
+canonical identity through the current ProjectIndex projection, and hydrates only
+the exact stale subset. An already-ready or concurrently deleted target is
+idempotent, while an existing non-resource or invalid host-owned reference fails
+closed. Omitting the list retains the explicit full refresh compatibility path. This
+typed request advances the Desktop IPC
+compatibility line to `convax.desktop-ipc/44`; it does not change collaboration
+frames or durable Canvas state.
 
 ## 11. Portable paths and trust boundaries
 
