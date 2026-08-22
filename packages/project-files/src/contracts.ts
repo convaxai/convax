@@ -69,6 +69,10 @@ export type ProjectFilePreviewPurpose = "preview" | "thumbnail"
 
 export interface ProjectFileThumbnail {
   dataUrl: string | null
+  /** Intrinsic source height, not the bounded thumbnail height. */
+  intrinsicHeight?: number | null
+  /** Intrinsic source width, not the bounded thumbnail width. */
+  intrinsicWidth?: number | null
 }
 
 export interface ProjectTextFileCompareAndReplaceInput {

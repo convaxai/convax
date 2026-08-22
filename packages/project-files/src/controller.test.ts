@@ -89,7 +89,7 @@ function createClient(overrides: Partial<ProjectFilesClient> = {}) {
       path: input.path,
       size: 0,
     })),
-    readFileThumbnail: mock(async () => ({ dataUrl: null })),
+    readFileThumbnail: mock(async () => ({ dataUrl: null, intrinsicHeight: null, intrinsicWidth: null })),
     readTextFile: mock(async (input: Parameters<ProjectFilesClient["readTextFile"]>[0]) => ({
       content: "",
       contentRevision: "",
@@ -293,9 +293,7 @@ describe("ProjectFilesController", () => {
     resolveOld(listing("one", "assets", [entry("assets/obsolete.png")]))
     await oldRequest
 
-    expect(controller.getSnapshot().listings.assets?.entries.map((item) => item.path)).toEqual([
-      "assets/current.png",
-    ])
+    expect(controller.getSnapshot().listings.assets?.entries.map((item) => item.path)).toEqual(["assets/current.png"])
     controller.dispose()
   })
 })

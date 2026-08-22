@@ -5,6 +5,7 @@ import { sameNativePath } from "./project-manager-helpers"
 
 export interface StableProjectFileRead {
   bytes: Buffer
+  digest: string
   snapshot: BigIntStats
 }
 
@@ -41,7 +42,12 @@ export class StableProjectFileHandle {
   }
 
   async readAll(signal?: AbortSignal) {
-    return (await this.#scan(true, signal)).bytes!
+    return (await this.readAllWithDigest(signal)).bytes
+  }
+
+  async readAllWithDigest(signal?: AbortSignal) {
+    const result = await this.#scan(true, signal)
+    return { bytes: result.bytes!, digest: result.digest }
   }
 
   createReadStream(input: { end: number; signal?: AbortSignal; start: number }) {
@@ -270,8 +276,8 @@ export async function readStableProjectFile(
 ): Promise<StableProjectFileRead> {
   const handle = await openStableProjectFile(absolutePath, portablePath, maximumBytes, signal)
   try {
-    const bytes = await handle.readAll(signal)
-    return { bytes, snapshot: handle.snapshot }
+    const { bytes, digest } = await handle.readAllWithDigest(signal)
+    return { bytes, digest, snapshot: handle.snapshot }
   } finally {
     await handle.close()
   }
@@ -294,7 +300,7 @@ export async function readStableProjectUtf8File(
   return {
     ...result,
     content,
-    contentRevision: createHash("sha256").update(result.bytes).digest("hex"),
+    contentRevision: result.digest,
   }
 }
 

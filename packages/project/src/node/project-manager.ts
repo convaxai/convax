@@ -2,6 +2,7 @@ import { createHash, randomUUID } from "node:crypto"
 import { watch as watchFileSystem, type FSWatcher } from "node:fs"
 import fs from "node:fs/promises"
 import path from "node:path"
+import { parseDigest, type Digest } from "@convax/collaboration"
 import type {
   ProjectChangeEvent,
   ProjectDirectoryListing,
@@ -68,11 +69,7 @@ import {
   type ProjectPrivateTextFileRef,
   type ProjectPrivateTextFileWrite,
 } from "./project-private-storage"
-import {
-  readStableProjectFile,
-  readStableProjectUtf8File,
-  sameProjectFileSnapshot,
-} from "./stable-project-file"
+import { readStableProjectFile, readStableProjectUtf8File, sameProjectFileSnapshot } from "./stable-project-file"
 import { resolvePortableProjectData, PortableProjectResetError } from "./collaboration/portable-cutover"
 
 export interface NodeProjectManagerOptions {
@@ -86,10 +83,7 @@ export interface NodeProjectManagerOptions {
 }
 
 export interface RegisteredProjectPrivateStorageRecoveryPort {
-  ensureRegisteredProjectPrivateStorage(input: {
-    projectId: string
-    projectRoot: string
-  }): Promise<void>
+  ensureRegisteredProjectPrivateStorage(input: { projectId: string; projectRoot: string }): Promise<void>
 }
 
 function privateTextFileRelativePath(namespace: string, value: string) {
@@ -281,10 +275,7 @@ export class NodeProjectManager
         await assertPortableProjectOpenable(current.rootPath)
         await this.ensureProjectManifest(current.rootPath, current.id, projects)
       })
-      const latestTimestamp = projects.reduce(
-        (latest, project) => Math.max(latest, project.lastOpenedAt),
-        0,
-      )
+      const latestTimestamp = projects.reduce((latest, project) => Math.max(latest, project.lastOpenedAt), 0)
       const { missing: _derivedMissing, ...persistedCurrent } = current
       const project: ProjectRegistryRecord = {
         ...persistedCurrent,
@@ -297,10 +288,7 @@ export class NodeProjectManager
     })
   }
 
-  async ensureRegisteredProjectPrivateStorage(input: {
-    projectId: string
-    projectRoot: string
-  }): Promise<void> {
+  async ensureRegisteredProjectPrivateStorage(input: { projectId: string; projectRoot: string }): Promise<void> {
     const project = await this.getProject(input.projectId)
     const realRoot = await fs.realpath(path.resolve(input.projectRoot))
     if (!sameNativePath(project.rootPath, realRoot)) {
@@ -346,10 +334,7 @@ export class NodeProjectManager
         (oldest, candidate) => Math.min(oldest, candidate.lastOpenedAt),
         Number.POSITIVE_INFINITY,
       )
-      const unopenedTimestamp =
-        projects.length === 0
-          ? 0
-          : oldestOpenedAt - 1
+      const unopenedTimestamp = projects.length === 0 ? 0 : oldestOpenedAt - 1
       const project: ProjectRegistryRecord = existing
         ? {
             createdAt: existing.createdAt,
@@ -378,7 +363,10 @@ export class NodeProjectManager
 
   createProject(input: { name: string; parentPath: string }) {
     const result = this.projectCreationQueue.then(() => this.createProjectUnlocked(input))
-    this.projectCreationQueue = result.then(() => undefined, () => undefined)
+    this.projectCreationQueue = result.then(
+      () => undefined,
+      () => undefined,
+    )
     return result
   }
 
@@ -387,7 +375,8 @@ export class NodeProjectManager
     const requestedParent = path.resolve(input.parentPath)
     await fs.mkdir(requestedParent, { recursive: true })
     const parentRoot = await fs.realpath(requestedParent)
-    if (!(await fs.stat(parentRoot)).isDirectory()) throw new Error(`Project parent is not a directory: ${input.parentPath}`)
+    if (!(await fs.stat(parentRoot)).isDirectory())
+      throw new Error(`Project parent is not a directory: ${input.parentPath}`)
     const rootPath = path.join(parentRoot, name)
     if (await existsPortable(rootPath, true)) throw new Error(`Project already exists: ${name}`)
     try {
@@ -503,10 +492,11 @@ export class NodeProjectManager
     const targetPath = joinRelative(parentOf(sourcePath), name)
     assertUserMutationPath(targetPath)
     const { absolutePath: target } = await this.resolveOutput(input.projectId, targetPath)
-    if (sourcePath === targetPath) return {
-      ...mutation("rename", input.projectId, [sourcePath], [sourcePath], [targetPath]),
-      relocations: [{ sourcePath, targetPath }],
-    }
+    if (sourcePath === targetPath)
+      return {
+        ...mutation("rename", input.projectId, [sourcePath], [sourcePath], [targetPath]),
+        relocations: [{ sourcePath, targetPath }],
+      }
     const caseOnlyRename = sourcePath.toLowerCase() === targetPath.toLowerCase()
     const targetStat = await fs.lstat(target).catch((error: unknown) => {
       if (isNodeError(error) && error.code === "ENOENT") return null
@@ -712,19 +702,39 @@ export class NodeProjectManager
     }
   }
 
-  async readFile(input: { path: string; projectId: string }): Promise<ProjectFileContents> {
+  async readStableFileBytes(input: { path: string; projectId: string; signal?: AbortSignal }): Promise<{
+    bytes: Uint8Array
+    exactDigest: Digest
+    mimeType: string
+    name: string
+    path: string
+    size: number
+  }> {
     const relativePath = requireEntryPath(input.path)
     assertUserMutationPath(relativePath)
     const { absolutePath } = await this.resolveExisting(input.projectId, relativePath)
     const maxBytes = this.options.maxReadableFileBytes ?? 64 * 1024 * 1024
-    const { bytes: content } = await readStableProjectFile(absolutePath, relativePath, maxBytes)
+    const { bytes, digest } = await readStableProjectFile(absolutePath, relativePath, maxBytes, input.signal)
     const mimeType = mimeTypeForPath(relativePath)
     return {
-      dataUrl: `data:${mimeType};base64,${content.toString("base64")}`,
+      bytes,
+      exactDigest: parseDigest(digest),
       mimeType,
       name: path.basename(absolutePath),
       path: relativePath,
-      size: content.byteLength,
+      size: bytes.byteLength,
+    }
+  }
+
+  async readFile(input: { path: string; projectId: string }): Promise<ProjectFileContents> {
+    const contents = await this.readStableFileBytes(input)
+    const bytes = Buffer.from(contents.bytes.buffer, contents.bytes.byteOffset, contents.bytes.byteLength)
+    return {
+      dataUrl: `data:${contents.mimeType};base64,${bytes.toString("base64")}`,
+      mimeType: contents.mimeType,
+      name: contents.name,
+      path: contents.path,
+      size: contents.size,
     }
   }
 
@@ -859,10 +869,7 @@ export class NodeProjectManager
                 relativePath,
                 this.options.maxTextFileBytes ?? 16 * 1024 * 1024,
               )
-              throw new ProjectTextFileConflictError(
-                input.expectedRevision,
-                createHash("sha256").update(replacement.bytes).digest("hex"),
-              )
+              throw new ProjectTextFileConflictError(input.expectedRevision, replacement.digest)
             } catch (error) {
               if (isNodeError(error) && error.code === "ENOENT") {
                 throw new ProjectTextFileConflictError(input.expectedRevision, null)
@@ -1121,9 +1128,7 @@ export class NodeProjectManager
   private mutateRegistry<T>(
     mutate: (
       projects: ProjectRegistryRecord[],
-    ) =>
-      | { projects: ProjectRegistryRecord[]; value: T }
-      | Promise<{ projects: ProjectRegistryRecord[]; value: T }>,
+    ) => { projects: ProjectRegistryRecord[]; value: T } | Promise<{ projects: ProjectRegistryRecord[]; value: T }>,
   ) {
     const result = this.registryQueue.then(async () => {
       const current = await this.readRegistry()

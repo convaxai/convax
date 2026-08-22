@@ -69,6 +69,7 @@ describe("ProjectIndexFileApplication", () => {
   test("admits bytes before committing a stable file identity and projects the hash-pinned materialization plan", async () => {
     const document = genesis()
     const order: string[] = []
+    const sourceBytes = new TextEncoder().encode("hello\n")
     const context = constructionContext(actor(1), id128(3), "1")
     const session = applyingSession(document, context, order)
     const application = new ProjectIndexFileApplication({
@@ -78,6 +79,7 @@ describe("ProjectIndexFileApplication", () => {
         async admitManaged() { throw new Error("not used") },
         async publish({ reference, exactBytes }) {
           order.push("blob")
+          expect(exactBytes).not.toBe(sourceBytes)
           expect(reference.blob.digest).toBe(digestBytes(exactBytes))
         },
       },
@@ -87,7 +89,7 @@ describe("ProjectIndexFileApplication", () => {
     const result = await application.publishFile({
       projectId,
       path: "notes.md",
-      exactBytes: new TextEncoder().encode("hello\n"),
+      exactBytes: sourceBytes,
       mime: "text/markdown",
       contentPolicy: "conflict-preserving-text",
     })
@@ -103,6 +105,84 @@ describe("ProjectIndexFileApplication", () => {
       path: "notes.md",
     })
     expect(plan.entries[0]?.reference?.blob.digest).toBe(digestBytes(new TextEncoder().encode("hello\n")))
+  })
+
+  test("reuses a verified digest and exact byte view without the compatibility copy-and-hash path", async () => {
+    const document = genesis()
+    const order: string[] = []
+    const context = constructionContext(actor(1), id128(40), "1")
+    const exactBytes = Buffer.allocUnsafe(64 * 1024 * 1024)
+    const exactDigest = digest("stable-reader-verified")
+    const application = new ProjectIndexFileApplication({
+      session: applyingSession(document, context, order),
+      facts: { async resolve() { return { status: "resolved", port: {} as never } } },
+      blobs: {
+        async admitManaged() { throw new Error("not used") },
+        async publish(input) {
+          expect(input.exactBytes).toBe(exactBytes)
+          expect(input.reference.blob.digest).toBe(exactDigest)
+          order.push("blob")
+        },
+      },
+      createOperationId: () => context.operationId,
+    })
+
+    const result = await application.publishFile({
+      projectId,
+      path: "large-video.mp4",
+      exactBytes,
+      exactDigest,
+      mime: "video/mp4",
+      contentPolicy: "overwritable-binary",
+    })
+
+    expect(result).toMatchObject({ status: "committed", reference: { blob: { digest: exactDigest } } })
+    expect(order).toEqual(["blob", "commit"])
+  })
+
+  test("rejects malformed verified digests and leaves valid mismatches to the durable blob verifier", async () => {
+    const document = genesis()
+    const order: string[] = []
+    const context = constructionContext(actor(1), id128(41), "1")
+    let publications = 0
+    const application = new ProjectIndexFileApplication({
+      session: applyingSession(document, context, order),
+      facts: { async resolve() { return { status: "resolved", port: {} as never } } },
+      blobs: {
+        async admitManaged() { throw new Error("not used") },
+        async publish({ reference, exactBytes }) {
+          publications += 1
+          if (reference.blob.digest !== digestBytes(exactBytes)) throw new Error("digest mismatch")
+        },
+      },
+      createOperationId: () => context.operationId,
+    })
+    const exactBytes = new TextEncoder().encode("actual bytes")
+
+    await expect(
+      application.publishFile({
+        projectId,
+        path: "invalid.bin",
+        exactBytes,
+        exactDigest: "INVALID" as Digest,
+        mime: "application/octet-stream",
+        contentPolicy: "overwritable-binary",
+      }),
+    ).rejects.toThrow("Digest")
+    expect(publications).toBe(0)
+
+    expect(
+      await application.publishFile({
+        projectId,
+        path: "mismatch.bin",
+        exactBytes,
+        exactDigest: digest("different bytes"),
+        mime: "application/octet-stream",
+        contentPolicy: "overwritable-binary",
+      }),
+    ).toEqual({ status: "partial-success", code: "blob-publication-failed" })
+    expect(publications).toBe(1)
+    expect(order).toEqual([])
   })
 
   test("resolves a nested path through the current path-claim winner", async () => {

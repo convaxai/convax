@@ -3,9 +3,14 @@ import {
   canvasNodeGenerationRunKey,
   inspectCanvasNodeGenerationRun,
   type CanvasDocument,
+  type CanvasNode,
   type CanvasResourceStatus,
 } from "@convax/canvas/core"
-import { assertResourceRef, type CanvasResourceRef } from "@convax/canvas/collaboration"
+import {
+  assertResourceRef,
+  canvasProjectionResourceMetadataKey,
+  type CanvasResourceRef,
+} from "@convax/canvas/collaboration"
 import type { ProjectIndexCurrentResourceProjectionEntry } from "../collaboration/blob-replication"
 import { projectIndexResourceReferenceDigest } from "../collaboration/project-index"
 
@@ -148,6 +153,57 @@ export function getProjectResourceReference(metadata: unknown): ProjectResourceR
   } catch {
     return null
   }
+}
+
+export type ProjectCanvasResourceHydrationTarget =
+  | { source: "canvas-resource"; resource: CanvasResourceRef }
+  | { source: "project-resource"; reference: ProjectResourceReference }
+
+/**
+ * Recognizes the two Project-owned hydration representations without letting a
+ * host adapter reinterpret Canvas metadata. Legacy projected documents carry a
+ * concrete Project reference, while current collaboration projections carry a
+ * pathless Canvas resource reference that ProjectIndex must resolve first.
+ */
+export function getProjectCanvasResourceHydrationTarget(node: CanvasNode): ProjectCanvasResourceHydrationTarget | null {
+  if (node.type !== "file" || !resourceNodeKinds.has(node.data.kind) || !isRecord(node.data.metadata)) return null
+
+  const metadata = node.data.metadata
+  const hasCanvasResource = Object.hasOwn(metadata, canvasProjectionResourceMetadataKey)
+  const hasProjectResource = Object.hasOwn(metadata, projectResourceReferenceKey)
+  if (!hasCanvasResource && !hasProjectResource) return null
+
+  let resource: CanvasResourceRef | null = null
+  if (hasCanvasResource) {
+    try {
+      const candidate = requireTypedMetadataValue(metadata, canvasProjectionResourceMetadataKey, (value) => {
+        assertResourceRef(value)
+        return value
+      })
+      if (node.data.kind === "folder" || candidate.mediaClass !== node.data.kind) return null
+      resource = candidate
+    } catch {
+      return null
+    }
+  }
+
+  let reference: ProjectResourceReference | null = null
+  if (hasProjectResource) {
+    try {
+      reference = requireTypedMetadataValue(metadata, projectResourceReferenceKey, requireProjectResourceReference)
+      if (
+        (reference.kind === "project-directory" && node.data.kind !== "folder") ||
+        (reference.kind !== "project-directory" && node.data.kind === "folder")
+      ) {
+        return null
+      }
+    } catch {
+      return null
+    }
+  }
+
+  if (resource) return { resource, source: "canvas-resource" }
+  return reference ? { reference, source: "project-resource" } : null
 }
 
 /**
@@ -308,15 +364,18 @@ export async function hydrateProjectCanvasDocument(
   )
 }
 
-export function markProjectCanvasResourcesStale(document: CanvasDocument): CanvasDocument {
+export function markProjectCanvasResourcesStale(
+  document: CanvasDocument,
+  shouldInvalidate: (node: CanvasDocument["nodes"][number]) => boolean = () => true,
+): CanvasDocument {
   let changed = false
   const nodes = document.nodes.map((node) => {
-    if (!resourceNodeKinds.has(node.data.kind)) return node
-    const reference = getProjectResourceReference(node.data.metadata)
+    if (!shouldInvalidate(node)) return node
+    const target = getProjectCanvasResourceHydrationTarget(node)
     const resourceState = node.data.resourceState
     if (
-      !reference ||
-      reference.kind === "managed-asset" ||
+      !target ||
+      (target.source === "project-resource" && target.reference.kind === "managed-asset") ||
       (resourceState !== null &&
         typeof resourceState === "object" &&
         "status" in resourceState &&
@@ -341,12 +400,13 @@ export function markProjectCanvasResourcesStale(document: CanvasDocument): Canva
 export async function hydrateStaleProjectCanvasResources(
   document: CanvasDocument,
   resolve: (reference: ProjectResourceReference) => Promise<ProjectResourceSnapshot>,
+  shouldInspect: (node: CanvasDocument["nodes"][number]) => boolean = () => true,
 ): Promise<CanvasDocument> {
   return hydrateProjectCanvasResources(
     document,
     resolve,
     () => true,
-    (node) => isStaleResourceNode(node),
+    (node) => shouldInspect(node) && isStaleResourceNode(node),
   )
 }
 

@@ -14,12 +14,13 @@ import {
   succeedCanvasNodeGenerationRun,
 } from "@convax/canvas/core"
 import type { CanvasNode } from "@convax/canvas/core"
-import type { CanvasResourceRef } from "@convax/canvas/collaboration"
+import { canvasProjectionResourceMetadataKey, type CanvasResourceRef } from "@convax/canvas/collaboration"
 import { encodeBase64url, ordinarySha256, parseId128, parseProjectId } from "@convax/collaboration"
 import { parseProjectIndexResourceReference, projectIndexResourceReferenceDigest } from "../collaboration/project-index"
 import {
   collectProjectManagedAssetReferences,
   dehydrateProjectCanvasDocument,
+  getProjectCanvasResourceHydrationTarget,
   getProjectResourceReference,
   hydrateProjectCanvasDocument,
   hydrateStaleProjectCanvasResources,
@@ -213,6 +214,113 @@ describe("Current Project resource resolution", () => {
     contentDigest: currentReference.blob.digest,
     ownerProofDigest: projectIndexResourceReferenceDigest(currentReference),
   }
+
+  test("recognizes strict legacy and canonical hydration targets at the Project boundary", () => {
+    const legacyFile = createTextNode({
+      id: "legacy-file",
+      metadata: {
+        [projectResourceReferenceKey]: { kind: "project-file", path: "Notes/brief.md" },
+      },
+      position: { x: 0, y: 0 },
+      resourceState: { status: "stale" },
+    })
+    const legacyDirectory = createFolderNode({
+      id: "legacy-directory",
+      position: { x: 0, y: 0 },
+      resource: {
+        id: "legacy-directory-resource",
+        kind: "folder",
+        metadata: {
+          [projectResourceReferenceKey]: { kind: "project-directory", path: "References" },
+        },
+        name: "References",
+        state: { status: "stale" },
+      },
+    })
+    const canonical = createMediaNode({
+      id: "canonical",
+      position: { x: 0, y: 0 },
+      resource: {
+        id: "canonical-resource",
+        kind: "video",
+        metadata: { [canvasProjectionResourceMetadataKey]: resource },
+        name: "clip.mp4",
+        state: { status: "stale" },
+      },
+    })
+
+    expect(getProjectCanvasResourceHydrationTarget(legacyFile)).toEqual({
+      reference: { kind: "project-file", path: "Notes/brief.md" },
+      source: "project-resource",
+    })
+    expect(getProjectCanvasResourceHydrationTarget(legacyDirectory)).toEqual({
+      reference: { kind: "project-directory", path: "References" },
+      source: "project-resource",
+    })
+    expect(getProjectCanvasResourceHydrationTarget(canonical)).toEqual({
+      resource,
+      source: "canvas-resource",
+    })
+
+    expect(
+      getProjectCanvasResourceHydrationTarget({
+        ...canonical,
+        data: { ...canonical.data, kind: "image" },
+      }),
+    ).toBeNull()
+    expect(
+      getProjectCanvasResourceHydrationTarget({
+        ...legacyDirectory,
+        data: {
+          ...legacyDirectory.data,
+          kind: "text",
+        },
+      }),
+    ).toBeNull()
+    expect(
+      getProjectCanvasResourceHydrationTarget({
+        ...legacyFile,
+        type: "agent",
+      }),
+    ).toBeNull()
+  })
+
+  test("marks only the selected canonical resource stale without replacing its identity metadata", () => {
+    const metadata = { [canvasProjectionResourceMetadataKey]: resource }
+    const target = createMediaNode({
+      id: "target",
+      position: { x: 0, y: 0 },
+      resource: {
+        id: "target-resource",
+        kind: "video",
+        metadata,
+        name: "target.mp4",
+        state: { status: "ready", url: "convax-asset://target" },
+      },
+    })
+    const untouched = createMediaNode({
+      id: "untouched",
+      position: { x: 20, y: 0 },
+      resource: {
+        id: "untouched-resource",
+        kind: "video",
+        metadata: { [canvasProjectionResourceMetadataKey]: resource },
+        name: "untouched.mp4",
+        state: { status: "ready", url: "convax-asset://untouched" },
+      },
+    })
+    const document = createCanvasDocument({ id: "canonical-stale", nodes: [target, untouched] })
+
+    const stale = markProjectCanvasResourcesStale(document, (node) => node.id === "target")
+
+    expect(stale.nodes[0]!.data.resourceState).toEqual({
+      status: "stale",
+      url: "convax-asset://target",
+    })
+    expect(stale.nodes[0]!.data.metadata).toBe(metadata)
+    expect(stale.nodes[1]).toBe(untouched)
+    expect(target.data.resourceState).toEqual({ status: "ready", url: "convax-asset://target" })
+  })
 
   test("returns the exact current Project file selected by the Canvas proof", () => {
     expect(
@@ -1004,6 +1112,37 @@ describe("Project Canvas document hydration", () => {
     expect(stale.nodes[2]).toBe(document.nodes[2])
     expect((document.nodes[0]!.data.resourceState as { status: string }).status).toBe("ready")
     expect((document.nodes[1]!.data.resourceState as { status: string }).status).toBe("missing")
+  })
+
+  test("marks only mutable Project snapshots selected by the invalidation predicate", () => {
+    const document = createCanvasDocument({
+      id: "canvas-targeted-stale",
+      nodes: [
+        createTextNode({
+          id: "target",
+          metadata: {
+            [projectResourceReferenceKey]: { kind: "project-file", path: "Notes/target.md" },
+          },
+          position: { x: 0, y: 0 },
+          resourceState: { status: "ready", text: "target" },
+        }),
+        createTextNode({
+          id: "untouched",
+          metadata: {
+            [projectResourceReferenceKey]: { kind: "project-file", path: "Notes/untouched.md" },
+          },
+          position: { x: 20, y: 0 },
+          resourceState: { status: "ready", text: "untouched" },
+        }),
+      ],
+    })
+
+    const stale = markProjectCanvasResourcesStale(document, (node) => node.id === "target")
+
+    expect(stale).not.toBe(document)
+    expect(stale.nodes[0]!.data.resourceState).toEqual({ status: "stale", text: "target" })
+    expect(stale.nodes[1]).toBe(document.nodes[1])
+    expect(stale.nodes[1]!.data.resourceState).toEqual({ status: "ready", text: "untouched" })
   })
 
   test("hydrates every stale typed Project reference while leaving ready nodes untouched", async () => {

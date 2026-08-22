@@ -15,11 +15,15 @@ This package owns the renderer-safe, Project-scoped file capability.
 - Directory listings, expansion/loading state, preview/selection state, file CRUD,
   import/copy/move/open/reveal clients and controller behavior.
 - Separate renderer-safe media presentation contracts: bounded thumbnail results
-  and purpose-tagged opaque sender-scoped media leases. A video-cover lease is
+  carrying original intrinsic dimensions and purpose-tagged opaque sender-scoped
+  media leases. An image/video cover lease is
   short-lived and independent from the delayed full-preview lease. Full media bytes
   and native paths never cross this contract; Desktop Main owns range streaming,
   caps, and lease revocation.
-- Serializable drag payloads that retain Project scope.
+- Serializable drag payloads that retain Project scope. They may carry a bounded,
+  renderer-only cached presentation hint, but paths and hints never become Canvas
+  resource or geometry authority. Parsers reject oversized serialized input before
+  decoding, and serializers fail closed on both aggregate and field budgets.
 - Stale-request and filesystem-change reconciliation in the controller.
 
 ## Forbidden

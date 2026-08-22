@@ -10,6 +10,7 @@ import { parseProjectId } from "@convax/collaboration"
 import type { ProjectDirectoryListing, ProjectFileInfo, ProjectTextFileContents } from "@convax/project-files"
 import type { ProjectIndexCurrentBlobReferencePort } from "../../collaboration/blob-replication"
 import {
+  getProjectCanvasResourceHydrationTarget,
   hydrateProjectCanvasDocument,
   hydrateStaleProjectCanvasResources,
   projectResourceReferenceKey,
@@ -101,10 +102,13 @@ export class ProjectCanvasResourceHydrator implements ProjectCanvasImageReadPort
     )
   }
 
-  async hydrateStale(input: { document: CanvasDocument; projectId: string }) {
-    const attachment = await this.#attachCurrentProjectFileReferences(input)
-    const hydrated = await hydrateStaleProjectCanvasResources(attachment.document, (reference) =>
-      this.resolve({ projectId: input.projectId, reference }),
+  async hydrateStale(input: { document: CanvasDocument; nodeIds?: readonly string[]; projectId: string }) {
+    const shouldInspect = requireTargetedHydrationPredicate(input.document, input.nodeIds)
+    const attachment = await this.#attachCurrentProjectFileReferences(input, shouldInspect)
+    const hydrated = await hydrateStaleProjectCanvasResources(
+      attachment.document,
+      (reference) => this.resolve({ projectId: input.projectId, reference }),
+      shouldInspect,
     )
     return restoreUnavailableCanvasResourceStates(
       attachment.document,
@@ -113,13 +117,20 @@ export class ProjectCanvasResourceHydrator implements ProjectCanvasImageReadPort
     )
   }
 
-  async #attachCurrentProjectFileReferences(input: {
+  async #attachCurrentProjectFileReferences(
+    input: {
+      document: CanvasDocument
+      projectId: string
+    },
+    shouldInspect: (node: CanvasDocument["nodes"][number]) => boolean = () => true,
+  ): Promise<{
     document: CanvasDocument
-    projectId: string
-  }): Promise<{ document: CanvasDocument; unavailableNodeIds: ReadonlySet<string> }> {
+    unavailableNodeIds: ReadonlySet<string>
+  }> {
     if (!this.#currentResources) return { document: input.document, unavailableNodeIds: new Set() }
     const resources = new Map<number, CanvasResourceRef>()
     input.document.nodes.forEach((node, index) => {
+      if (!shouldInspect(node)) return
       if (!node.data.metadata || typeof node.data.metadata !== "object" || Array.isArray(node.data.metadata)) return
       const candidate = (node.data.metadata as Record<string, unknown>)[canvasProjectionResourceMetadataKey]
       try {
@@ -359,6 +370,25 @@ function restoreUnavailableCanvasResourceStates(
     return { ...node, data: { ...node.data, resourceState: state } }
   })
   return { ...hydrated, nodes }
+}
+
+function requireTargetedHydrationPredicate(
+  document: CanvasDocument,
+  nodeIds: readonly string[] | undefined,
+): (node: CanvasDocument["nodes"][number]) => boolean {
+  if (nodeIds === undefined) return () => true
+  const targets = new Set(nodeIds)
+  for (const node of document.nodes) {
+    if (targets.has(node.id) && !getProjectCanvasResourceHydrationTarget(node)) {
+      throw new Error(`Canvas resource refresh target ${node.id} is not a Project-hydratable resource`)
+    }
+  }
+  return (node) => targets.has(node.id) && isStaleCanvasResourceNode(node)
+}
+
+function isStaleCanvasResourceNode(node: CanvasDocument["nodes"][number]) {
+  const state = node.data.resourceState
+  return state !== null && typeof state === "object" && "status" in state && state.status === "stale"
 }
 
 function isEditableTextPath(value: string) {

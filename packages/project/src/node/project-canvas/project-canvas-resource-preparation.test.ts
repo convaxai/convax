@@ -277,6 +277,271 @@ describe("project canvas resource preparation", () => {
     expect(result.items[0]).not.toHaveProperty("url")
   })
 
+  test("inspects exact Project video bytes before constructing its first presentation", async () => {
+    const inspections: unknown[] = []
+    const diagnostics: Array<{ byteLength: number; callCount: number; stage: string }> = []
+    const preparation = new ProjectCanvasResourcePreparation(
+      host({
+        async readFileInfo(input) {
+          return { mimeType: "video/mp4", name: "clip.mp4", path: input.path, size: 3 }
+        },
+        async readFile() {
+          throw new Error("stable byte reads must avoid the data URL compatibility path")
+        },
+        async readStableFileBytes(input) {
+          return {
+            bytes: Uint8Array.from([0, 1, 2]),
+            mimeType: "video/mp4",
+            name: "clip.mp4",
+            path: input.path,
+            size: 3,
+          }
+        },
+      }),
+      unusedPublisher(),
+      unusedAssets(),
+      {
+        async inspect(input) {
+          inspections.push(input)
+          return { height: 1_080, width: 1_920 }
+        },
+      },
+      undefined,
+      {
+        record({ byteLength, callCount, stage }) {
+          diagnostics.push({ byteLength, callCount, stage })
+        },
+      },
+    )
+
+    const result = await preparation.prepare({
+      ...requestRef,
+      sources: [{ kind: "host-file", path: "media/clip.mp4", sourceId: "clip" }],
+    })
+
+    expect(inspections).toEqual([
+      {
+        bytes: Uint8Array.from([0, 1, 2]),
+        kind: "video",
+        mimeType: "video/mp4",
+        name: "clip.mp4",
+      },
+    ])
+    expect(diagnostics).toEqual([
+      { byteLength: 3, callCount: 1, stage: "media-read" },
+      { byteLength: 3, callCount: 1, stage: "media-inspect" },
+    ])
+    expect(result.items[0]).toMatchObject({
+      height: 1_080,
+      id: "clip",
+      kind: "video",
+      state: { status: "stale" },
+      width: 1_920,
+    })
+  })
+
+  test("overlaps Project proof preparation with inspection using the same exact bytes", async () => {
+    const bytes = Uint8Array.from([0, 0, 0, 20, 0x66, 0x74, 0x79, 0x70])
+    const reference = projectIndexReference(bytes, "video/mp4")
+    const events: string[] = []
+    let releasePlan!: () => void
+    const planGate = new Promise<void>((resolve) => {
+      releasePlan = resolve
+    })
+    let inspectedBytes: Uint8Array | undefined
+    let publishedBytes: Readonly<Uint8Array> | undefined
+    let publishedDigest: Digest | undefined
+    const indexFiles = {
+      async queryFileMaterializationPlan() {
+        events.push("proof:plan")
+        await planGate
+        return { projectId: parseProjectId("project_one"), entries: [] }
+      },
+      async createDirectory() {
+        throw new Error("Project-root files do not require a parent directory")
+      },
+      async publishFile(input: { exactBytes: Readonly<Uint8Array>; exactDigest?: Digest }) {
+        events.push("proof:publish")
+        publishedBytes = input.exactBytes
+        publishedDigest = input.exactDigest
+        return {
+          status: "committed" as const,
+          entryId: reference.entryFileId as never,
+          versionId: reference.versionId,
+          reference,
+        }
+      },
+      async relocateEntry() {
+        throw new Error("not used")
+      },
+      async tombstoneEntry() {
+        throw new Error("not used")
+      },
+    } as unknown as ProjectIndexFileApplicationPort & ProjectIndexFileMaterializationProjectionPort
+    const preparation = new ProjectCanvasResourcePreparation(
+      host({
+        async readFileInfo(input) {
+          return { mimeType: "video/mp4", name: "clip.mp4", path: input.path, size: bytes.byteLength }
+        },
+        async readFile() {
+          throw new Error("stable byte reads must avoid the data URL compatibility path")
+        },
+        async readStableFileBytes(input) {
+          return {
+            bytes,
+            exactDigest: reference.blob.digest,
+            mimeType: "video/mp4",
+            name: "clip.mp4",
+            path: input.path,
+            size: bytes.byteLength,
+          }
+        },
+      }),
+      unusedPublisher(),
+      unusedAssets(),
+      {
+        async inspect(input) {
+          events.push("inspect")
+          inspectedBytes = input.bytes
+          releasePlan()
+          return { height: 1_080, width: 1_920 }
+        },
+      },
+      indexFiles,
+    )
+
+    await preparation.prepare({
+      ...requestRef,
+      sources: [{ kind: "host-file", path: "clip.mp4", sourceId: "clip" }],
+    })
+
+    expect(events).toEqual(["proof:plan", "inspect", "proof:publish"])
+    expect(inspectedBytes).toBe(bytes)
+    expect(publishedBytes).toBe(bytes)
+    expect(publishedDigest).toBe(reference.blob.digest)
+  })
+
+  test.each(["host", "local"] as const)(
+    "waits for a delayed %s proof commit before exposing an inspection failure",
+    async (source) => {
+      const bytes = Uint8Array.from([0, 0, 0, 20, 0x66, 0x74, 0x79, 0x70])
+      const reference = projectIndexReference(bytes, "video/mp4")
+      const inspectionError = new Error("media inspection failed")
+      let releaseProof!: () => void
+      const proofGate = new Promise<void>((resolve) => {
+        releaseProof = resolve
+      })
+      let markProofStarted!: () => void
+      const proofStarted = new Promise<void>((resolve) => {
+        markProofStarted = resolve
+      })
+      let proofCommitted = false
+      const indexFiles = {
+        async queryFileMaterializationPlan() {
+          return { projectId: parseProjectId("project_one"), entries: [] }
+        },
+        async createDirectory() {
+          throw new Error("Project-root files do not require a parent directory")
+        },
+        async publishFile() {
+          markProofStarted()
+          await proofGate
+          proofCommitted = true
+          return {
+            status: "committed" as const,
+            entryId: reference.entryFileId as never,
+            versionId: reference.versionId,
+            reference,
+          }
+        },
+        async relocateEntry() {
+          throw new Error("not used")
+        },
+        async tombstoneEntry() {
+          throw new Error("not used")
+        },
+      } as unknown as ProjectIndexFileApplicationPort & ProjectIndexFileMaterializationProjectionPort
+      const assets =
+        source === "local"
+          ? ({
+              async withAdmittedLocalFiles(
+                _input: unknown,
+                commit: (value: readonly CanvasProjectResourceReference[]) => Promise<unknown>,
+              ) {
+                return commit([{ kind: "project-file", path: "clip.mp4" }])
+              },
+            } as unknown as ProjectManagedAssetStore)
+          : unusedAssets()
+      const preparation = new ProjectCanvasResourcePreparation(
+        host({
+          async readFileInfo(input) {
+            return { mimeType: "video/mp4", name: "clip.mp4", path: input.path, size: bytes.byteLength }
+          },
+          async readStableFileBytes(input) {
+            return {
+              bytes,
+              mimeType: "video/mp4",
+              name: "clip.mp4",
+              path: input.path,
+              size: bytes.byteLength,
+            }
+          },
+        }),
+        unusedPublisher(),
+        assets,
+        {
+          async inspect() {
+            throw inspectionError
+          },
+        },
+        indexFiles,
+      )
+      let commitCalls = 0
+      const operation: Promise<unknown> =
+        source === "host"
+          ? preparation.prepare({
+              ...requestRef,
+              sources: [{ kind: "host-file", path: "clip.mp4", sourceId: "clip" }],
+            })
+          : preparation.withAdmittedLocalFiles(
+              {
+                files: [
+                  {
+                    mediaType: "video/mp4",
+                    name: "clip.mp4",
+                    sourceId: "clip",
+                    sourcePath: "/native/clip.mp4",
+                  },
+                ],
+                projectId: "project_one",
+              },
+              async () => {
+                commitCalls += 1
+              },
+            )
+      let settled = false
+      const outcome = operation.then(
+        () => ({ status: "fulfilled" as const }),
+        (error: unknown) => ({ error, status: "rejected" as const }),
+      )
+      void outcome.finally(() => {
+        settled = true
+      })
+
+      await proofStarted
+      await new Promise((resolve) => setTimeout(resolve, 0))
+      expect(settled).toBe(false)
+      expect(proofCommitted).toBe(false)
+
+      releaseProof()
+      const result = await outcome
+      expect(result.status).toBe("rejected")
+      if (result.status === "rejected") expect(result.error).toBe(inspectionError)
+      expect(proofCommitted).toBe(true)
+      expect(commitCalls).toBe(0)
+    },
+  )
+
   test("publishes new text below Notes before returning a prepared item", async () => {
     const publications: unknown[] = []
     const publisher: ProjectCanvasFilePublisher = {
@@ -310,7 +575,7 @@ describe("project canvas resource preparation", () => {
       kind: "text",
       mimeType: "text/markdown",
       name: "Brief-a1.md",
-      state: { contentRevision: "revision-a", status: "ready", text: "# Brief" },
+      state: { contentRevision: "revision-a", editableText: true, status: "ready", text: "# Brief" },
     })
     expect(result.items[0]).not.toHaveProperty("format")
     expect(result.retainedOnFailure).toEqual([{ label: "Notes/Brief-a1.md" }])
