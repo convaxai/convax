@@ -46,6 +46,7 @@ const MAX_FRAME_BYTES = 2 * 1024 * 1024
 const MAX_GENESIS_PROOF_BYTES = 335_544_320
 const MAX_OUTBOX_FRAMES = 4_096
 const MAX_OUTBOX_BYTES = 512 * 1024 * 1024
+const OUTBOX_USAGE_READ_CONCURRENCY = 32
 const BASE_MAGIC = Buffer.from("CVXBASE2", "ascii")
 const BASE_PREFIX_BYTES = 60
 const PENDING_MAGIC = Buffer.from("CVXPEND2", "ascii")
@@ -894,6 +895,19 @@ export class NodeCollaborationPersistence implements CollaborationPersistencePor
         outboxCount: usage.frameBytes.size,
         cacheHit,
       })
+    })
+  }
+
+  /**
+   * Validates and caches exact local outbox capacity while a document runtime
+   * is opening, so the first user mutation does not pay an O(outbox) scan.
+   */
+  async warmLocalCommitCapacity(scope: DocumentScope): Promise<void> {
+    this.requireLive()
+    const layout = this.layout(scope)
+    await this.serial(layout.directory, async () => {
+      await this.assertReadableDocument(layout)
+      await this.loadOutboxUsage(layout)
     })
   }
 
@@ -2235,11 +2249,9 @@ export class NodeCollaborationPersistence implements CollaborationPersistencePor
   private async loadOutboxUsage(layout: DocumentLayout): Promise<OutboxUsageCache> {
     const cached = this.outboxUsageCaches.get(layout.directory)
     if (cached) return cached
-    const frameBytes = new Map<Digest, number>()
-    let totalBytes = 0
     const names = await readDirectoryNames(layout.outboxFrames)
     if (names.length > MAX_OUTBOX_FRAMES) corrupt("Local frame outbox exceeds 4,096 refs")
-    for (const name of names) {
+    const entries = await mapWithConcurrency(names, OUTBOX_USAGE_READ_CONCURRENCY, async (name) => {
       const record = parseOutbox(decodeRecord(await fs.readFile(path.join(layout.outboxFrames, name))))
       const expectedName = `${deriveObjectNativeKey("outbox-ref", record.frameDigest)}.ref`
       if (name !== expectedName) corrupt("Outbox filename and frame digest differ")
@@ -2250,9 +2262,14 @@ export class NodeCollaborationPersistence implements CollaborationPersistencePor
       if (!stat.isFile() || stat.isSymbolicLink() || stat.size < 1 || stat.size > MAX_FRAME_BYTES) {
         corrupt("Outbox frame object shape is invalid")
       }
-      if (frameBytes.has(record.frameDigest)) corrupt("Outbox contains a duplicate frame digest")
-      frameBytes.set(record.frameDigest, stat.size)
-      totalBytes += stat.size
+      return Object.freeze({ frameDigest: record.frameDigest, byteLength: stat.size })
+    })
+    const frameBytes = new Map<Digest, number>()
+    let totalBytes = 0
+    for (const entry of entries) {
+      if (frameBytes.has(entry.frameDigest)) corrupt("Outbox contains a duplicate frame digest")
+      frameBytes.set(entry.frameDigest, entry.byteLength)
+      totalBytes += entry.byteLength
       if (totalBytes > MAX_OUTBOX_BYTES) corrupt("Local frame outbox exceeds 512 MiB")
     }
     const usage = { frameBytes, totalBytes }

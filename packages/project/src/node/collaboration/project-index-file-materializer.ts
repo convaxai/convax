@@ -94,6 +94,12 @@ export class ProjectIndexFileMaterializer {
     const next = new Map<string, MaterializedEntry>()
 
     for (const entry of plan.entries.filter((candidate) => candidate.kind === "directory")) {
+      const previous = this.#previous.get(entry.entryId)
+      if (previous && sameMaterializedEntry(previous, entry)) {
+        next.set(entry.entryId, previous)
+        materializedPaths.push(entry.path)
+        continue
+      }
       try {
         await this.#ensureDirectory(entry.path)
         next.set(entry.entryId, tracked(entry))
@@ -106,6 +112,17 @@ export class ProjectIndexFileMaterializer {
 
     for (const entry of plan.entries.filter((candidate) => candidate.kind === "file")) {
       const previous = this.#previous.get(entry.entryId)
+      // The accepted ProjectIndex plan remains the authority. Once this
+      // process has materialized that exact entry/path/blob tuple, an
+      // unrelated owner invalidation must not turn into an O(Project files)
+      // native re-hash. A later change to this entry still takes the guarded
+      // path below, which revalidates the prior bytes before replacement or
+      // removal and therefore never overwrites an untracked native edit.
+      if (previous && sameMaterializedEntry(previous, entry)) {
+        next.set(entry.entryId, previous)
+        materializedPaths.push(entry.path)
+        continue
+      }
       try {
         await this.#materializeFile(entry, previous)
         next.set(entry.entryId, tracked(entry))
@@ -240,6 +257,12 @@ class BlobUnavailableError extends Error {
 
 function tracked(entry: ProjectIndexFileMaterializationEntry): MaterializedEntry {
   return Object.freeze({ entryId: entry.entryId, kind: entry.kind, path: entry.path, blobDigest: entry.reference?.blob.digest ?? null })
+}
+
+function sameMaterializedEntry(previous: MaterializedEntry, entry: ProjectIndexFileMaterializationEntry): boolean {
+  return previous.kind === entry.kind &&
+    previous.path === entry.path &&
+    previous.blobDigest === (entry.reference?.blob.digest ?? null)
 }
 
 function parentOf(portablePath: string): string {

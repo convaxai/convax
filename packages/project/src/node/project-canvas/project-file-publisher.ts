@@ -190,25 +190,35 @@ export class ProjectFilePublisher implements ProjectCanvasFilePublisher {
     await assertDirectoryIdentity(projectRoot, "Project root")
     const privatePath = path.join(projectRoot.path, ".convax")
     const privateStorage = await captureDirectory(privatePath, "Project private storage")
-    await assertDirectoryIdentity(projectRoot, "Project root")
-    await assertDirectoryIdentity(privateStorage, "Project private storage")
+    await Promise.all([
+      assertDirectoryIdentity(projectRoot, "Project root"),
+      assertDirectoryIdentity(privateStorage, "Project private storage"),
+    ])
 
     const stagingRoot = path.join(privateStorage.path, "staging")
     const targetRoot = path.join(projectRoot.path, directory)
-    await assertDirectoryIdentity(projectRoot, "Project root")
-    await assertDirectoryIdentity(privateStorage, "Project private storage")
+    await Promise.all([
+      assertDirectoryIdentity(projectRoot, "Project root"),
+      assertDirectoryIdentity(privateStorage, "Project private storage"),
+    ])
     await ensureRealDirectory(stagingRoot, 0o700, "Project publication staging directory")
-    await assertDirectoryIdentity(projectRoot, "Project root")
-    await assertDirectoryIdentity(privateStorage, "Project private storage")
+    await Promise.all([
+      assertDirectoryIdentity(projectRoot, "Project root"),
+      assertDirectoryIdentity(privateStorage, "Project private storage"),
+    ])
     const staging = await captureDirectory(stagingRoot, "Project publication staging directory")
 
-    await assertDirectoryIdentity(projectRoot, "Project root")
-    await assertDirectoryIdentity(privateStorage, "Project private storage")
-    await assertDirectoryIdentity(staging, "Project publication staging directory")
+    await Promise.all([
+      assertDirectoryIdentity(projectRoot, "Project root"),
+      assertDirectoryIdentity(privateStorage, "Project private storage"),
+      assertDirectoryIdentity(staging, "Project publication staging directory"),
+    ])
     await ensureRealDirectory(targetRoot, 0o755, `Project ${directory} directory`)
-    await assertDirectoryIdentity(projectRoot, "Project root")
-    await assertDirectoryIdentity(privateStorage, "Project private storage")
-    await assertDirectoryIdentity(staging, "Project publication staging directory")
+    await Promise.all([
+      assertDirectoryIdentity(projectRoot, "Project root"),
+      assertDirectoryIdentity(privateStorage, "Project private storage"),
+      assertDirectoryIdentity(staging, "Project publication staging directory"),
+    ])
     const layout = {
       privateStorage,
       projectRoot,
@@ -452,35 +462,36 @@ async function ensureRealDirectory(targetPath: string, mode: number, label: stri
   } catch (error) {
     if (!isNodeError(error) || error.code !== "EEXIST") throw error
   }
-  const stat = await fs.lstat(targetPath)
+  const [stat, realPath] = await Promise.all([fs.lstat(targetPath), fs.realpath(targetPath)])
   if (stat.isSymbolicLink() || !stat.isDirectory()) throw new Error(`${label} is not a real directory`)
-  if (!sameNativePath(await fs.realpath(targetPath), targetPath)) {
+  if (!sameNativePath(realPath, targetPath)) {
     throw new Error(`${label} resolves through a symbolic link`)
   }
 }
 
 async function captureDirectory(targetPath: string, label: string): Promise<DirectoryIdentity> {
-  const snapshot = await fs.lstat(targetPath, { bigint: true })
+  const [snapshot, realPath] = await Promise.all([fs.lstat(targetPath, { bigint: true }), fs.realpath(targetPath)])
   if (snapshot.isSymbolicLink() || !snapshot.isDirectory()) throw new Error(`${label} is not a real directory`)
-  const realPath = await fs.realpath(targetPath)
   if (!sameNativePath(realPath, targetPath)) throw new Error(`${label} resolves through a symbolic link`)
   return { path: targetPath, realPath, snapshot }
 }
 
 async function assertPublicationDirectories(layout: PublicationLayout) {
-  await assertDirectoryIdentity(layout.projectRoot, "Project root")
-  await assertDirectoryIdentity(layout.privateStorage, "Project private storage")
-  await assertDirectoryIdentity(layout.staging, "Project publication staging directory")
-  await assertDirectoryIdentity(layout.target, "Project publication target directory")
+  await Promise.all([
+    assertDirectoryIdentity(layout.projectRoot, "Project root"),
+    assertDirectoryIdentity(layout.privateStorage, "Project private storage"),
+    assertDirectoryIdentity(layout.staging, "Project publication staging directory"),
+    assertDirectoryIdentity(layout.target, "Project publication target directory"),
+  ])
 }
 
 async function assertDirectoryIdentity(identity: DirectoryIdentity, label: string) {
-  const current = await fs.lstat(identity.path, { bigint: true })
+  const [current, realPath] = await Promise.all([fs.lstat(identity.path, { bigint: true }), fs.realpath(identity.path)])
   if (current.isSymbolicLink() || !current.isDirectory()) throw new Error(`${label} changed or became a symbolic link`)
   if (
     !sameFileIdentity(identity.snapshot, current) ||
     identity.snapshot.mode !== current.mode ||
-    !sameNativePath(await fs.realpath(identity.path), identity.realPath)
+    !sameNativePath(realPath, identity.realPath)
   ) {
     throw new Error(`${label} changed after validation`)
   }
@@ -498,7 +509,9 @@ async function verifyPublishedFile(file: OwnedFile, expectedDigest: string, expe
   try {
     const opened = await handle.stat({ bigint: true })
     assertRegularFile(opened, "Published Project file")
-    if (!sameFileSnapshot(file.snapshot, opened)) throw new Error("Published Project file changed before verification")
+    if (!sameVerifiedFileIdentity(file.snapshot, opened)) {
+      throw new Error("Published Project file changed before verification")
+    }
     if (opened.size !== BigInt(expectedSize)) throw new Error("Published Project file size changed before verification")
 
     const hash = createHash("sha256")
@@ -519,8 +532,8 @@ async function verifyPublishedFile(file: OwnedFile, expectedDigest: string, expe
     if (
       offset !== expectedSize ||
       extraBytes !== 0 ||
-      !sameFileSnapshot(opened, after) ||
-      !sameFileSnapshot(opened, pathAfter) ||
+      !sameVerifiedFileIdentity(opened, after) ||
+      !sameVerifiedFileIdentity(opened, pathAfter) ||
       !sameNativePath(canonicalPathAfter, file.realPath)
     ) {
       throw new Error("Published Project file size or identity changed during verification")
@@ -548,6 +561,14 @@ function sameFileSnapshot(left: BigIntStats, right: BigIntStats) {
     left.mtimeNs === right.mtimeNs &&
     left.ctimeNs === right.ctimeNs
   )
+}
+
+function sameVerifiedFileIdentity(left: BigIntStats, right: BigIntStats) {
+  // File Provider and sync adapters may update timestamps while attaching
+  // metadata to a newly linked user-visible file. Timestamps are therefore not
+  // publication authority: the opened inode, mode, exact extent, real path and
+  // SHA-256 bytes remain the fail-closed proof.
+  return sameFileIdentity(left, right) && left.mode === right.mode && left.size === right.size
 }
 
 function sameNativePath(left: string, right: string) {

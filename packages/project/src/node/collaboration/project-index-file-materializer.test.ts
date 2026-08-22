@@ -62,6 +62,26 @@ describe.skipIf(process.platform === "win32")("ProjectIndexFileMaterializer real
     expect(await fs.readFile(path.join(projectRoot, "notes.md"), "utf8")).toBe("local unsaved\n")
   })
 
+  test("does not rescan an unchanged entry while materializing an unrelated accepted file", async () => {
+    const first = encoder.encode("first\n")
+    const second = encoder.encode("second\n")
+    const state = projection(plan([file("first.md", first, 1)]))
+    const bytes = new Map([[digest(first), first], [digest(second), second]])
+    const materializer = await ProjectIndexFileMaterializer.open({
+      projectId,
+      projectRoot,
+      projection: state.port,
+      blobs: blobPort(bytes),
+    })
+    await materializer.reconcile()
+    await fs.writeFile(path.join(projectRoot, "first.md"), "local unsaved\n")
+    state.set(plan([file("first.md", first, 1), file("second.md", second, 2)]))
+
+    expect((await materializer.reconcile()).pendingPaths).toEqual([])
+    expect(await fs.readFile(path.join(projectRoot, "first.md"), "utf8")).toBe("local unsaved\n")
+    expect(await fs.readFile(path.join(projectRoot, "second.md"), "utf8")).toBe("second\n")
+  })
+
   test("materializes relocation by stable entry id and removes a matching tombstoned file", async () => {
     const bytes = encoder.encode("stable\n")
     const state = projection(plan([directory("A", 1), file("A/notes.md", bytes, 2)]))

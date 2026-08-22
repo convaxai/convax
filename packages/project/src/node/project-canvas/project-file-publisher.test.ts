@@ -229,6 +229,49 @@ describe("ProjectFilePublisher", () => {
     expect(await fs.readFile(path.join(projectRoot, ".convax", "staging", "note-a1"), "utf8")).toBe("# 你好\n")
   })
 
+  test("accepts timestamp-only metadata churn while exact published bytes and identity stay stable", async () => {
+    const publisher = new ProjectFilePublisher(roots(), managedAssets(), { randomId: () => "metadata-a1" })
+    const targetPath = path.join(await fs.realpath(projectRoot), "Notes", "Brief-metadata-a1.md")
+    const originalOpen = fs.open
+    let metadataChanged = false
+    fs.open = (async (target: Parameters<typeof fs.open>[0], ...args: unknown[]) => {
+      const handle = await Reflect.apply(originalOpen, fs, [target, ...args])
+      if (path.resolve(String(target)) === targetPath) {
+        const originalRead = handle.read.bind(handle)
+        handle.read = async (buffer: Buffer, offset: number, length: number, position: number | null) => {
+          const result = await originalRead(buffer, offset, length, position)
+          if (!metadataChanged) {
+            metadataChanged = true
+            const timestamp = new Date(Date.now() + 10_000)
+            await fs.utimes(targetPath, timestamp, timestamp)
+          }
+          return result
+        }
+      }
+      return handle
+    }) as typeof fs.open
+
+    try {
+      await expect(
+        publisher.publishText({
+          content: "stable bytes",
+          directory: "Notes",
+          extension: ".md",
+          name: "Brief",
+          projectId: "project_one",
+        }),
+      ).resolves.toEqual({
+        contentRevision: createHash("sha256").update("stable bytes").digest("hex"),
+        path: "Notes/Brief-metadata-a1.md",
+      })
+    } finally {
+      fs.open = originalOpen
+    }
+
+    expect(metadataChanged).toBeTrue()
+    expect(await fs.readFile(targetPath, "utf8")).toBe("stable bytes")
+  })
+
   test("chooses a fresh id without overwriting an existing file, directory, or symlink", async () => {
     await fs.mkdir(path.join(projectRoot, "Notes"))
     await fs.writeFile(path.join(projectRoot, "Notes", "Brief-taken.md"), "existing")

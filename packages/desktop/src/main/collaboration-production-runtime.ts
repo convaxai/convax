@@ -343,7 +343,10 @@ export async function createMainCollaborationProductionRuntime<K extends Documen
   const releaseMaterializer = input.materializers.register({ scope: input.scope, materializer })
   try {
     await input.prepareShard?.()
-    const installedBase = await causalClosure.warm(input.persistence)
+    const [installedBase] = await Promise.all([
+      causalClosure.warm(input.persistence),
+      input.persistence.warmLocalCommitCapacity(input.scope),
+    ])
     const ports: CollaborationKernelPorts = Object.freeze({
       createDocument: input.createDocument,
       persistence: input.persistence,
