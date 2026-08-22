@@ -750,6 +750,7 @@ boundary checker fails closed until those admissions are complete.
 | Current collaboration protocol identity                               | Packaged descriptor from `@convax/collaboration`         | One generated descriptor and `protocolDigest`; never a pointer, release pair, or runtime option                    |
 | Current accepted local shard state                                    | Main-owned `replicaDoc`                                  | Rebuilt from a retained checkpoint set plus the accepted causal frame closure                                      |
 | In-flight Project/Canvas command                                      | Isolated `candidateDoc`                                  | Cloned after entering the shard commit mutex; one typed intent only                                                |
+| Next-command candidate acceleration                                   | Process-local standby `candidateDoc`                     | Retains only an exact accepted post-state bound to the current scope, head, frontier, state and generation          |
 | Per-Canvas logical state                                              | That CanvasYDoc in `@convax/canvas`                      | No JSON mirror or global revision-counter authority                                                                |
 | Final offline/online edit object                                      | Actor-signed causal frame                                | Signed only after candidate validation; identical bytes are durably committed and later replicated                 |
 | Replication delivery status                                           | Main-owned outbox/ACK reachability metadata              | Delivery bookkeeping only; never a second document authority                                                       |
@@ -789,7 +790,12 @@ not alternate authorities. Main is the sole local durable writer through injecte
 of `replicaDoc`. A command may affect that authority only by validating one closed
 typed intent in an isolated `candidateDoc`, signing the final frame once, and
 committing those exact bytes through the object/outbox/journal/head barrier before
-applying the accepted delta to `replicaDoc`.
+applying the accepted delta to `replicaDoc`. After that barrier and exact replica
+application, Main may retain the isolated accepted post-state as a process-local
+standby for the next command. Reuse requires exact scope, durable-head, frontier,
+full-update, state-vector and document-generation bindings; any mismatch, disposal,
+recovery or acceleration failure destroys or rebuilds it. The standby is never
+durable authority and never replaces `replicaDoc`.
 
 Within a mounted Canvas, `CanvasSelection` is the sole selected-element state.
 `CanvasSelectionContext` classifies that set as none, single, multi or mixed so UI
@@ -1177,7 +1183,10 @@ only the resolved current location and exact hash-pinned resource. Project/node'
 single native materializer subscribes to accepted ProjectIndex invalidations and
 durable blob publication, copies verified cache bytes through same-filesystem
 create-new staging, fsyncs before publication, and removes or replaces only bytes
-that match its prior `{entryId,path,digest}` receipt. Text conflict-copy entries are
+that match its prior `{entryId,path,digest}` receipt. When a later invalidation
+projects that exact tuple unchanged, the process-local receipt suppresses redundant
+native revalidation; a changed tuple still takes the guarded replacement path.
+Text conflict-copy entries are
 ordinary deterministic plan rows; overwritable binary contributes only the
 ProjectIndex-selected winner. An untracked native edit is retained and reported as
 a reconciliation conflict rather than silently overwritten. Move IPC consumes the
@@ -2747,8 +2756,12 @@ applies the intent through `CanvasApplicationService` to an isolated candidate,
 signs one final causal frame, persists its exact object/outbox/journal/head barrier,
 applies that exact accepted delta to `replicaDoc`, and returns the authoritative
 projection plus accepted frame digest. Main-originated commits publish digest-marked
-invalidations; same-frame responses suppress a query while unknown frames preserve
-one trailing refresh. Resource IPC carries the current session id: durable commit
+invalidations as next-turn observer work after the submitter can receive its durable
+result; same-frame responses suppress a query while unknown frames preserve one
+trailing refresh. Slow-command diagnostics and projection observers remain outside
+the durability barrier: production telemetry never performs an outbox scan on the
+accepted-command path, while explicit benchmark mode may request bounded samples.
+Resource IPC carries the current session id: durable commit
 success is retained when delivery becomes unavailable, and a live Renderer performs
 one explicit refresh fallback. The incompatible bridge change is identified by
 `convax.desktop-ipc/38`; its Canvas session projection carries complete exact

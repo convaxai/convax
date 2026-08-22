@@ -48,6 +48,11 @@ added back.
 - Candidate validation happens on an isolated Y.Doc cloned from the latest
   `replicaDoc`. A stale, canceled, failed, or disposed candidate cannot mutate it;
   candidate state never replaces it.
+- After exact durable acceptance and replica application, the same isolated
+  post-state may be retained only as a process-local next-command standby bound to
+  the exact scope, durable head, frontier, full update, state vector and document
+  generation. Any mismatch or lifecycle transition destroys or rebuilds it; it is
+  never document authority.
 - Local success signs once, durably commits immutable object, replication-outbox ref,
   journal record, and sole head, then applies the exact accepted delta to
   `replicaDoc`. A below-head frame never transmits or projects.

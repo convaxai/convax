@@ -35,9 +35,12 @@ authority and lifecycle coordination, not reusable domain semantics.
   lock, approve, or arbitrate a Main read or mutation.
 - Publish committed frame-digest invalidations after domain success. Session-local
   responses return the complete projection and accepted frame digest so Renderer
-  can suppress the matching query while retaining a trailing remote refresh. Renderer reload,
-  selection, reveal, or reconciliation is fallible projection work and cannot undo
-  or misreport a durable mutation.
+  can suppress the matching query while retaining a trailing remote refresh. Deliver
+  invalidations as next-turn observer work so listeners cannot delay the submitter's
+  durable result. Production diagnostics must not add an outbox scan to this path;
+  exact persistence sampling is benchmark-only. Renderer reload, selection, reveal,
+  or reconciliation is fallible projection work and cannot undo or misreport a
+  durable mutation.
 - Compose Project's stable resource reader with Main's bounded media-header
   inspector before a Canvas image/video-create command. Inspect only the admitted
   Project file or verified managed blob, never synchronously decode or decompress

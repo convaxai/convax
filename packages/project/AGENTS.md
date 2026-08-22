@@ -129,7 +129,9 @@ This package owns the durable Project aggregate and native Project adapters.
   and reachable frame set; every use rechecks the durable-head digest and any
   mismatch/recovery/quarantine/checkpoint transition clears or rebuilds it. An
   immutable operation sidecar must be fsynced before the all-Project index learns
-  it, and reopen reconstructs every derived index.
+  it, and reopen reconstructs every derived index. Runtime open may prewarm bounded
+  outbox usage concurrently so the first mutation does not pay the scan; validation
+  and corruption limits remain unchanged.
 - Replication-cache GC consumes only a complete injected Project root scan, retains
   active transfers, uses a seven-day/two-store-generation delay and a second complete
   scan, and deletes nothing on unreadable ProjectIndex/Canvas state, invalid timing,
@@ -142,7 +144,9 @@ This package owns the durable Project aggregate and native Project adapters.
 - ProjectIndex exposes the sole stable-entry/current-resource materialization plan.
   Project/node subscribes to accepted ProjectIndex invalidation and durable blob
   publication, stages/fsyncs exact bytes, and replaces or removes only a prior
-  `{entryId,path,digest}` match. Native untracked edits fail closed instead of being
+  `{entryId,path,digest}` match. A process-local receipt may skip work only when the
+  next accepted plan repeats that exact tuple; any tuple change uses the guarded
+  native path. Native untracked edits fail closed instead of being
   silently overwritten; watcher notifications remain invalidation hints.
 - Native move/rename receipts carry exact source/target correspondence; Desktop must
   not recover it by basename. Explicit delete commits ProjectIndex tombstones before
