@@ -80,8 +80,9 @@ describe("StdioMcpClient", () => {
         const child = spawn(command, args ?? [], options ?? {}) as ChildProcessWithoutNullStreams
         const write = child.stdin.write
         child.stdin.write = function (...writeArgs: unknown[]) {
-          const accepted = Reflect.apply(write, child.stdin, writeArgs) as boolean
           writeCount += 1
+          if (writeCount === 3 && typeof writeArgs.at(-1) === "function") writeArgs[writeArgs.length - 1] = () => undefined
+          const accepted = Reflect.apply(write, child.stdin, writeArgs) as boolean
           return writeCount === 3 ? false : accepted
         } as typeof child.stdin.write
         return child

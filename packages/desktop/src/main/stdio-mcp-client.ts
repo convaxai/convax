@@ -343,9 +343,9 @@ export class StdioMcpClient {
   #connecting?: Promise<void>
   #generationRecoveryCapability?: GenerationRecoveryCapability
   #nextId = 1
+  #outboundBlockedBytes = 0
   #outboundQueue: { bytes: number; line: string }[] = []
   #outboundQueueBytes = 0
-  #outboundWriteInFlight = false
   #shutdownChild?: ChildProcessWithoutNullStreams
   #resolveChildExit?: () => void
   #serverRequestHandlerClosed = false
@@ -848,7 +848,7 @@ export class StdioMcpClient {
     const queueByteLimit = Math.max(maximumOutboundQueueBytes, bytes)
     if (
       this.#outboundQueue.length >= maximumOutboundQueueEntries ||
-      this.#outboundQueueBytes + bytes > queueByteLimit
+      this.#outboundBlockedBytes + this.#outboundQueueBytes + bytes > queueByteLimit
     ) {
       throw new Error("MCP command stdin is backpressured")
     }
@@ -859,13 +859,16 @@ export class StdioMcpClient {
 
   #flushOutbound() {
     const child = this.#child
-    if (this.#closed || !child || this.#outboundWriteInFlight || this.#outboundQueue.length === 0) return
-    const next = this.#outboundQueue.shift()!
-    this.#outboundQueueBytes -= next.bytes
-    this.#outboundWriteInFlight = true
-    try {
-      child.stdin.write(next.line, (error) => {
-        this.#outboundWriteInFlight = false
+    if (this.#closed || !child) return
+    while (this.#outboundQueue.length > 0) {
+      const next = this.#outboundQueue[0]!
+      const bufferedByteLimit = Math.max(maximumOutboundQueueBytes, next.bytes)
+      if (this.#outboundBlockedBytes + next.bytes > bufferedByteLimit) return
+      this.#outboundQueue.shift()
+      this.#outboundQueueBytes -= next.bytes
+      let blocked = false
+      const accepted = child.stdin.write(next.line, (error) => {
+        if (blocked) this.#outboundBlockedBytes = Math.max(0, this.#outboundBlockedBytes - next.bytes)
         if (this.#closed) return
         if (error) {
           this.#fail(error)
@@ -877,9 +880,10 @@ export class StdioMcpClient {
           this.#fail(flushError)
         }
       })
-    } catch (error) {
-      this.#outboundWriteInFlight = false
-      throw error
+      if (!accepted) {
+        blocked = true
+        this.#outboundBlockedBytes += next.bytes
+      }
     }
   }
 
@@ -918,9 +922,9 @@ export class StdioMcpClient {
     }
     this.#pending.clear()
     this.#generationLifecycles.clear()
+    this.#outboundBlockedBytes = 0
     this.#outboundQueue = []
     this.#outboundQueueBytes = 0
-    this.#outboundWriteInFlight = false
     child?.stdin.destroy()
     child?.stdout.destroy()
     child?.stderr.destroy()
