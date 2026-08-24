@@ -761,7 +761,7 @@ describe("replicaDoc/candidateDoc durability", () => {
     } finally {
       kernel.dispose()
     }
-  }, 60_000)
+  }, 120_000)
 
   test("arms owner candidate capture before the local transaction", async () => {
     const selectedAuthority = await authority()

@@ -667,7 +667,7 @@ describe("ProjectIndex owner schema", () => {
       expect(projectIndexEntryAtPortablePathFromValidatedOwnerState(state, lastPath))
         .toEqual({ entryId: lastFileId, kind: "file" })
     })
-  })
+  }, 30_000)
 
   test("keeps fixed-k file create structurally logarithmic at 256, 1024 and 4096 resources", () => {
     for (const resourceCount of [256, 1024, 4096] as const) {

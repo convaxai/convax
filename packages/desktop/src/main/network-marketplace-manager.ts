@@ -16,6 +16,7 @@ import {
 } from "@convax/marketplace"
 
 import { readBoundedAuthorityFile } from "./bounded-authority-file"
+import { syncDirectoryEntry, syncFileBytes } from "./filesystem-durability"
 import { FileMarketplaceSourceStore, type AcceptedMarketplaceCatalog } from "./marketplace-source-store"
 import { marketplaceRepositoryFromDescriptorUrl, PinnedHttpsFetcher } from "./pinned-https-fetch"
 import { projectRegistryPackageRuntimeProjection } from "./marketplace-runtime-surface"
@@ -193,18 +194,13 @@ async function atomicGraph(file: string, value: SourceGraph) {
     const handle = await fs.open(temporary, "wx", 0o600)
     try {
       await handle.writeFile(bytes)
-      await handle.sync()
+      await syncFileBytes(handle)
     } finally {
       await handle.close()
     }
     await fs.rename(temporary, file)
     published = true
-    const parent = await fs.open(directory, "r")
-    try {
-      await parent.sync()
-    } finally {
-      await parent.close()
-    }
+    await syncDirectoryEntry(directory)
   } finally {
     if (!published) await fs.rm(temporary, { force: true })
   }
