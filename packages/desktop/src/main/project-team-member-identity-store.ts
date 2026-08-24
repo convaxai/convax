@@ -15,6 +15,8 @@ import {
   type ProjectId,
 } from "@convax/collaboration"
 
+import { syncDirectoryEntry, syncFileBytes } from "./filesystem-durability"
+
 const FORMAT = "convax.desktop-project-member-identity/1" as const
 
 interface ProjectMemberIdentityRecord {
@@ -46,8 +48,8 @@ export class NodeProjectTeamMemberIdentityStore {
     const bytes = encodeRestrictedJcs(record)
     try {
       const handle = await fs.open(target, constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | constants.O_NOFOLLOW, 0o600)
-      try { await handle.writeFile(bytes); await handle.sync() } finally { await handle.close() }
-      await syncDirectory(this.rootDirectory)
+      try { await handle.writeFile(bytes); await syncFileBytes(handle) } finally { await handle.close() }
+      await syncDirectoryEntry(this.rootDirectory)
       return record.memberId
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error
@@ -87,11 +89,6 @@ async function ensureDirectory(target: string): Promise<void> {
   await fs.mkdir(target, { recursive: true, mode: 0o700 })
   const stat = await fs.lstat(target)
   if (!stat.isDirectory() || stat.isSymbolicLink()) throw new Error("Project member identity root is untrusted")
-}
-
-async function syncDirectory(target: string): Promise<void> {
-  const handle = await fs.open(target, constants.O_RDONLY | constants.O_DIRECTORY | constants.O_NOFOLLOW)
-  try { await handle.sync() } finally { await handle.close() }
 }
 
 function sameBytes(left: Uint8Array, right: Uint8Array): boolean {

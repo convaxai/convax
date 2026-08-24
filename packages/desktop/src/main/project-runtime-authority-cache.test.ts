@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test"
+import path from "node:path"
 import {
   CURRENT_PROTOCOL_IDENTITIES,
   ordinarySha256,
@@ -24,6 +25,7 @@ const encoder = new TextEncoder()
 const digest = (value: string) => ordinarySha256(encoder.encode(value))
 const id = (value: number) => parseId128(Buffer.alloc(16, value).toString("base64url"))
 const projectId = parseProjectId("project")
+const projectRoot = path.resolve("project")
 const projectEpoch = id(1)
 const actorId = parseActorId(Buffer.alloc(32, 2).toString("base64url"))
 const protocolDigest = parseDigest(CURRENT_PROTOCOL_IDENTITIES.protocolDigest)
@@ -66,7 +68,7 @@ describe("ProjectRuntimeAuthorityCache", () => {
       projects: {
         async resolveProjectRoot() {
           rootReads += 1
-          return "/project"
+          return projectRoot
         },
       },
       quiescence: { async quiesceProject() {} },
@@ -142,7 +144,7 @@ describe("ProjectRuntimeAuthorityCache", () => {
 
     publishOwnerChange({ projectId })
     expect(await oldAuthority.resolveCurrent(request(canvasScope()))).toBe("rejected")
-    cache.release({ projectId, projectRoot: "/project", runtimeIdentity: oldIdentity })
+    cache.release({ projectId, projectRoot, runtimeIdentity: oldIdentity })
     expect(await oldAuthority.resolveCurrent(request(canvasScope()))).toBe("rejected")
 
     const newIdentity = Object.freeze({})
@@ -174,7 +176,7 @@ describe("ProjectRuntimeAuthorityCache", () => {
       },
     })
     const runtimeIdentity = Object.freeze({})
-    const opening = identity.resolveLocalActorId({ projectId, projectRoot: "/project", runtimeIdentity })
+    const opening = identity.resolveLocalActorId({ projectId, projectRoot, runtimeIdentity })
 
     publishOwnerChange({ projectId })
     finishResolution()
@@ -184,7 +186,7 @@ describe("ProjectRuntimeAuthorityCache", () => {
     const nextIdentity = Object.freeze({})
     await expect(identity.resolveLocalActorId({
       projectId,
-      projectRoot: "/project",
+      projectRoot,
       runtimeIdentity: nextIdentity,
     })).resolves.toBe(actorId)
     expect(await cache.authorityFor(fakeLease(nextIdentity)).resolveCurrent(request(canvasScope()))).not.toBe("rejected")
@@ -221,14 +223,14 @@ async function seedCache(cache: ProjectRuntimeAuthorityCache, runtimeIdentity: o
       return { projectId, projectEpoch, localActorId: actorId, localOwner: owner }
     },
   })
-  await identity.resolveLocalActorId({ projectId, projectRoot: "/project", runtimeIdentity })
+  await identity.resolveLocalActorId({ projectId, projectRoot, runtimeIdentity })
 }
 
 function fakeLease(runtimeIdentity: object): ProjectCollaborationRuntimeLease {
   return {
     projectId,
-    projectRoot: "/project",
-    collaborationDirectory: "/project/.convax/collaboration",
+    projectRoot,
+    collaborationDirectory: path.join(projectRoot, ".convax", "collaboration"),
     localActorId: actorId,
     persistence: undefined as unknown as ProjectCollaborationRuntimeLease["persistence"],
     runtimeIdentity,

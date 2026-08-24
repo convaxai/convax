@@ -355,7 +355,9 @@ describe("PluginInstallationSnapshotStore", () => {
       { mode: 0o600 },
     )
     const installedPath = path.join(root, "installed", `${alpha.digest}.json`)
-    if (process.platform !== "win32") await fs.chmod(installedPath, 0o600)
+    // Windows maps the immutable snapshot's write bits to its read-only
+    // attribute, so clear it before this test deliberately corrupts the file.
+    await fs.chmod(installedPath, 0o600)
     await fs.writeFile(installedPath, `${JSON.stringify(snapshotInput("changed"))}\n`, { mode: 0o400 })
     if (process.platform !== "win32") await fs.chmod(installedPath, 0o400)
     await expect(new PluginInstallationSnapshotStore(root).readActive()).rejects.toBeInstanceOf(

@@ -276,10 +276,13 @@ export class GenerationOperationStore {
       }
       let bytes: string
       try {
-        bytes = await fs.readFile(path.join(this.root, entry.name), "utf8")
+        const read = await readLedgerDuringConcurrentMutation(path.join(this.root, entry.name))
+        if (read === undefined) continue
+        bytes = read
       } catch (error) {
         // Acknowledgement cleanup may remove a valid entry after readdir. The
-        // next list is authoritative; every other read failure remains fatal.
+        // next list is authoritative. The helper contains only Windows' short
+        // atomic-replacement sharing race; every other read failure remains fatal.
         if ((error as NodeJS.ErrnoException).code === "ENOENT") continue
         throw error
       }
@@ -382,4 +385,22 @@ export class GenerationOperationStore {
       if (this.#locks.get(key) === queued) this.#locks.delete(key)
     }
   }
+}
+
+async function readLedgerDuringConcurrentMutation(file: string): Promise<string | undefined> {
+  const attempts = process.platform === "win32" ? 20 : 1
+  for (let attempt = 0; attempt < attempts; attempt += 1) {
+    try {
+      return await fs.readFile(file, "utf8")
+    } catch (error) {
+      const code = (error as NodeJS.ErrnoException).code
+      if (code === "ENOENT") return undefined
+      if (code !== "EPERM" || attempt + 1 === attempts) throw error
+      // Windows can expose a short EPERM window while another task atomically
+      // replaces or removes this ledger. Retry only that sharing race; a
+      // persistent permissions failure still fails closed.
+      await new Promise<void>((resolve) => setTimeout(resolve, 2))
+    }
+  }
+  return undefined
 }
