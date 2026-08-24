@@ -47,7 +47,11 @@ if (ignoreSigterm) {
 }
 
 function send(value: unknown) {
-  process.stdout.write(`${JSON.stringify(value)}\n`)
+  // This executable is a deterministic test sidecar, not the production
+  // transport. Write each complete JSON-RPC line directly so Bun's Windows
+  // stdout stream buffering cannot retain a later response after an earlier
+  // response has already reached the client.
+  fs.writeSync(process.stdout.fd, `${JSON.stringify(value)}\n`)
 }
 
 function requestHost(method: string, params: unknown) {
