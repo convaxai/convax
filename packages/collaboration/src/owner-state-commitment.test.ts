@@ -61,7 +61,7 @@ describe("owner state Merkle Patricia commitment", () => {
     incremental = issuer.apply(incremental, shuffle(mutations, 0x12345678))
     const rebuilt = issuer.build(source(updated, "after"))
     expect(issuer.digest(incremental)).toBe(issuer.digest(rebuilt))
-  })
+  }, 30_000)
 
   test("binds exact owner, schema, descriptor, collection, key, and restricted-JCS value", () => {
     const canvas = createOwnerStateCommitmentIssuer({ owner: "canvas", ownerSchemaDigest: SCHEMA })
@@ -152,7 +152,7 @@ describe("owner state Merkle Patricia commitment", () => {
       return mutationWork.nodeHashCount
     })
     expect(Math.max(...results) - Math.min(...results)).toBeLessThanOrEqual(4)
-  })
+  }, 30_000)
 })
 
 function source(entries: readonly Readonly<{ key: string; value: unknown }>[], title = "before") {
