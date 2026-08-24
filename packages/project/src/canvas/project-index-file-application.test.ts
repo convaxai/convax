@@ -105,6 +105,23 @@ describe("ProjectIndexFileApplication", () => {
       path: "notes.md",
     })
     expect(plan.entries[0]?.reference?.blob.digest).toBe(digestBytes(new TextEncoder().encode("hello\n")))
+    const currentResources = await new ProjectIndexCanvasApplication({
+      session,
+      facts: { async resolve() { return { status: "resolved", port: {} as never } } },
+      genesis: {
+        async preflightCanvasGenesis() { return "pending" },
+        async stageCanvasGenesis() { return "pending" },
+      },
+      createOperationId: () => id128(8),
+      createShardEpoch: () => id128(9),
+    }).queryCurrentResources({ projectId })
+    expect(currentResources).toEqual([
+      expect.objectContaining({
+        materializedPath: "notes.md",
+        reference: expect.objectContaining({ entryFileId: result.status === "committed" ? result.entryId : "" }),
+        storageClass: "project-file",
+      }),
+    ])
   })
 
   test("reuses a verified digest and exact byte view without the compatibility copy-and-hash path", async () => {

@@ -1138,6 +1138,12 @@ contain the exact reference, `storageClass`, and an optional owner-projected
 materialized path. A `project-file` with no current materialized path remains missing
 and is never reinterpreted as a managed asset. A `managed-blob` has no path and may be
 temporarily mapped to the verified Project managed-object adapter by digest and MIME.
+Project computes ordinary reachable materialized paths once per validated owner
+query through one bulk path-claim index. Managed blobs and ordinary rooted winners
+do not construct per-entry counterfactual dependency evidence; conflict copies,
+path-claim losers, orphans, cycles and declared-missing entries retain the complete
+location projection. This changes only projection cost, not currentness, conflict
+semantics, the public port, or ProjectIndex authority.
 Canvas current-resource fact verification consumes this complete projection rather
 than the file-only materialization plan. The same surface owns deterministic
 holder/bootstrap planning, the
@@ -2754,6 +2760,11 @@ one explicit refresh fallback. The incompatible bridge change is identified by
 `convax.desktop-ipc/38`; its Canvas session projection carries complete exact
 node- and edge-incarnation tables so guarded visual history cannot hide a reused
 React Flow id.
+The active Canvas sidebar outline consumes that same mounted session projection and
+does not start a concurrent compatibility `load` while the session opens. Inactive
+Canvas outlines and explicit cross-Canvas search may still use the compatibility
+bridge. This removes a duplicate authoritative read without changing IPC shape,
+scope authority, or Canvas persistence.
 
 Targeted Canvas resource rehydration carries the exact mounted Canvas `ref`, current
 session id, and only a bounded, unique list of Canvas node ids. Main derives the

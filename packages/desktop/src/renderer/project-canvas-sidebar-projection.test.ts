@@ -8,11 +8,61 @@ import {
   setCanvasGroupFolded,
 } from "@convax/canvas"
 import {
+  loadProjectCanvasSidebarNodes,
   projectCanvasSidebarNodes,
   sameProjectCanvasNodeProjection,
 } from "./project-canvas-sidebar-projection"
 
 describe("Project Canvas sidebar projection", () => {
+  test("reuses the active session projection without starting a compatibility document load", async () => {
+    const document = createCanvasDocument({
+      id: "active-canvas",
+      nodes: [createTextNode({
+        id: "note",
+        label: "Session note",
+        metadata: {},
+        position: { x: 0, y: 0 },
+        resourceState: { status: "ready" },
+      })],
+    })
+    let compatibilityLoads = 0
+    const loadDocument = async () => {
+      compatibilityLoads += 1
+      return document
+    }
+
+    expect(await loadProjectCanvasSidebarNodes({
+      activeDocument: null,
+      canvasId: document.id,
+      loadDocument,
+      projectId: "project",
+    })).toEqual([])
+    expect(await loadProjectCanvasSidebarNodes({
+      activeDocument: document,
+      canvasId: document.id,
+      loadDocument,
+      projectId: "project",
+    })).toEqual([expect.objectContaining({ id: "note", label: "Session note" })])
+    expect(compatibilityLoads).toBe(0)
+  })
+
+  test("keeps compatibility loading for an inactive Canvas", async () => {
+    const document = createCanvasDocument({ id: "inactive-canvas" })
+    let compatibilityLoads = 0
+
+    expect(await loadProjectCanvasSidebarNodes({
+      activeDocument: undefined,
+      canvasId: document.id,
+      loadDocument: async (ref) => {
+        compatibilityLoads += 1
+        expect(ref).toEqual({ canvasId: document.id, scopeId: "project" })
+        return document
+      },
+      projectId: "project",
+    })).toEqual([])
+    expect(compatibilityLoads).toBe(1)
+  })
+
   test("reuses the Canvas outline hierarchy and decorates nested media previews", () => {
     const group = createGroupNode({
       height: 320,

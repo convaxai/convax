@@ -146,7 +146,11 @@ import {
 } from "./project-empty-state"
 import { resolveProjectLocalCanvasSurfaceAccess } from "./project-local-canvas-access"
 import { ProjectCanvasWorkbenchCoordinator, runProjectCanvasResourceRelink } from "./project-canvas-workbench"
-import { projectCanvasSidebarNodes, sameProjectCanvasNodeProjection } from "./project-canvas-sidebar-projection"
+import {
+  loadProjectCanvasSidebarNodes,
+  projectCanvasSidebarNodes,
+  sameProjectCanvasNodeProjection,
+} from "./project-canvas-sidebar-projection"
 import { createProjectFolderBrowseService } from "./project-folder-browse-service"
 import { revealProjectFileOnCanvas } from "./project-file-canvas-reveal"
 import {
@@ -798,7 +802,15 @@ function App() {
       onMountFailure: (error) => {
         setCanvasSessionFailure({ key, message: error instanceof Error ? error.message : String(error) })
       },
-      onMounted: (session) => setMountedCanvasSession({ key, session }),
+      onMounted: (session) => {
+        const next = {
+          canvasId: activeCanvasId,
+          nodes: projectCanvasSidebarNodes(session.getProjection()),
+          projectId: activeProjectId,
+        } satisfies ProjectCanvasSidebarNodeProjection
+        setMountedCanvasSession({ key, session })
+        setActiveCanvasNodes((previous) => (sameProjectCanvasNodeProjection(previous, next) ? previous : next))
+      },
       openSession: (signal) =>
         openDesktopCanvasRendererSession({
           ref,
@@ -960,10 +972,17 @@ function App() {
   )
   const loadProjectCanvasNodes = useCallback(
     async ({ canvasId, projectId }: { canvasId: string; projectId: string }) => {
-      const snapshot = await window.convax.canvas.documents.load({ canvasId, scopeId: projectId })
-      return projectCanvasSidebarNodes(snapshot.projection)
+      const activeDocument = projectId === activeProjectId && canvasId === activeCanvasId
+        ? activeCanvasSession?.getProjection() ?? null
+        : undefined
+      return loadProjectCanvasSidebarNodes({
+        activeDocument,
+        canvasId,
+        loadDocument: async (ref) => (await window.convax.canvas.documents.load(ref)).projection,
+        projectId,
+      })
     },
-    [],
+    [activeCanvasId, activeCanvasSession, activeProjectId],
   )
   const activateProjectCanvasNode = useCallback(
     async ({ canvasId, nodeId }: { canvasId: string; nodeId: string }) => {
