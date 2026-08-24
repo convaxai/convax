@@ -158,7 +158,7 @@ describe("appearance themes", () => {
   })
 
   test("ships CSS selectors containing every semantic variable for all presets", () => {
-    const css = readFileSync(join(import.meta.dir, "appearance-themes.css"), "utf8")
+    const css = readFileSync(join(import.meta.dir, "appearance-themes.css"), "utf8").replaceAll("\r\n", "\n")
     const html = readFileSync(join(import.meta.dir, "index.html"), "utf8")
     expect(css).toContain(":root[data-app-theme]")
     expect(css).toContain(':root,\n:root[data-app-theme="graphite"]')
