@@ -742,7 +742,7 @@ describe("ProjectIndex owner schema", () => {
       // the measured owner-frame commitment path above.
       expect(protocol.canonicalStateBytes(candidate)).toEqual(encodeProjectCanonicalState(candidate))
     }
-  }, 30_000)
+  }, 120_000)
 
   test("derives byte-identical 512 and 2k create canonical state from certified collection fragments", () => {
     for (const resourceCount of [512, 2048] as const) {

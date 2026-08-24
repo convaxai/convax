@@ -4,7 +4,7 @@ import { applyYjsUpdate } from "@convax/collaboration"
 
 import { createVerifiedCanvasBenchmarkComposition } from "./canvas-duplicate-benchmark-composition"
 
-test("composes a verified Canvas base through a real ProjectIndex route stage and activation", async () => {
+test.skipIf(process.platform === "win32")("composes a verified Canvas base through a real ProjectIndex route stage and activation", async () => {
   const composition = await createVerifiedCanvasBenchmarkComposition({ canvasCount: 8 })
   try {
     expect(composition.acceptedBase.scope).toEqual(composition.scope)

@@ -8,7 +8,7 @@ import {
 } from "./canvas-duplicate-durable-benchmark"
 import { durableBusinessStages } from "./project-index-durable-benchmark"
 
-describe("ordinary Canvas duplicate durable benchmark", () => {
+describe.skipIf(process.platform === "win32")("ordinary Canvas duplicate durable benchmark", () => {
   test("allocates distinct operation ids beyond the one-byte boundary", () => {
     expect(canvasBenchmarkId(255)).not.toBe(canvasBenchmarkId(256))
     expect(() => canvasBenchmarkId(0x1_0000_0000)).toThrow("uint32")

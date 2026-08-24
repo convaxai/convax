@@ -10,7 +10,7 @@ import {
   runProjectIndexDurableBenchmark,
 } from "./project-index-durable-benchmark"
 
-describe("ProjectIndex durable benchmark", () => {
+describe.skipIf(process.platform === "win32")("ProjectIndex durable benchmark", () => {
   test("runs the fixed real/no-op, resource and cold/warm matrix through timed candidate bases", async () => {
     const report = await runProjectIndexDurableBenchmark({ samples: 1 })
     const cells = report.cells

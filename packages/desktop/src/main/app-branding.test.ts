@@ -192,7 +192,7 @@ describe("desktop branding", () => {
         isPackaged: false,
         requestedDirectory: "/tmp/runtime/abc123/user-data",
       }),
-    ).toBe("/tmp/runtime/abc123/user-data")
+    ).toBe(resolve("/tmp/runtime/abc123/user-data"))
     expect(() =>
       desktopUserDataDirectory({
         appDataDirectory: "/Library/Application Support",

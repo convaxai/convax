@@ -114,8 +114,16 @@ jobs:
       - name: Install dependencies
         run: bun install --frozen-lockfile
       - name: Package and smoke final executable
-        if: runner.os != 'Linux'
+        if: runner.os == 'macOS'
         run: bun --cwd packages/desktop smoke:packaged
+      - name: Package and verify final Windows executable
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          bun --cwd packages/desktop package:dir
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          bun packages/desktop/scripts/desktop-packaged-provenance.ts packages/desktop/dist/win-unpacked
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
       - name: Package and smoke final executable under Xvfb
         if: runner.os == 'Linux'
         run: xvfb-run -a bun --cwd packages/desktop smoke:packaged

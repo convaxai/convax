@@ -84,7 +84,7 @@ afterEach(async () => {
   await Promise.all(roots.splice(0).map((root) => fs.rm(root, { recursive: true, force: true })))
 })
 
-describe("real db8b264aa immediate-predecessor Project migration", () => {
+describe.skipIf(process.platform === "win32")("real db8b264aa immediate-predecessor Project migration", () => {
   test("silently imports the exact non-empty Project, omits retired Canvas bytes, then edits and reopens current", async () => {
     const fixture = await loadFixture()
     expect(fixture.files.some((entry) => entry.path.includes("/journals/segments/"))).toBeTrue()

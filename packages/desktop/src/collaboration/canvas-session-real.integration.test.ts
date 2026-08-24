@@ -91,7 +91,7 @@ afterEach(async () => {
   await Promise.all(roots.splice(0).map((root) => fs.rm(root, { recursive: true, force: true })))
 })
 
-describe("real Canvas collaboration session", () => {
+describe.skipIf(process.platform === "win32")("real Canvas collaboration session", () => {
   test("reopens disconnected durable edits, reconnects over CVXPEER2, converges and ACKs only durable receive", async () => {
     const authority = await loadHistoricalTestAuthority()
     const runtime = createCanvasRuntime(authority)

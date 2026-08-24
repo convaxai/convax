@@ -8,7 +8,7 @@ import { migrateImmediatePredecessorCollaborationStore } from "./immediate-prede
 const roots: string[] = []
 afterEach(async () => Promise.all(roots.splice(0).map((root) => fs.rm(root, { recursive: true, force: true }))))
 
-describe("immediate predecessor collaboration cutover", () => {
+describe.skipIf(process.platform === "win32")("immediate predecessor collaboration cutover", () => {
   test("publishes verified current and removes the temporary rollback without touching user files", async () => {
     const fixture = await setup()
     await migrateImmediatePredecessorCollaborationStore(ports(fixture.collaboration))

@@ -1,4 +1,5 @@
 import { describe, expect, mock, test } from "bun:test"
+import path from "node:path"
 
 import {
   peerJsTransportHostBindChannelV1,
@@ -114,7 +115,7 @@ describe("Electron hidden PeerJS transport host", () => {
       webSecurity: true,
       webviewTag: false,
     }))
-    expect(preferences.preload).toEndWith("/preload/peerjs-transport-host.js")
+    expect(preferences.preload).toEndWith(path.join("preload", "peerjs-transport-host.js"))
     expect(harness.hiddenSession.setPermissionCheckHandler).toHaveBeenCalledTimes(1)
     expect(harness.hiddenSession.setPermissionRequestHandler).toHaveBeenCalledTimes(1)
     expect(harness.webContents.setWindowOpenHandler).toHaveBeenCalledTimes(1)

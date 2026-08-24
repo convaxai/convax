@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto"
 import { constants, type BigIntStats } from "node:fs"
 import fs, { type FileHandle } from "node:fs/promises"
 
@@ -77,6 +78,7 @@ async function writeExact(writer: FileHandle, buffer: Buffer, length: number, po
 
 async function copyExactBytes(source: FileHandle, target: string, size: number, signal?: AbortSignal) {
   const writer = await fs.open(target, "wx", 0o600)
+  const hash = createHash("sha256")
   let failure: unknown
   try {
     const buffer = Buffer.allocUnsafe(Math.min(copyBufferBytes, size))
@@ -86,6 +88,7 @@ async function copyExactBytes(source: FileHandle, target: string, size: number, 
       const length = Math.min(buffer.byteLength, size - offset)
       const { bytesRead } = await source.read(buffer, 0, length, offset)
       if (bytesRead < 1) throw new Error("Stable file copy source ended before its initial size")
+      hash.update(buffer.subarray(0, bytesRead))
       await writeExact(writer, buffer, bytesRead, offset)
       offset += bytesRead
     }
@@ -102,6 +105,22 @@ async function copyExactBytes(source: FileHandle, target: string, size: number, 
     await fs.rm(target, { force: true }).catch(() => undefined)
     throw failure
   }
+  return hash.digest("hex")
+}
+
+async function digestExactBytes(source: FileHandle, size: number, signal?: AbortSignal) {
+  const hash = createHash("sha256")
+  const buffer = Buffer.allocUnsafe(Math.min(copyBufferBytes, size))
+  let offset = 0
+  while (offset < size) {
+    assertNotAborted(signal)
+    const length = Math.min(buffer.byteLength, size - offset)
+    const { bytesRead } = await source.read(buffer, 0, length, offset)
+    if (bytesRead < 1) throw new Error("Stable file copy source ended before its initial size")
+    hash.update(buffer.subarray(0, bytesRead))
+    offset += bytesRead
+  }
+  return hash.digest("hex")
 }
 
 async function assertUnchangedAfterCopy(
@@ -192,10 +211,12 @@ export async function copyStableFile(options: StableFileCopyOptions) {
       throw new Error(`${options.description} is empty or exceeds the configured size limit`)
     }
     const size = Number(before.size)
+    const beforeDigest = await digestExactBytes(handle, size, options.signal)
     target = await options.prepareTarget({ handle, size })
     assertNotAborted(options.signal)
-    await copyExactBytes(handle, target, size, options.signal)
+    const copiedDigest = await copyExactBytes(handle, target, size, options.signal)
     targetCreated = true
+    if (copiedDigest !== beforeDigest) throw changedError(options.description)
     assertNotAborted(options.signal)
     await assertUnchangedAfterCopy(
       handle,

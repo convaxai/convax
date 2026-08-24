@@ -93,6 +93,7 @@ test("fails closed on executable drift before process start", async () => {
   await fs.appendFile(executable.path, "\n# changed")
   const manager = new ManagedMcpRuntimeManager({
     agentTools: new ManagedMcpAgentToolRegistry(),
+    platform: "linux",
     root: path.join(directory, "runtime"),
   })
   await expect(

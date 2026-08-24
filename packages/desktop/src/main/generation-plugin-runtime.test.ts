@@ -1123,8 +1123,10 @@ describe("GenerationPluginRuntime", () => {
         XDG_DATA_HOME: path.join(profileRoot, "data"),
       })
       expect(profile.env).not.toHaveProperty("USERPROFILE")
-      expect((await fs.stat(profile.cwd)).mode & 0o777).toBe(0o700)
-      expect((await fs.stat(profile.env!.HOME!)).mode & 0o777).toBe(0o700)
+      if (process.platform !== "win32") {
+        expect((await fs.stat(profile.cwd)).mode & 0o777).toBe(0o700)
+        expect((await fs.stat(profile.env!.HOME!)).mode & 0o777).toBe(0o700)
+      }
     }
     expect(firstProfile!.env!.HOME).not.toBe(secondProfile!.env!.HOME)
     expect(firstProfile!.env!.TMPDIR).not.toBe(secondProfile!.env!.TMPDIR)
@@ -2687,9 +2689,12 @@ describe("GenerationPluginRuntime", () => {
       await runtime.prepareTool(tool!)
       const injected = options[0]?.env?.CONVAX_GENERATION_LRO_DIRECTORY
       const realRoot = await fs.realpath(root)
-      expect(injected).toMatch(new RegExp(`^${realRoot.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}/[a-f0-9]{64}$`))
-      expect((await fs.stat(realRoot)).mode & 0o777).toBe(0o700)
-      expect((await fs.stat(injected!)).mode & 0o777).toBe(0o700)
+      expect(path.dirname(injected!)).toBe(realRoot)
+      expect(path.basename(injected!)).toMatch(/^[a-f0-9]{64}$/)
+      if (process.platform !== "win32") {
+        expect((await fs.stat(realRoot)).mode & 0o777).toBe(0o700)
+        expect((await fs.stat(injected!)).mode & 0o777).toBe(0o700)
+      }
       expect(path.basename(injected!)).not.toContain("image-tools")
       expect(options[0]?.env).not.toHaveProperty("SECRET_API_KEY")
     } finally {

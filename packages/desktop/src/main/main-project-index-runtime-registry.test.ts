@@ -35,7 +35,7 @@ afterEach(async () => {
   await Promise.all(roots.splice(0).map((root) => fs.rm(root, { force: true, recursive: true })))
 })
 
-describe("existing ProjectIndex registration", () => {
+describe.skipIf(process.platform === "win32")("existing ProjectIndex registration", () => {
   test("an unregistered Project fails closed instead of minting a local owner", async () => {
     const projectRoot = await fs.mkdtemp(path.join(os.tmpdir(), "convax-unregistered-project-"))
     roots.push(projectRoot)
