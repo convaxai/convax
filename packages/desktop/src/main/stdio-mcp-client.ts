@@ -345,7 +345,7 @@ export class StdioMcpClient {
   #nextId = 1
   #outboundQueue: { bytes: number; line: string }[] = []
   #outboundQueueBytes = 0
-  #outboundWaitingForDrain = false
+  #outboundWriteInFlight = false
   #shutdownChild?: ChildProcessWithoutNullStreams
   #resolveChildExit?: () => void
   #serverRequestHandlerClosed = false
@@ -859,21 +859,27 @@ export class StdioMcpClient {
 
   #flushOutbound() {
     const child = this.#child
-    if (this.#closed || !child || this.#outboundWaitingForDrain) return
-    while (this.#outboundQueue.length > 0) {
-      const next = this.#outboundQueue.shift()!
-      this.#outboundQueueBytes -= next.bytes
-      if (child.stdin.write(next.line)) continue
-      this.#outboundWaitingForDrain = true
-      child.stdin.once("drain", () => {
-        this.#outboundWaitingForDrain = false
+    if (this.#closed || !child || this.#outboundWriteInFlight || this.#outboundQueue.length === 0) return
+    const next = this.#outboundQueue.shift()!
+    this.#outboundQueueBytes -= next.bytes
+    this.#outboundWriteInFlight = true
+    try {
+      child.stdin.write(next.line, (error) => {
+        this.#outboundWriteInFlight = false
+        if (this.#closed) return
+        if (error) {
+          this.#fail(error)
+          return
+        }
         try {
           this.#flushOutbound()
-        } catch (error) {
-          this.#fail(error)
+        } catch (flushError) {
+          this.#fail(flushError)
         }
       })
-      return
+    } catch (error) {
+      this.#outboundWriteInFlight = false
+      throw error
     }
   }
 
@@ -914,7 +920,7 @@ export class StdioMcpClient {
     this.#generationLifecycles.clear()
     this.#outboundQueue = []
     this.#outboundQueueBytes = 0
-    this.#outboundWaitingForDrain = false
+    this.#outboundWriteInFlight = false
     child?.stdin.destroy()
     child?.stdout.destroy()
     child?.stderr.destroy()

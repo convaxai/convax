@@ -16,7 +16,7 @@ const clients = new Set<StdioMcpClient>()
 function createClient(
   options: Pick<
     StdioMcpClientOptions,
-    "maxConcurrentServerRequests" | "requestTimeoutMs" | "serverRequestHandler" | "shutdownGraceMs"
+    "maxConcurrentServerRequests" | "requestTimeoutMs" | "serverRequestHandler" | "shutdownGraceMs" | "spawn"
   > & { fixtureArgs?: readonly string[] } = {},
 ) {
   const { fixtureArgs = [], ...clientOptions } = options
@@ -72,37 +72,46 @@ describe("StdioMcpClient", () => {
     expect(events).toEqual([{ type: "external-started" }, { taskId: "task_safe_123", type: "submitted" }])
   })
 
-  test(
-    "negotiates the durable LRO, sends exact operation metadata, and calls fixed methods",
-    async () => {
-      const client = createClient({ fixtureArgs: ["--generation-recovery"] })
-      expect(await client.generationRecoveryCapability()).toEqual({
-        binding: "fixture-binding",
-        mode: "long-running-operation",
-        schema: "convax.generation-lro/1",
-      })
-      const result = await client.callTool("echo", { prompt: "hello" }, undefined, undefined, false, {
+  test("negotiates the durable LRO, sends exact operation metadata, and calls fixed methods", async () => {
+    let writeCount = 0
+    const client = createClient({
+      fixtureArgs: ["--generation-recovery"],
+      spawn: ((command, args, options) => {
+        const child = spawn(command, args ?? [], options ?? {}) as ChildProcessWithoutNullStreams
+        const write = child.stdin.write
+        child.stdin.write = function (...writeArgs: unknown[]) {
+          const accepted = Reflect.apply(write, child.stdin, writeArgs) as boolean
+          writeCount += 1
+          return writeCount === 3 ? false : accepted
+        } as typeof child.stdin.write
+        return child
+      }) as typeof spawn,
+    })
+    expect(await client.generationRecoveryCapability()).toEqual({
+      binding: "fixture-binding",
+      mode: "long-running-operation",
+      schema: "convax.generation-lro/1",
+    })
+    const result = await client.callTool("echo", { prompt: "hello" }, undefined, undefined, false, {
+      operationId: "operation-one",
+      recovery: "required",
+      requestDigest: "a".repeat(64),
+    })
+    expect(result.structuredContent?.requestMeta).toEqual({
+      convaxGeneration: {
         operationId: "operation-one",
         recovery: "required",
         requestDigest: "a".repeat(64),
-      })
-      expect(result.structuredContent?.requestMeta).toEqual({
-        convaxGeneration: {
-          operationId: "operation-one",
-          recovery: "required",
-          requestDigest: "a".repeat(64),
-          schema: "convax.generation-operation/1",
-        },
-      })
-      await expect(
-        client.callGenerationRecovery(generationLroMethods.get, {
-          operationId: "operation-one",
-          requestDigest: "a".repeat(64),
-        }),
-      ).resolves.toMatchObject({ status: "running", taskId: "fixture_task" })
-    },
-    15_000,
-  )
+        schema: "convax.generation-operation/1",
+      },
+    })
+    await expect(
+      client.callGenerationRecovery(generationLroMethods.get, {
+        operationId: "operation-one",
+        requestDigest: "a".repeat(64),
+      }),
+    ).resolves.toMatchObject({ status: "running", taskId: "fixture_task" })
+  })
 
   test.each([
     "https://vendor.example/tasks/secret",
