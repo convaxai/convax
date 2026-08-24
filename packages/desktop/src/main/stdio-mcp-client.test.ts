@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, mock, test } from "bun:test"
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process"
+import fsSync from "node:fs"
 import fs from "node:fs/promises"
 import os from "node:os"
 import path from "node:path"
@@ -16,7 +17,7 @@ const clients = new Set<StdioMcpClient>()
 function createClient(
   options: Pick<
     StdioMcpClientOptions,
-    "maxConcurrentServerRequests" | "requestTimeoutMs" | "serverRequestHandler" | "shutdownGraceMs"
+    "maxConcurrentServerRequests" | "requestTimeoutMs" | "serverRequestHandler" | "shutdownGraceMs" | "spawn"
   > & { fixtureArgs?: readonly string[] } = {},
 ) {
   const { fixtureArgs = [], ...clientOptions } = options
@@ -77,6 +78,16 @@ describe("StdioMcpClient", () => {
     const traceFile = path.join(traceDirectory, "json-rpc.log")
     const client = createClient({
       fixtureArgs: ["--generation-recovery", `--json-rpc-trace-file=${traceFile}`],
+      spawn: ((command, args, options) => {
+        const child = spawn(command, args ?? [], options ?? {}) as ChildProcessWithoutNullStreams
+        child.stdout.on("data", (chunk: Buffer | string) => {
+          fsSync.appendFileSync(
+            traceFile,
+            `parent-stdout ${Buffer.isBuffer(chunk) ? chunk.toString("base64") : Buffer.from(chunk).toString("base64")}\n`,
+          )
+        })
+        return child
+      }) as typeof spawn,
     })
     try {
       expect(await client.generationRecoveryCapability()).toEqual({
