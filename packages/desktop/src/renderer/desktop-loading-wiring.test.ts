@@ -50,6 +50,8 @@ describe("Desktop Project startup wiring", () => {
     expect(packagedSmokeSource).not.toContain("secure-vault-unavailable")
     expect(packagedSmokeSource).toContain("showed first-run onboarding despite having a seeded Project")
     expect(packagedSmokeSource).toContain("delete environment.CONVAX_COLLABORATION_CONTROL_RUNTIME")
+    expect(packagedSmokeSource).toContain('waitForStableRead')
+    expect(packagedSmokeSource).toContain('"a stable packaged Marketplace snapshot"')
     expect(packagedSmokeSource).not.toContain("the packaged Home or Canvas")
     expect(packagedSmokeSource).not.toContain("the seeded Project entry")
   })
