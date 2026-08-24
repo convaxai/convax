@@ -119,10 +119,10 @@ jobs:
       - name: Package and verify final Windows executable
         if: runner.os == 'Windows'
         shell: pwsh
-        env:
-          CONVAX_PACKAGED_PROVENANCE_DENYLIST_B64: ${{ vars.PACKAGED_PROVENANCE_DENYLIST_B64 }}
         run: |
-          if ([string]::IsNullOrWhiteSpace($env:CONVAX_PACKAGED_PROVENANCE_DENYLIST_B64)) { throw "PACKAGED_PROVENANCE_DENYLIST_B64 is required" }
+          $markers = @($env:GITHUB_WORKSPACE, $env:RUNNER_TEMP) | Sort-Object -Unique
+          $markersJson = ConvertTo-Json -InputObject $markers -Compress
+          $env:CONVAX_PACKAGED_PROVENANCE_DENYLIST_B64 = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($markersJson))
           bun --cwd packages/desktop package:dir
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           bun packages/desktop/scripts/desktop-packaged-provenance.ts packages/desktop/dist/win-unpacked
