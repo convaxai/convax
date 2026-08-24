@@ -18,6 +18,9 @@ const generationTaskId = process.argv
   .find((argument) => argument.startsWith("--generation-task-id="))
   ?.slice("--generation-task-id=".length)
 const generationRecovery = process.argv.includes("--generation-recovery")
+const jsonRpcTraceFile = process.argv
+  .find((argument) => argument.startsWith("--json-rpc-trace-file="))
+  ?.slice("--json-rpc-trace-file=".length)
 const pauseStdinAfterToolsList = process.argv.includes("--pause-stdin-after-tools-list")
 const forkDescendantFile = process.argv
   .find((argument) => argument.startsWith("--fork-descendant="))
@@ -47,11 +50,8 @@ if (ignoreSigterm) {
 }
 
 function send(value: unknown) {
-  // This executable is a deterministic test sidecar, not the production
-  // transport. Write each complete JSON-RPC line directly so Bun's Windows
-  // stdout stream buffering cannot retain a later response after an earlier
-  // response has already reached the client.
-  fs.writeSync(process.stdout.fd, `${JSON.stringify(value)}\n`)
+  if (jsonRpcTraceFile) fs.appendFileSync(jsonRpcTraceFile, `send ${JSON.stringify(value)}\n`)
+  process.stdout.write(`${JSON.stringify(value)}\n`)
 }
 
 function requestHost(method: string, params: unknown) {
@@ -228,7 +228,11 @@ process.stdin.on("data", (chunk: string) => {
     if (newline < 0) return
     const line = buffer.slice(0, newline).trim()
     buffer = buffer.slice(newline + 1)
-    if (line) void handle(JSON.parse(line) as JsonRpcRequest)
+    if (line) {
+      const request = JSON.parse(line) as JsonRpcRequest
+      if (jsonRpcTraceFile) fs.appendFileSync(jsonRpcTraceFile, `receive ${JSON.stringify(request)}\n`)
+      void handle(request)
+    }
   }
 })
 import { spawn } from "node:child_process"

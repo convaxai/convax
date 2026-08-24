@@ -73,31 +73,52 @@ describe("StdioMcpClient", () => {
   })
 
   test("negotiates the durable LRO, sends exact operation metadata, and calls fixed methods", async () => {
-    const client = createClient({ fixtureArgs: ["--generation-recovery"] })
-    expect(await client.generationRecoveryCapability()).toEqual({
-      binding: "fixture-binding",
-      mode: "long-running-operation",
-      schema: "convax.generation-lro/1",
+    const traceDirectory = await fs.mkdtemp(path.join(os.tmpdir(), "convax-mcp-lro-"))
+    const traceFile = path.join(traceDirectory, "json-rpc.log")
+    const client = createClient({
+      fixtureArgs: ["--generation-recovery", `--json-rpc-trace-file=${traceFile}`],
     })
-    const result = await client.callTool("echo", { prompt: "hello" }, undefined, undefined, false, {
-      operationId: "operation-one",
-      recovery: "required",
-      requestDigest: "a".repeat(64),
-    })
-    expect(result.structuredContent?.requestMeta).toEqual({
-      convaxGeneration: {
+    try {
+      expect(await client.generationRecoveryCapability()).toEqual({
+        binding: "fixture-binding",
+        mode: "long-running-operation",
+        schema: "convax.generation-lro/1",
+      })
+      const result = await client.callTool("echo", { prompt: "hello" }, undefined, undefined, false, {
         operationId: "operation-one",
         recovery: "required",
         requestDigest: "a".repeat(64),
-        schema: "convax.generation-operation/1",
-      },
-    })
-    await expect(
-      client.callGenerationRecovery(generationLroMethods.get, {
-        operationId: "operation-one",
-        requestDigest: "a".repeat(64),
-      }),
-    ).resolves.toMatchObject({ status: "running", taskId: "fixture_task" })
+      })
+      expect(result.structuredContent?.requestMeta).toEqual({
+        convaxGeneration: {
+          operationId: "operation-one",
+          recovery: "required",
+          requestDigest: "a".repeat(64),
+          schema: "convax.generation-operation/1",
+        },
+      })
+      const controller = new AbortController()
+      const diagnosticTimeout = setTimeout(() => controller.abort("generation recovery diagnostic timeout"), 2_000)
+      try {
+        await expect(
+          client.callGenerationRecovery(
+            generationLroMethods.get,
+            {
+              operationId: "operation-one",
+              requestDigest: "a".repeat(64),
+            },
+            controller.signal,
+          ),
+        ).resolves.toMatchObject({ status: "running", taskId: "fixture_task" })
+      } catch (error) {
+        const trace = await fs.readFile(traceFile, "utf8").catch(() => "trace unavailable")
+        throw new Error(`Generation recovery JSON-RPC trace:\n${trace}`, { cause: error })
+      } finally {
+        clearTimeout(diagnosticTimeout)
+      }
+    } finally {
+      await fs.rm(traceDirectory, { force: true, recursive: true })
+    }
   })
 
   test.each([
