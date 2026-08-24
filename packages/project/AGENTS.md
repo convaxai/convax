@@ -91,6 +91,10 @@ This package owns the durable Project aggregate and native Project adapters.
   exact reference, storage class, and optional materialized path. Desktop must
   delegate that query to the live ProjectIndex owner session and must not infer
   managed-vs-project-file identity by subtracting the file materialization plan.
+  Project resolves ordinary reachable paths through one bulk path-claim index and
+  reserves complete counterfactual location evidence for exceptional conflict,
+  orphan, cycle, or missing states. A current-resource read must not construct that
+  evidence for managed blobs or ordinary rooted winners.
   Project Canvas hydration may attach a concrete Project reference transiently, but
   must restore canonical Canvas metadata before returning. External-tool staging uses
   the same Project-owned exact-proof resolver and never infers a path or managed-blob

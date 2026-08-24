@@ -26,7 +26,6 @@ import {
   projectIndexIntentDigest,
   projectIndexIntentDependencies,
   projectIndexSnapshotFromValidatedOwnerState,
-  projectEntryLocationProjection,
   projectProjectIndexSnapshot,
   type ProjectIndexResourceReference,
   type ProjectIndexSnapshot,
@@ -42,6 +41,10 @@ import {
   type ProjectCanvasRouteCommandResult,
   type ProjectIndexCanvasApplicationPort,
 } from "./application"
+import {
+  createReachableOrdinaryPathIndex,
+  projectEntryMaterializedPath,
+} from "./project-entry-materialization"
 
 export interface ProjectIndexDocumentSessionPort {
   readonly scope: DocumentScope & { readonly docKind: "project-index" }
@@ -154,17 +157,13 @@ export class ProjectIndexCanvasApplication implements
     this.requireProject(input.projectId)
     return this.options.session.query((state) => {
       const snapshot = requireProjectIndexSnapshot(state)
+      const ordinaryPaths = createReachableOrdinaryPathIndex(snapshot)
       return Object.freeze(projectIndexCurrentBlobReferencesFromValidatedOwnerState(state).map((reference) => {
         const entry = snapshot.entries.get(reference.entryFileId)
         if (!entry || entry.kind !== "file" || entry.storageClass === null) {
           throw new Error("Current Project resource has no live file owner")
         }
-        const location = projectEntryLocationProjection(snapshot, reference.entryFileId)
-        const materializedPath =
-          entry.storageClass === "project-file" &&
-          (location.state === "live-linked" || location.state === "conflict-path")
-            ? location.portablePath
-            : null
+        const materializedPath = projectEntryMaterializedPath(snapshot, entry, ordinaryPaths)
         return Object.freeze({ materializedPath, reference, storageClass: entry.storageClass })
       }))
     })

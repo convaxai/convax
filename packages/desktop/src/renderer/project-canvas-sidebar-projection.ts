@@ -32,6 +32,19 @@ export function projectCanvasSidebarNodes(document: CanvasDocument): ProjectCanv
   return projectCanvasOutline(document).map(projectEntry)
 }
 
+export async function loadProjectCanvasSidebarNodes(input: Readonly<{
+  /** null means this is the active Canvas and its authoritative session is still mounting. */
+  activeDocument: CanvasDocument | null | undefined
+  canvasId: string
+  loadDocument: (input: { canvasId: string; scopeId: string }) => Promise<CanvasDocument>
+  projectId: string
+}>): Promise<ProjectCanvasSidebarNode[]> {
+  if (input.activeDocument !== undefined) {
+    return input.activeDocument === null ? [] : projectCanvasSidebarNodes(input.activeDocument)
+  }
+  return projectCanvasSidebarNodes(await input.loadDocument({ canvasId: input.canvasId, scopeId: input.projectId }))
+}
+
 function projectCanvasSidebarNodePreview(node: CanvasDocument["nodes"][number]) {
   const resourceState = node.data.resourceState
   if (!resourceState || typeof resourceState !== "object") return {}

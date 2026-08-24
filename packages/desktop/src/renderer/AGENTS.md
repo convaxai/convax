@@ -161,6 +161,10 @@ or durable domain authority.
   Canvas session `ref` and lease id. It never broadens a known-node retry into an
   unrelated resource refresh or triggers a Main-to-Renderer scope query; Main still
   validates the trusted sender, exact live lease, and every target.
+- The active Canvas sidebar outline reuses the mounted authoritative session
+  projection and may remain empty while that session is opening. It must not race
+  the mount with the compatibility full-document `load`; that compatibility query
+  remains available for inactive Canvas outlines and explicit cross-Canvas search.
 - A Project sidebar may attach only a bounded renderer-safe thumbnail and intrinsic
   presentation hint to a drag. Desktop maps it through Canvas's host-neutral
   presentation port; the hint creates a ghost only and never enters a command,
