@@ -1,7 +1,6 @@
 import dns from "node:dns/promises"
 import type { ClientRequest, IncomingMessage } from "node:http"
 import https, { type RequestOptions } from "node:https"
-import { BlockList, isIP } from "node:net"
 
 export type MarketplaceFetchPurpose = "descriptor" | "registry" | "release" | "showcase"
 
@@ -35,8 +34,7 @@ export interface PinnedHttpsFetcherOptions {
   }
 }
 
-const blockedIpv4 = new BlockList()
-for (const [network, prefix] of [
+const blockedIpv4 = createBlockedSubnets(4, [
   ["0.0.0.0", 8],
   ["10.0.0.0", 8],
   ["100.64.0.0", 10],
@@ -52,11 +50,8 @@ for (const [network, prefix] of [
   ["203.0.113.0", 24],
   ["224.0.0.0", 4],
   ["240.0.0.0", 4],
-] as const) {
-  blockedIpv4.addSubnet(network, prefix, "ipv4")
-}
-const blockedIpv6 = new BlockList()
-for (const [network, prefix] of [
+] as const)
+const blockedIpv6 = createBlockedSubnets(6, [
   ["::", 128],
   ["::1", 128],
   ["::", 96],
@@ -71,15 +66,96 @@ for (const [network, prefix] of [
   ["fc00::", 7],
   ["fe80::", 10],
   ["ff00::", 8],
-] as const) {
-  blockedIpv6.addSubnet(network, prefix, "ipv6")
-}
+] as const)
 
 export function isPublicMarketplaceAddress(address: string, family: 4 | 6) {
-  if (isIP(address) !== family) return false
-  return family === 4
-    ? !blockedIpv4.check(address, "ipv4")
-    : !blockedIpv6.check(address, "ipv6")
+  const bytes = parseAddressBytes(address, family)
+  if (!bytes) return false
+  const blocked = family === 4 ? blockedIpv4 : blockedIpv6
+  return !blocked.some((subnet) => matchesSubnet(bytes, subnet))
+}
+
+type BlockedSubnet = Readonly<{ bytes: Uint8Array; prefix: number }>
+
+function createBlockedSubnets(
+  family: 4 | 6,
+  entries: readonly (readonly [network: string, prefix: number])[],
+): readonly BlockedSubnet[] {
+  return entries.map(([network, prefix]) => {
+    const bytes = parseAddressBytes(network, family)
+    if (!bytes) throw new TypeError("Marketplace blocked subnet is invalid")
+    return Object.freeze({ bytes, prefix })
+  })
+}
+
+function matchesSubnet(address: Uint8Array, subnet: BlockedSubnet): boolean {
+  const completeBytes = Math.floor(subnet.prefix / 8)
+  for (let index = 0; index < completeBytes; index += 1) {
+    if (address[index] !== subnet.bytes[index]) return false
+  }
+  const remainingBits = subnet.prefix % 8
+  if (remainingBits === 0) return true
+  const mask = (0xff << (8 - remainingBits)) & 0xff
+  return (address[completeBytes]! & mask) === (subnet.bytes[completeBytes]! & mask)
+}
+
+function parseAddressBytes(address: string, family: 4 | 6): Uint8Array | undefined {
+  return family === 4 ? parseIpv4Bytes(address) : parseIpv6Bytes(address)
+}
+
+function parseIpv4Bytes(address: string): Uint8Array | undefined {
+  const parts = address.split(".")
+  if (parts.length !== 4) return undefined
+  const bytes = new Uint8Array(4)
+  for (let index = 0; index < parts.length; index += 1) {
+    const part = parts[index]!
+    if (!/^(?:0|[1-9]\d{0,2})$/u.test(part)) return undefined
+    const value = Number(part)
+    if (value > 255) return undefined
+    bytes[index] = value
+  }
+  return bytes
+}
+
+function parseIpv6Bytes(address: string): Uint8Array | undefined {
+  if (address === "" || address.includes("%")) return undefined
+  let normalized = address.toLowerCase()
+  if (normalized.includes(".")) {
+    const separator = normalized.lastIndexOf(":")
+    if (separator < 0) return undefined
+    const suffix = parseIpv4Bytes(normalized.slice(separator + 1))
+    if (!suffix) return undefined
+    const high = ((suffix[0]! << 8) | suffix[1]!).toString(16)
+    const low = ((suffix[2]! << 8) | suffix[3]!).toString(16)
+    normalized = `${normalized.slice(0, separator)}:${high}:${low}`
+  }
+
+  const halves = normalized.split("::")
+  if (halves.length > 2) return undefined
+  const left = parseIpv6Groups(halves[0]!)
+  const right = halves.length === 2 ? parseIpv6Groups(halves[1]!) : []
+  if (!left || !right) return undefined
+  const omitted = 8 - left.length - right.length
+  if ((halves.length === 1 && omitted !== 0) || (halves.length === 2 && omitted < 1)) return undefined
+  const groups = [...left, ...Array.from({ length: omitted }, () => 0), ...right]
+  if (groups.length !== 8) return undefined
+  const bytes = new Uint8Array(16)
+  for (let index = 0; index < groups.length; index += 1) {
+    bytes[index * 2] = groups[index]! >>> 8
+    bytes[index * 2 + 1] = groups[index]! & 0xff
+  }
+  return bytes
+}
+
+function parseIpv6Groups(value: string): number[] | undefined {
+  if (value === "") return []
+  const groups = value.split(":")
+  const parsed: number[] = []
+  for (const group of groups) {
+    if (!/^[0-9a-f]{1,4}$/u.test(group)) return undefined
+    parsed.push(Number.parseInt(group, 16))
+  }
+  return parsed
 }
 
 function abortError(reason?: unknown) {
@@ -324,11 +400,9 @@ export class PinnedHttpsFetcher {
         const verifyPinnedAddress = () => {
           if (verified) return
           verified = true
-          const pinned = new BlockList()
-          pinned.addAddress(selected.address, selected.family === 4 ? "ipv4" : "ipv6")
           if (
             !socket.remoteAddress ||
-            !pinned.check(socket.remoteAddress, selected.family === 4 ? "ipv4" : "ipv6")
+            !sameAddress(socket.remoteAddress, selected.address, selected.family)
           ) {
             request.destroy(new Error("Marketplace TLS socket address did not match the pinned DNS answer"))
           } else {
@@ -360,4 +434,15 @@ export class PinnedHttpsFetcher {
     const validated = validatePurposeUrl(redirected.href, purpose, repository, true, options.declaredUrl)
     return this.#fetch(validated.url, purpose, repository, options, redirects + 1)
   }
+}
+
+function sameAddress(left: string, right: string, family: 4 | 6): boolean {
+  const leftBytes = parseAddressBytes(left, family)
+  const rightBytes = parseAddressBytes(right, family)
+  return Boolean(
+    leftBytes &&
+    rightBytes &&
+    leftBytes.byteLength === rightBytes.byteLength &&
+    leftBytes.every((byte, index) => byte === rightBytes[index]),
+  )
 }
