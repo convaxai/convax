@@ -9,6 +9,13 @@ export function normalizeDesktopTestPath(value: string): string {
   return value.replaceAll("\\", "/")
 }
 
+export function completedBunTestFailureCount(output: string): number | undefined {
+  const normalized = output.replace(/\u001B\[[0-?]*[ -/]*[@-~]/gu, "")
+  if (!/^Ran \d+ tests? across \d+ files?\./mu.test(normalized)) return undefined
+  const failures = /^\s*(\d+) fail\s*$/mu.exec(normalized)
+  return failures === null ? undefined : Number(failures[1])
+}
+
 export function parseDesktopTestShard(value: string | undefined): DesktopTestShard {
   if (value === undefined || value === "") return { index: 1, total: 1 }
 

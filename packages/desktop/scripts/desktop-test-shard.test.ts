@@ -2,12 +2,23 @@ import { describe, expect, test } from "bun:test"
 import { readFile } from "node:fs/promises"
 import path from "node:path"
 
-import { normalizeDesktopTestPath, parseDesktopTestShard, selectDesktopTestShard } from "./desktop-test-shard"
+import {
+  completedBunTestFailureCount,
+  normalizeDesktopTestPath,
+  parseDesktopTestShard,
+  selectDesktopTestShard,
+} from "./desktop-test-shard"
 
 describe("Desktop test sharding", () => {
   test("normalizes Windows test paths before isolated-file classification", () => {
     expect(normalizeDesktopTestPath("src\\main\\isolated.test.ts")).toBe("src/main/isolated.test.ts")
     expect(normalizeDesktopTestPath("src/main/ordinary.test.ts")).toBe("src/main/ordinary.test.ts")
+  })
+
+  test("recognizes only a complete Bun test summary and preserves its failure count", () => {
+    expect(completedBunTestFailureCount(" 10 pass\n 0 fail\nRan 10 tests across 2 files. [1.00s]\n")).toBe(0)
+    expect(completedBunTestFailureCount("\u001B[31m 1 fail\u001B[0m\nRan 3 tests across 1 file. [1.00s]\n")).toBe(1)
+    expect(completedBunTestFailureCount(" 10 pass\n 0 fail\n")).toBeUndefined()
   })
 
   test("runs the complete suite when no shard is configured", () => {
