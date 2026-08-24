@@ -1,4 +1,4 @@
-import { parseDesktopTestShard, selectDesktopTestShard } from "./desktop-test-shard"
+import { normalizeDesktopTestPath, parseDesktopTestShard, selectDesktopTestShard } from "./desktop-test-shard"
 
 const isolatedModuleMockTests = [
   "electron.vite.config.test.ts",
@@ -25,7 +25,8 @@ const isolatedSet = new Set<string>(isolatedModuleMockTests)
 const regularTests: string[] = []
 const testFiles = new Bun.Glob("**/*.test.{ts,tsx}")
 for await (const file of testFiles.scan({ cwd: import.meta.dir + "/..", onlyFiles: true })) {
-  if (!isolatedSet.has(file)) regularTests.push(file)
+  const normalizedFile = normalizeDesktopTestPath(file)
+  if (!isolatedSet.has(normalizedFile)) regularTests.push(normalizedFile)
 }
 regularTests.sort()
 

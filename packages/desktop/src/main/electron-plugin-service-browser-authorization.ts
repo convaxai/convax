@@ -159,6 +159,7 @@ export async function createElectronAuthorizationSession(
   const approvedCookieNames = new Set(request.cookieNames)
   let allowClose = false
   let closeCheckPending = false
+  let closeCookiePollTimer: ReturnType<typeof setTimeout> | undefined
   let confirmationListenersAttached = false
   let loadingWindowMayClose = false
   let authorizationWindowRevealed = false
@@ -182,15 +183,22 @@ export async function createElectronAuthorizationSession(
     window.removeListener("close", onWindowClose)
     window.removeListener("closed", onWindowClosed)
   }
+  const clearCloseCookiePoll = () => {
+    if (closeCookiePollTimer !== undefined) clearTimeout(closeCookiePollTimer)
+    closeCookiePollTimer = undefined
+    closeCheckPending = false
+  }
   const settleConfirmed = () => {
     if (settled) return
     settled = true
+    clearCloseCookiePoll()
     removeConfirmationListeners()
     resolveConfirmation()
   }
   const settleRejected = (error: Error) => {
     if (settled) return
     settled = true
+    clearCloseCookiePoll()
     removeConfirmationListeners()
     rejectConfirmation(error)
   }
@@ -233,7 +241,11 @@ export async function createElectronAuthorizationSession(
           }
           const remaining = deadline - Date.now()
           if (remaining > 0) {
-            setTimeout(inspect, Math.min(closedWindowCookiePollIntervalMs, remaining)).unref?.()
+            closeCookiePollTimer = setTimeout(() => {
+              closeCookiePollTimer = undefined
+              inspect()
+            }, Math.min(closedWindowCookiePollIntervalMs, remaining))
+            closeCookiePollTimer.unref?.()
             return
           }
           closeCheckPending = false
@@ -382,6 +394,7 @@ export async function createElectronAuthorizationSession(
       // destroy() emits `closed`, so programmatic cleanup cannot win a race with
       // the actual outcome.
       settled = true
+      clearCloseCookiePoll()
       removeConfirmationListeners()
       for (const childWindow of childWindows) {
         if (!childWindow.isDestroyed()) childWindow.destroy()

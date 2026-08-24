@@ -5,6 +5,10 @@ export type DesktopTestShard = Readonly<{
 
 const maximumShardCount = 16
 
+export function normalizeDesktopTestPath(value: string): string {
+  return value.replaceAll("\\", "/")
+}
+
 export function parseDesktopTestShard(value: string | undefined): DesktopTestShard {
   if (value === undefined || value === "") return { index: 1, total: 1 }
 
