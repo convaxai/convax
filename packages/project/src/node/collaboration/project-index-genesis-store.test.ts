@@ -5,11 +5,11 @@ import path from "node:path"
 import {
   CURRENT_PROTOCOL_IDENTITIES,
   causalFrontierDigest,
-  canonicalStateDigest,
   encodeBase64url,
   encodeFullUpdate,
   encodeRestrictedJcs,
   encodeStateVector,
+  installCurrentProtocolAuthority,
   ownerCanonicalizerDescriptorDigest,
   parseActorId,
   parseDigest,
@@ -29,7 +29,7 @@ import {
   PROJECT_INDEX_PROTOCOL_SCHEMA_ARTIFACT_DIGEST,
   createProjectIndexReconstructionYDoc,
   createProjectIndexYDoc,
-  encodeProjectCanonicalState,
+  projectIndexCanonicalStateCommitmentDigest,
   projectIndexOwnerCanonicalizerDescriptor,
   validateProjectIndexYDoc,
   type ProjectEntryRecord,
@@ -213,13 +213,13 @@ function genesisDocument(epoch = projectEpoch) {
     protocolDigest: authority.protocolDigest,
     schemaDigest: authority.schemaDigest,
     uriProtocolDigest: authority.uriProtocolDigest,
+    migrationImportBaseProofDigest: null,
   }, rootEntry)
 }
 
 function checkpointFor(candidate: Y.Doc, candidateScope: DocumentScope): ReplicaCheckpoint {
   const fullUpdate = encodeFullUpdate(candidate)
   const stateVector = encodeStateVector(candidate)
-  const canonical = encodeProjectCanonicalState(candidate)
   const frontier = { format: "convax.causal-frontier" as const, heads: [] }
   const actorHeads = { format: "convax.replica-actor-head-set" as const, scope: candidateScope, heads: [] }
   const core = {
@@ -235,7 +235,10 @@ function checkpointFor(candidate: Y.Doc, candidateScope: DocumentScope): Replica
     computedFrontierDigest: causalFrontierDigest(frontier),
     actorHeadBoundaryDigest: replicaActorHeadSetDigest(actorHeads),
     stateVectorDigest: stateVectorDigest(stateVector),
-    canonicalStateDigest: canonicalStateDigest(authority.schemaDigest, canonical),
+    canonicalStateDigest: projectIndexCanonicalStateCommitmentDigest(
+      candidate,
+      installCurrentProtocolAuthority(),
+    ),
     fullUpdateDigest: yjsUpdateDigest(fullUpdate),
     fullUpdateByteLength: String(fullUpdate.byteLength) as never,
     protocolDigest: authority.protocolDigest,

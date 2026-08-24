@@ -182,6 +182,15 @@ export function parseValidationArtifactSet(value: unknown): ValidationArtifactSe
 }
 
 export function parseCausalEditCore(value: unknown): CausalEditCore {
+  return parseCausalEditCoreForProtocol(value, CURRENT_PROTOCOL_IDENTITIES.protocolDigest)
+}
+
+/**
+ * Internal codec seam for the sealed immediate-predecessor migrator. It is not
+ * exported from the package root; normal runtime callers always use
+ * `parseCausalEditCore`, which remains pinned to the one current protocol.
+ */
+export function parseCausalEditCoreForProtocol(value: unknown, expectedProtocolDigest: string): CausalEditCore {
   assertExactKeys(value, CORE_KEYS, "CausalEditCore")
   if (value.format !== "convax.causal-edit-core") failFrame("CausalEditCore format is invalid")
   const actorSequence = parseUint64(value.actorSequence)
@@ -190,7 +199,7 @@ export function parseCausalEditCore(value: unknown): CausalEditCore {
   assertBoundedNfcString(value.intentKind, 1, 128, "Causal intentKind")
   if (!/^[\x20-\x7e]+$/u.test(value.intentKind)) failFrame("Causal intentKind must be ASCII")
   const protocolDigest = parseDigest(value.protocolDigest)
-  if (protocolDigest !== CURRENT_PROTOCOL_IDENTITIES.protocolDigest) failFrame("Causal edit protocol digest is not the current protocol digest")
+  if (protocolDigest !== parseDigest(expectedProtocolDigest)) failFrame("Causal edit protocol digest is not the expected protocol digest")
   return Object.freeze({
     format: value.format,
     scope: parseDocumentScope(value.scope),
@@ -224,11 +233,16 @@ export function parseCausalEditCore(value: unknown): CausalEditCore {
 }
 
 export function parseCausalEditFrameHeader(value: unknown): CausalEditFrameHeader {
+  return parseCausalEditFrameHeaderForProtocol(value, CURRENT_PROTOCOL_IDENTITIES.protocolDigest)
+}
+
+/** @internal Immediate-predecessor migration only; see `parseCausalEditCoreForProtocol`. */
+export function parseCausalEditFrameHeaderForProtocol(value: unknown, expectedProtocolDigest: string): CausalEditFrameHeader {
   assertExactKeys(value, ["format", "core", "coreDigest", "replicaSignature"], "CausalEditFrameHeader")
   if (value.format !== "convax.causal-edit-frame") failFrame("Causal edit frame header format is invalid")
   return Object.freeze({
     format: value.format,
-    core: parseCausalEditCore(value.core),
+    core: parseCausalEditCoreForProtocol(value.core, expectedProtocolDigest),
     coreDigest: parseDigest(value.coreDigest),
     replicaSignature: parseSignature(value.replicaSignature),
   })

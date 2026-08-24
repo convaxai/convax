@@ -10,13 +10,20 @@ import {
 } from "react"
 import { createRoot, type Root } from "react-dom/client"
 import type { Connection, NodeProps } from "@xyflow/react"
-import type { CanvasRendererCollaborationClient, CanvasRendererCommand } from "../collaboration"
+import type {
+  CanvasRendererCollaborationClient,
+  CanvasRendererCommand,
+  CanvasRendererProjectionChange,
+  CanvasRendererResourceHierarchyKey,
+} from "../collaboration"
 import { CANVAS_NODE_INPUT_HANDLE_ID, CANVAS_NODE_OUTPUT_HANDLE_ID } from "../connections"
-import type { CanvasDocument, CanvasNode } from "../types"
+import type { CanvasDocument, CanvasEdge, CanvasNode } from "../types"
 import type { CanvasResourceMutationRequest } from "../services"
 import type { CanvasEditorHandle } from "./canvas-editor"
 
 let renderedNodes: CanvasNode[] = []
+let renderedEdges: CanvasEdge[] = []
+let incrementallyAddedNodes: CanvasNode[][] = []
 let renderNodes = true
 let connect: ((connection: Connection) => void) | undefined
 let connectStart: ((event: MouseEvent, params: { handleId: string | null; nodeId: string | null }) => void) | undefined
@@ -141,7 +148,7 @@ void mock.module("@xyflow/react", () => ({
       {children}
     </button>
   ),
-  MiniMap: () => null,
+  MiniMap: () => <div data-canvas-test-minimap="" />,
   NodeResizer: () => null,
   NodeToolbar: (props: {
     children?: ReactNode
@@ -164,6 +171,7 @@ void mock.module("@xyflow/react", () => ({
   Position: { Bottom: "bottom", Left: "left", Right: "right", Top: "top" },
   ReactFlow: (props: {
     children?: ReactNode
+    edges?: CanvasEdge[]
     nodeTypes?: Record<string, ComponentType<NodeProps<CanvasNode>>>
     nodes?: CanvasNode[]
     onConnect?: (connection: Connection) => void
@@ -174,6 +182,7 @@ void mock.module("@xyflow/react", () => ({
     onPaneContextMenu?: (event: { clientX: number; clientY: number }) => void
   }) => {
     renderedNodes = props.nodes ?? []
+    renderedEdges = props.edges ?? []
     connect = props.onConnect
     connectStart = props.onConnectStart
     connectEnd = props.onConnectEnd
@@ -238,6 +247,10 @@ void mock.module("@xyflow/react", () => ({
     }
   },
   useReactFlow: () => ({
+    addEdges: () => undefined,
+    addNodes: (nodes: CanvasNode[] | CanvasNode) => {
+      incrementallyAddedNodes.push(Array.isArray(nodes) ? nodes : [nodes])
+    },
     fitView: async () => undefined,
     getNode: (id: string) => renderedNodes.find((node) => node.id === id),
     getNodes: () => renderedNodes,
@@ -263,7 +276,7 @@ const [
     canvasAuthorityMatchesOptimisticResourceBounds,
     isCanvasAuthoritativeResourceReadyForOptimisticHandoff,
   },
-  { BuiltinCanvasNode, CanvasNodeChrome },
+  { BuiltinCanvasNode, CanvasNodeChrome, isCanvasTextResourceEditable },
   {
     createAgentNode,
     createCanvasDocument,
@@ -277,6 +290,9 @@ const [
   { createCanvasServices },
   { createCanvasViewRegistry },
   { CANVAS_MOTION_DURATION, CANVAS_NODE_ENTRY_FINISH_GRACE },
+  { canvasCanonicalResourceIdentity },
+  { CANVAS_RENDERER_VIEWPORT_MAX_EDGES, CANVAS_RENDERER_VIEWPORT_MAX_NODES, CanvasRendererViewportIndex },
+  { canvasPlacementWorkCounts },
 ] = await Promise.all([
   import("./canvas-editor"),
   import("./builtin-node"),
@@ -285,6 +301,9 @@ const [
   import("../services"),
   import("../view"),
   import("../motion"),
+  import("../resource-runtime-projection"),
+  import("../collaboration/renderer-viewport-index"),
+  import("../resource-placement"),
 ])
 
 async function waitForAnimationFrames(count: number) {
@@ -301,7 +320,10 @@ class NodeEntryCanvasSession implements CanvasRendererCollaborationClient {
   readonly authority = "project-collaboration-application" as const
   readonly undoModel = "project-yjs-semantic-history" as const
   private readonly listeners = new Set<() => void>()
+  private readonly projectionChangeListeners = new Set<(change: CanvasRendererProjectionChange) => void>()
+  private readonly incrementalNodes = new Map<string, CanvasNode>()
   private entityRevision = 0
+  projectionReads = 0
 
   constructor(private projection: CanvasDocument) {}
 
@@ -316,7 +338,17 @@ class NodeEntryCanvasSession implements CanvasRendererCollaborationClient {
   async flush() {}
 
   getProjection() {
+    this.projectionReads += 1
     return this.projection
+  }
+
+  publishProjectionChange(change: CanvasRendererProjectionChange) {
+    if (change.kind === "patch") {
+      for (const node of change.changes.nodes) this.incrementalNodes.set(node.id, node)
+    } else {
+      this.incrementalNodes.clear()
+    }
+    for (const listener of this.projectionChangeListeners) listener(change)
   }
 
   publish(projection: CanvasDocument) {
@@ -332,9 +364,13 @@ class NodeEntryCanvasSession implements CanvasRendererCollaborationClient {
   async redo() {}
 
   resolveNodeEntity(nodeId: string) {
-    return this.projection.nodes.some((node) => node.id === nodeId)
+    return this.incrementalNodes.has(nodeId) || this.projection.nodes.some((node) => node.id === nodeId)
       ? { kind: "node" as const, id: nodeId, incarnation: `incarnation-${nodeId}-${this.entityRevision}` }
       : undefined
+  }
+
+  resolveNode(nodeId: string) {
+    return this.incrementalNodes.get(nodeId) ?? this.projection.nodes.find((node) => node.id === nodeId)
   }
 
   async submit(_command: CanvasRendererCommand) {}
@@ -344,7 +380,54 @@ class NodeEntryCanvasSession implements CanvasRendererCollaborationClient {
     return () => this.listeners.delete(listener)
   }
 
+  subscribeProjectionChanges(listener: (change: CanvasRendererProjectionChange) => void) {
+    this.projectionChangeListeners.add(listener)
+    return () => this.projectionChangeListeners.delete(listener)
+  }
+
   async undo() {}
+}
+
+class BoundedNodeEntryCanvasSession extends NodeEntryCanvasSession {
+  readonly #nodes = new Map<string, CanvasNode>()
+  readonly #viewportIndex: InstanceType<typeof CanvasRendererViewportIndex>
+
+  constructor(projection: CanvasDocument) {
+    super(projection)
+    for (const node of projection.nodes) this.#nodes.set(node.id, node)
+    this.#viewportIndex = new CanvasRendererViewportIndex(projection)
+  }
+
+  override publishProjectionChange(change: CanvasRendererProjectionChange) {
+    if (change.kind === "patch") {
+      this.#viewportIndex.append(change.changes)
+      for (const node of change.changes.nodes) this.#nodes.set(node.id, node)
+    }
+    super.publishProjectionChange(change)
+  }
+
+  queryViewport(input: Parameters<InstanceType<typeof CanvasRendererViewportIndex>["query"]>[0]) {
+    return this.#viewportIndex.query(input)
+  }
+
+  override resolveNode(nodeId: string) {
+    return this.#nodes.get(nodeId)
+  }
+
+  override resolveNodeEntity(nodeId: string) {
+    return this.#nodes.has(nodeId)
+      ? { kind: "node" as const, id: nodeId, incarnation: `incarnation-${nodeId}-0` }
+      : undefined
+  }
+}
+
+class UnavailableHierarchyCanvasSession extends NodeEntryCanvasSession {
+  hierarchyQueries = 0
+
+  queryResourceHierarchy(_key: CanvasRendererResourceHierarchyKey) {
+    this.hierarchyQueries += 1
+    return { status: "unavailable" as const }
+  }
 }
 
 function TestNode(props: NodeProps<CanvasNode>) {
@@ -477,6 +560,304 @@ function createNodeEntryServices(session: NodeEntryCanvasSession) {
   })
 }
 
+test("consumes certified projection changes without reading the full Renderer projection", async () => {
+  const restoreWindow = installTestWindow()
+  const editorRef = createRef<CanvasEditorHandle | null>()
+  const session = new NodeEntryCanvasSession(createCanvasDocument({ id: "incremental-presentation" }))
+  let root: Root | undefined
+  renderNodes = false
+  incrementallyAddedNodes = []
+  try {
+    const container = document.createElement("div")
+    document.body.append(container)
+    root = createRoot(container)
+    await act(async () => {
+      root?.render(editorElement(editorRef, createTestRegistry(), session, "incremental-scope"))
+      await waitForAnimationFrames(1)
+    })
+    const fullReadsBefore = session.projectionReads
+    const appended = createTextNode({ id: "certified-text", position: { x: 24, y: 48 } })
+    await act(async () => {
+      session.publishProjectionChange({
+        kind: "patch",
+        identity: {} as never,
+        receipt: {} as never,
+        changes: {
+          nodes: [appended],
+          edges: [],
+          nodeEntities: [],
+          edgeEntities: [],
+        },
+      })
+    })
+    expect(session.projectionReads).toBe(fullReadsBefore)
+    expect(incrementallyAddedNodes).toHaveLength(1)
+    expect(incrementallyAddedNodes[0]!.map((node) => node.id)).toEqual(["certified-text"])
+  } finally {
+    renderNodes = true
+    if (root) await act(async () => root?.unmount())
+    await restoreWindow()
+  }
+})
+
+test("keeps a 10k Canvas bounded while a portal ghost hands off to an editable certified Text node", async () => {
+  const restoreWindow = installTestWindow()
+  const editorRef = createRef<CanvasEditorHandle | null>()
+  const initialNodes = Array.from({ length: 10_000 }, (_, index) =>
+    createTextNode({
+      id: `historical-${index}`,
+      metadata: {},
+      position: { x: index * 400, y: 0 },
+      resourceState: { status: "ready", text: String(index) },
+    }),
+  )
+  const session = new BoundedNodeEntryCanvasSession(
+    createCanvasDocument({ id: "bounded-editable-text", nodes: initialNodes }),
+  )
+  let requestedAnchor: { x: number; y: number } | undefined
+  let settleMutation: ((result: {
+    authoritativeProjectionDelivered: true
+    createdNodeIds: readonly string[]
+    preparedResources: readonly {
+      entity: { id: string; incarnation: string; kind: "node" }
+      nodeId: string
+      resourceIdentity: string
+      state: { contentRevision: string; editableText: true; status: "ready"; text: string }
+    }[]
+    warnings: readonly string[]
+  }) => void) | undefined
+  let root: Root | undefined
+  renderNodes = true
+  incrementallyAddedNodes = []
+  try {
+    const container = document.createElement("div")
+    document.body.append(container)
+    root = createRoot(container)
+    await act(async () => {
+      root?.render(
+        <CanvasEditor
+          nodeRegistry={createTestRegistry()}
+          ref={editorRef}
+          services={createCanvasServices({
+            mutation: {
+              add: async (input) => {
+                requestedAnchor = input.anchor
+                return new Promise((resolve) => { settleMutation = resolve })
+              },
+            },
+          })}
+          session={session}
+          viewScopeId="bounded-editable-text"
+        />,
+      )
+      await waitForAnimationFrames(1)
+    })
+    expect(renderedNodes.length).toBeLessThanOrEqual(CANVAS_RENDERER_VIEWPORT_MAX_NODES)
+    const projectionReadsBefore = session.projectionReads
+    const placementBefore = canvasPlacementWorkCounts()
+
+    await act(async () => {
+      container.querySelector<HTMLButtonElement>('button[aria-label="Add node"]')?.click()
+      await Promise.resolve()
+    })
+    await act(async () => {
+      container.querySelector<HTMLButtonElement>('button[aria-label="Add Text"]')?.click()
+      await Promise.resolve()
+      await Promise.resolve()
+    })
+
+    expect(requestedAnchor).toBeDefined()
+    expect(container.querySelector('[data-canvas-optimistic-ghost="node"]')).not.toBeNull()
+    expect(renderedNodes.some((node) => node.id.startsWith("ghost-resource:"))).toBeFalse()
+    expect(renderedNodes.length).toBeLessThanOrEqual(CANVAS_RENDERER_VIEWPORT_MAX_NODES)
+    const placementAfterGhost = canvasPlacementWorkCounts()
+    expect(placementAfterGhost.optimisticFullNodeVisits - placementBefore.optimisticFullNodeVisits).toBe(0)
+    expect(incrementallyAddedNodes).toHaveLength(0)
+
+    const resource = {
+      format: "convax.canvas-resource-ref" as const,
+      uri:
+        `convax-project://project_0123456789abcdef0123456789abcdef/epochs/` +
+        `AQEBAQEBAQEBAQEBAQEBAQ/entries/pf_${"2".repeat(64)}` +
+        `?blob=sha256%3A${"c".repeat(64)}&path=Notes%2Fnew.md`,
+      mediaClass: "text" as const,
+      mime: "text/markdown",
+      byteLength: "12" as never,
+      contentDigest: "c".repeat(64),
+      ownerProofDigest: "d".repeat(64),
+    }
+    const appended = createTextNode({
+      id: "certified-editable-text",
+      metadata: { convaxResource: resource },
+      position: requestedAnchor!,
+      resourceState: { status: "stale" },
+    })
+    const entity = session.resolveNodeEntity(appended.id) ?? {
+      id: appended.id,
+      incarnation: `incarnation-${appended.id}-0`,
+      kind: "node" as const,
+    }
+    const resourceIdentity = canvasCanonicalResourceIdentity(appended)
+    if (!resourceIdentity) throw new Error("editable Text resource identity is unavailable")
+    const prepared = {
+      entity,
+      nodeId: appended.id,
+      resourceIdentity,
+      state: {
+        contentRevision: "a".repeat(64),
+        editableText: true as const,
+        status: "ready" as const,
+        text: "",
+      },
+    }
+    await act(async () => {
+      session.publishProjectionChange({
+        kind: "patch",
+        identity: {} as never,
+        receipt: {} as never,
+        changes: {
+          edges: [],
+          edgeEntities: [],
+          nodes: [appended],
+          nodeEntities: [{ entity, nodeId: appended.id }],
+        },
+        preparedResources: [prepared],
+      })
+      settleMutation?.({
+        authoritativeProjectionDelivered: true,
+        createdNodeIds: [appended.id],
+        preparedResources: [prepared],
+        warnings: [],
+      })
+      await Promise.resolve()
+      await Promise.resolve()
+    })
+    await act(async () => waitForAnimationFrames(3))
+
+    const authoritative = renderedNodes.find((node) => node.id === appended.id)
+    expect(authoritative).toBeDefined()
+    expect(authoritative?.selected).toBeTrue()
+    expect(isCanvasTextResourceEditable(authoritative?.data.resourceState)).toBeTrue()
+    expect(renderedNodes.length).toBeLessThanOrEqual(CANVAS_RENDERER_VIEWPORT_MAX_NODES)
+    expect(session.projectionReads).toBe(projectionReadsBefore)
+    expect(container.querySelector('[data-canvas-optimistic-ghost="node"]')).toBeNull()
+  } finally {
+    if (root) await act(async () => root?.unmount())
+    await restoreWindow()
+  }
+})
+
+test("renders a pending connection as an O(k) viewport portal edge without entering React Flow arrays", async () => {
+  const restoreWindow = installTestWindow()
+  const source = createTextNode({
+    id: "bounded-connection-source",
+    position: { x: 24, y: 48 },
+    resourceState: { status: "ready", text: "source" },
+  })
+  const target = createTextNode({
+    id: "bounded-connection-target",
+    position: { x: 480, y: 48 },
+    resourceState: { status: "ready", text: "target" },
+  })
+  const historicalNodes = Array.from({ length: 9_998 }, (_, index) =>
+    createTextNode({
+      id: `bounded-connection-history-${index}`,
+      position: { x: 10_000 + index * 400, y: 0 },
+      resourceState: { status: "ready", text: String(index) },
+    }),
+  )
+  const session = new BoundedNodeEntryCanvasSession(
+    createCanvasDocument({ id: "bounded-connection", nodes: [source, target, ...historicalNodes] }),
+  )
+  let settleCommand: (() => void) | undefined
+  const executeCommand = mock(
+    (_command: CanvasRendererCommand) => new Promise<void>((resolve) => { settleCommand = resolve }),
+  )
+  let root: Root | undefined
+  renderedEdges = []
+  try {
+    const container = document.createElement("div")
+    document.body.append(container)
+    root = createRoot(container)
+    await act(async () => {
+      root?.render(
+        <CanvasEditor
+          executeCommand={executeCommand}
+          nodeRegistry={createTestRegistry()}
+          services={createCanvasServices()}
+          session={session}
+          viewScopeId="bounded-connection"
+        />,
+      )
+      await waitForAnimationFrames(1)
+    })
+    const projectionReadsBefore = session.projectionReads
+
+    await act(async () => {
+      connect?.({
+        source: source.id,
+        sourceHandle: CANVAS_NODE_OUTPUT_HANDLE_ID,
+        target: target.id,
+        targetHandle: CANVAS_NODE_INPUT_HANDLE_ID,
+      })
+      await Promise.resolve()
+    })
+
+    expect(executeCommand).toHaveBeenCalledWith({
+      type: "nodes.connect",
+      connection: { source: source.id, target: target.id },
+    })
+    const portalEdge = container.querySelector('g[data-canvas-optimistic-ghost="edge"]')
+    expect(portalEdge?.querySelector("path")).not.toBeNull()
+    expect(renderedEdges.some((edge) => edge.id.startsWith("ghost-edge:"))).toBeFalse()
+    expect(renderedEdges.length).toBeLessThanOrEqual(CANVAS_RENDERER_VIEWPORT_MAX_EDGES)
+    expect(renderedNodes.length).toBeLessThanOrEqual(CANVAS_RENDERER_VIEWPORT_MAX_NODES)
+    expect(session.projectionReads).toBe(projectionReadsBefore)
+
+    await act(async () => {
+      settleCommand?.()
+      await Promise.resolve()
+      await Promise.resolve()
+    })
+    expect(container.querySelector('[data-canvas-optimistic-ghost="edge"]')).toBeNull()
+    expect(session.projectionReads).toBe(projectionReadsBefore)
+  } finally {
+    if (root) await act(async () => root?.unmount())
+    await restoreWindow()
+  }
+})
+
+test("hides the MiniMap instead of presenting a truncated viewport as the whole Canvas", async () => {
+  const restoreWindow = installTestWindow()
+  const session = new BoundedNodeEntryCanvasSession(
+    createCanvasDocument({
+      id: "bounded-minimap",
+      nodes: Array.from({ length: CANVAS_RENDERER_VIEWPORT_MAX_NODES + 44 }, (_, index) =>
+        createTextNode({
+          id: `minimap-${index}`,
+          position: { x: 0, y: 0 },
+          resourceState: { status: "ready", text: String(index) },
+        })),
+    }),
+  )
+  let root: Root | undefined
+  try {
+    const container = document.createElement("div")
+    document.body.append(container)
+    root = createRoot(container)
+    await act(async () => {
+      root?.render(editorElement(createRef<CanvasEditorHandle | null>(), createTestRegistry(), session, "minimap-scope"))
+      await waitForAnimationFrames(1)
+    })
+
+    expect(renderedNodes).toHaveLength(CANVAS_RENDERER_VIEWPORT_MAX_NODES)
+    expect(container.querySelector("[data-canvas-test-minimap]")).toBeNull()
+  } finally {
+    if (root) await act(async () => root?.unmount())
+    await restoreWindow()
+  }
+})
+
 test("keeps an active ready text editor mounted while its request-only stale snapshot hydrates", async () => {
   const restoreWindow = installTestWindow()
   const editorRef = createRef<CanvasEditorHandle | null>()
@@ -505,11 +886,12 @@ test("keeps an active ready text editor mounted while its request-only stale sna
       hydrateStale({ document }) {
         return new Promise<CanvasDocument>((resolve) => hydrationRequests.push({ document, resolve }))
       },
-      markStale(document, shouldInvalidate) {
+      markStale(document, nodeIds) {
+        const targets = new Set(nodeIds ?? document.nodes.map((node) => node.id))
         return {
           ...document,
           nodes: document.nodes.map((node) =>
-            shouldInvalidate?.(node)
+            targets.has(node.id)
               ? { ...node, data: { ...node.data, resourceState: { status: "stale" as const } } }
               : node,
           ),
@@ -545,7 +927,7 @@ test("keeps an active ready text editor mounted while its request-only stale sna
 
     let refresh!: Promise<void>
     await act(async () => {
-      refresh = editorRef.current!.invalidateResources((node) => node.id === textNode.id)
+      refresh = editorRef.current!.invalidateResources([textNode.id])
       await Promise.resolve()
     })
 
@@ -584,6 +966,78 @@ test("keeps an active ready text editor mounted while its request-only stale sna
     expect(contenteditable?.isConnected).toBeTrue()
     expect(container.querySelector<HTMLElement>('[contenteditable="true"]')).toBe(contenteditable)
     expect(document.activeElement).toBe(contenteditable)
+    container.remove()
+  } finally {
+    if (root) await act(async () => root?.unmount())
+    await restoreWindow()
+  }
+})
+
+test("falls back from an unavailable path hierarchy to exactly one bulk hydration", async () => {
+  const restoreWindow = installTestWindow()
+  const editorRef = createRef<CanvasEditorHandle | null>()
+  let root: Root | undefined
+  renderNodes = true
+  const nodes = [
+    createTextNode({
+      id: "first-watched-note",
+      metadata: { resource: "Notes/first.md" },
+      position: { x: 20, y: 40 },
+      resourceState: { status: "ready", text: "first" },
+    }),
+    createTextNode({
+      id: "second-watched-note",
+      metadata: { resource: "Notes/second.md" },
+      position: { x: 420, y: 40 },
+      resourceState: { status: "ready", text: "second" },
+    }),
+  ]
+  const session = new UnavailableHierarchyCanvasSession(
+    createCanvasDocument({ id: "unavailable-hierarchy-fallback", nodes }),
+  )
+  const hydrateStale = mock(
+    async ({ document }: { document: CanvasDocument; nodeIds?: readonly string[]; signal: AbortSignal }) => ({
+      ...document,
+      nodes: document.nodes.map((node) => ({
+        ...node,
+        data: { ...node.data, resourceState: { status: "ready" as const, text: `hydrated-${node.id}` } },
+      })),
+    }),
+  )
+  const markStale = mock((document: CanvasDocument) => ({
+    ...document,
+    nodes: document.nodes.map((node) => ({
+      ...node,
+      data: { ...node.data, resourceState: { status: "stale" as const } },
+    })),
+  }))
+  const services = createCanvasServices({ hydration: { hydrateStale, markStale } })
+
+  try {
+    const container = document.createElement("div")
+    document.body.append(container)
+    root = createRoot(container)
+    await act(async () => {
+      root?.render(
+        <CanvasEditor
+          nodeRegistry={createCanvasNodeRegistry([{ component: BuiltinCanvasNode, label: "File", type: "file" }])}
+          ref={editorRef}
+          services={services}
+          session={session}
+          viewScopeId="unavailable-hierarchy-fallback"
+        />,
+      )
+      await waitForAnimationFrames(2)
+    })
+
+    await act(async () => {
+      await editorRef.current!.invalidateResourcesAtHierarchyKey({ segments: ["Notes", "first.md"] })
+    })
+
+    expect(session.hierarchyQueries).toBe(1)
+    expect(markStale).toHaveBeenCalledTimes(1)
+    expect(hydrateStale).toHaveBeenCalledTimes(1)
+    expect(hydrateStale.mock.calls[0]?.[0].nodeIds).toEqual(["first-watched-note", "second-watched-note"])
     container.remove()
   } finally {
     if (root) await act(async () => root?.unmount())
@@ -848,14 +1302,14 @@ test("rehydrates the canonical resource after a superseding local relink preview
       hydrateStale({ document }) {
         return new Promise<CanvasDocument>((resolve) => hydrationRequests.push({ document, resolve }))
       },
-      markStale(document, shouldInvalidate) {
-        const invalidated = document.nodes.filter((candidate) => shouldInvalidate?.(candidate) ?? true)
+      markStale(document, nodeIds) {
+        const targets = new Set(nodeIds ?? document.nodes.map((candidate) => candidate.id))
+        const invalidated = document.nodes.filter((candidate) => targets.has(candidate.id))
         invalidatedNodeIds.push(invalidated.map((candidate) => candidate.id))
-        if (!shouldInvalidate) return document
         return {
           ...document,
           nodes: document.nodes.map((candidate) =>
-            shouldInvalidate(candidate)
+            targets.has(candidate.id)
               ? { ...candidate, data: { ...candidate.data, resourceState: { status: "stale" as const } } }
               : candidate,
           ),
@@ -1050,13 +1504,14 @@ test("retries only the relink target when a successful local preview blocked can
       hydrateStale({ document }) {
         return new Promise<CanvasDocument>((resolve) => hydrationRequests.push({ document, resolve }))
       },
-      markStale(document, shouldInvalidate) {
-        const invalidated = document.nodes.filter((candidate) => shouldInvalidate?.(candidate) ?? true)
+      markStale(document, nodeIds) {
+        const targets = new Set(nodeIds ?? document.nodes.map((candidate) => candidate.id))
+        const invalidated = document.nodes.filter((candidate) => targets.has(candidate.id))
         invalidatedNodeIds.push(invalidated.map((candidate) => candidate.id))
         return {
           ...document,
           nodes: document.nodes.map((candidate) =>
-            (shouldInvalidate?.(candidate) ?? true)
+            targets.has(candidate.id)
               ? { ...candidate, data: { ...candidate.data, resourceState: { status: "stale" as const } } }
               : candidate,
           ),
@@ -1198,6 +1653,202 @@ test("retries only the relink target when a successful local preview blocked can
     else Reflect.deleteProperty(URL, "createObjectURL")
     if (originalRevokeObjectUrl) Object.defineProperty(URL, "revokeObjectURL", originalRevokeObjectUrl)
     else Reflect.deleteProperty(URL, "revokeObjectURL")
+    await restoreWindow()
+  }
+})
+
+test("adopts prepared runtime state without rehydrating canonical stale state and drops it on owner changes", async () => {
+  const restoreWindow = installTestWindow()
+  const editorRef = createRef<CanvasEditorHandle | null>()
+  let root: Root | undefined
+  renderNodes = true
+  const session = new NodeEntryCanvasSession(createCanvasDocument({ id: "prepared-runtime" }))
+  const hydrationRequests: Array<{
+    document: CanvasDocument
+    resolve(document: CanvasDocument): void
+  }> = []
+  const hydrateStale = mock(
+    ({ document: stale }: { document: CanvasDocument; nodeIds?: readonly string[]; signal: AbortSignal }) =>
+      new Promise<CanvasDocument>((resolve) => hydrationRequests.push({ document: stale, resolve })),
+  )
+  const canonicalResource = {
+    format: "convax.canvas-resource-ref" as const,
+    uri:
+      `convax-project://project_0123456789abcdef0123456789abcdef/epochs/` +
+      `AQEBAQEBAQEBAQEBAQEBAQ/entries/pf_${"2".repeat(64)}` +
+      `?blob=sha256%3A${"c".repeat(64)}&path=Generated%2Fprepared.png`,
+    mediaClass: "image" as const,
+    mime: "image/png",
+    byteLength: "12" as never,
+    contentDigest: "c".repeat(64),
+    ownerProofDigest: "d".repeat(64),
+  }
+  const mutation = mock(async (input: CanvasResourceMutationRequest) => {
+    const node = createMediaNode({
+      id: "prepared-image",
+      position: input.anchor,
+      resource: {
+        id: "prepared-image",
+        kind: "image",
+        metadata: { convaxResource: canonicalResource },
+        name: "prepared.png",
+        state: { status: "stale" },
+      },
+    })
+    session.publish({ ...session.getProjection(), nodes: [node] })
+    const entity = session.resolveNodeEntity(node.id)
+    const resourceIdentity = canvasCanonicalResourceIdentity(node)
+    if (!entity || !resourceIdentity) throw new Error("prepared resource fixture did not bind its owner")
+    return {
+      authoritativeProjectionDelivered: true,
+      createdNodeIds: [node.id],
+      preparedResources: [
+        {
+          entity,
+          nodeId: node.id,
+          resourceIdentity,
+          state: { status: "ready" as const, url: "convax-asset://prepared" },
+        },
+      ],
+      warnings: [],
+    }
+  })
+  const services = createCanvasServices({
+    hydration: {
+      hydrateStale,
+      markStale: (current) => ({
+        ...current,
+        nodes: current.nodes.map((node) => ({
+          ...node,
+          data: { ...node.data, resourceState: { status: "stale" as const } },
+        })),
+      }),
+    },
+    mutation: { add: mutation },
+  })
+
+  try {
+    const container = document.createElement("div")
+    document.body.append(container)
+    root = createRoot(container)
+    await act(async () => {
+      root?.render(
+        <CanvasEditor
+          nodeRegistry={createTestRegistry()}
+          ref={editorRef}
+          services={services}
+          session={session}
+          viewScopeId="project-one"
+        />,
+      )
+    })
+    const canvas = container.querySelector<HTMLElement>(".convax-canvas")!
+    const drop = new Event("drop", { bubbles: true })
+    Object.defineProperty(drop, "clientX", { value: 120 })
+    Object.defineProperty(drop, "clientY", { value: 160 })
+    Object.defineProperty(drop, "dataTransfer", {
+      value: {
+        files: [new File(["image"], "prepared.png", { type: "image/png" })],
+        getData: () => "",
+        types: ["Files"],
+      },
+    })
+    await act(async () => {
+      canvas.dispatchEvent(drop)
+      await Promise.resolve()
+      await Promise.resolve()
+    })
+
+    expect(mutation).toHaveBeenCalledTimes(1)
+    expect(renderedNodes[0]?.data.resourceState).toEqual({
+      status: "ready",
+      url: "convax-asset://prepared",
+    })
+    expect(hydrateStale).not.toHaveBeenCalled()
+
+    await act(async () => {
+      session.publish({
+        ...session.getProjection(),
+        nodes: session.getProjection().nodes.map((node) => ({
+          ...node,
+          data: {
+            ...node.data,
+            metadata: {
+              convaxResource: { ...canonicalResource, ownerProofDigest: "e".repeat(64) },
+            },
+            resourceState: { status: "stale" as const },
+          },
+        })),
+      })
+      await Promise.resolve()
+      await Promise.resolve()
+    })
+    expect(hydrationRequests).toHaveLength(1)
+    expect(renderedNodes[0]?.data.resourceState).toEqual({ status: "stale" })
+
+    await act(async () => {
+      const stale = hydrationRequests[0]!.document
+      hydrationRequests[0]!.resolve({
+        ...stale,
+        nodes: stale.nodes.map((node) => ({
+          ...node,
+          data: { ...node.data, resourceState: { status: "ready" as const, url: "convax-asset://remote" } },
+        })),
+      })
+      await Promise.resolve()
+      await Promise.resolve()
+    })
+    expect(renderedNodes[0]?.data.resourceState).toEqual({
+      status: "ready",
+      url: "convax-asset://remote",
+    })
+
+    await act(async () => {
+      session.reincarnateNodes()
+      session.publish({ ...session.getProjection() })
+      await Promise.resolve()
+      await Promise.resolve()
+    })
+    expect(renderedNodes[0]?.data.resourceState).toEqual({ status: "stale" })
+    expect(hydrationRequests).toHaveLength(2)
+
+    await act(async () => {
+      const stale = hydrationRequests[1]!.document
+      hydrationRequests[1]!.resolve({
+        ...stale,
+        nodes: stale.nodes.map((node) => ({
+          ...node,
+          data: {
+            ...node.data,
+            resourceState: { status: "ready" as const, url: "convax-asset://reincarnated" },
+          },
+        })),
+      })
+      await Promise.resolve()
+      await Promise.resolve()
+    })
+    expect(renderedNodes[0]?.data.resourceState).toEqual({
+      status: "ready",
+      url: "convax-asset://reincarnated",
+    })
+
+    await act(async () => {
+      root?.render(
+        <CanvasEditor
+          nodeRegistry={createTestRegistry()}
+          ref={editorRef}
+          services={services}
+          session={session}
+          viewScopeId="project-two"
+        />,
+      )
+      await Promise.resolve()
+      await Promise.resolve()
+    })
+    expect(renderedNodes[0]?.data.resourceState).toEqual({ status: "stale" })
+    expect(hydrationRequests).toHaveLength(3)
+  } finally {
+    if (root) await act(async () => root?.unmount())
     await restoreWindow()
   }
 })

@@ -2,7 +2,7 @@ import fs from "node:fs/promises"
 import os from "node:os"
 import path from "node:path"
 import {
-  canonicalStateDigest,
+  acceptedHeadMaterializedStateDigest,
   causalFrontierDigest,
   createWebCryptoEd25519Verifier,
   encodeFullUpdate,
@@ -22,6 +22,7 @@ import {
 import {
   PROJECT_INDEX_PROTOCOL_SCHEMA_ARTIFACT_DIGEST,
   createProjectIndexReconstructionYDoc,
+  projectIndexCanonicalStateCommitmentDigest,
   requiredProjectIndexBlobDigests,
 } from "@convax/project"
 import { ProjectIndexCanvasApplication } from "@convax/project/canvas"
@@ -119,9 +120,14 @@ export async function createVerifiedCanvasBenchmarkComposition(
       uriProtocolDigest: authority.protocolSchemaBundle.core.uriProtocolDigest,
     },
   })
-  const acceptedBase = initialHead(projectOwner, projectScope, candidate.document)
+  const acceptedBase = initialHead(
+    projectOwner,
+    projectScope,
+    candidate.document,
+    projectIndexCanonicalStateCommitmentDigest(candidate.document, authority),
+  )
   candidate.document.destroy()
-  const materializerCounter = createBenchmarkCountingMaterializerRegistry()
+  const materializerCounter = createBenchmarkCountingMaterializerRegistry(authority)
   const materializers = materializerCounter.registry
   const tracker = new BenchmarkBarrierTracker()
   const persistence = await openBenchmarkNodePersistence(root, acceptedBase, materializers, tracker, binding.actorId)
@@ -278,21 +284,24 @@ function initialHead(
   owner: ReturnType<typeof createMainProjectIndexOwnerRuntime>,
   scope: Parameters<typeof createEmptyProjectIndexGenesisCandidate>[0]["scope"],
   document: ReturnType<typeof createEmptyProjectIndexGenesisCandidate>["document"],
+  canonicalStateCommitmentDigest: AcceptedHeadView["canonicalStateDigest"],
 ): AcceptedHeadView {
   const frontier = Object.freeze({ format: "convax.causal-frontier" as const, heads: Object.freeze([]) })
   const validated = owner.protocolPort.validateBase(document)
   if (validated === "rejected") throw new Error("Canvas benchmark ProjectIndex genesis was rejected")
-  const canonicalBytes = owner.protocolPort.canonicalStateBytes(document)
-  if (canonicalBytes === "rejected")
-    throw new Error("Canvas benchmark ProjectIndex genesis canonicalization was rejected")
-  return Object.freeze({
+  const headDigest = ordinarySha256(new TextEncoder().encode("canvas-benchmark-project-index-genesis"))
+  const fullUpdate = encodeFullUpdate(document)
+  const stateVector = encodeStateVector(document)
+  const base = Object.freeze({
     scope,
-    headDigest: ordinarySha256(new TextEncoder().encode("canvas-benchmark-project-index-genesis")),
+    headDigest,
     frontier,
     frontierDigest: causalFrontierDigest(frontier),
     actorHeads: Object.freeze({ format: "convax.replica-actor-head-set" as const, scope, heads: Object.freeze([]) }),
-    fullUpdate: encodeFullUpdate(document),
-    stateVector: encodeStateVector(document),
-    canonicalStateDigest: canonicalStateDigest(owner.protocolPort.schemaDigest, canonicalBytes),
+    fullUpdate,
+    stateVector,
+    canonicalStateDigest: canonicalStateCommitmentDigest,
+    materializationDigest: headDigest,
   })
+  return Object.freeze({ ...base, materializationDigest: acceptedHeadMaterializedStateDigest(base) })
 }

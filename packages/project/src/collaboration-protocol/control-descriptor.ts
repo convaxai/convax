@@ -1,10 +1,12 @@
+import { CURRENT_PROTOCOL_IDENTITIES } from "@convax/collaboration"
+
 /**
  * Exact control-plane-owned constants from the current control artifact.
  *
- * The 127-domain registry, ProtocolSchemaBundle and digest implementation remain
- * kernel-owned and are deliberately not reconstructed in this package. The kernel
- * integration gate will compare these constants with its exact limits/channel
- * digests once the public v2 kernel export is available.
+ * The digest-domain registry, ProtocolSchemaBundle and digest implementation remain
+ * kernel-owned and are deliberately not reconstructed in this package. Project
+ * imports the one code-owned current identity tuple and keeps only its own exact
+ * control limits and channel policy here.
  */
 export const CONTROL_PROTOCOL_LIMITS = Object.freeze({
   format: "convax.protocol-limits",
@@ -127,9 +129,9 @@ export const PEER_CHANNEL_CONTRACT = Object.freeze({
 } as const)
 
 export const CONTROL_PROTOCOL_EXPECTED_IDENTITIES = Object.freeze({
-  protocolDigest: "8295f918e8f7b8297c080db03672fc410542280f639d9b40a8e324e560f07ae9",
-  limitsDigest: "88c018e5289f8b9a359f6ae171aed00885d5fa0913f4a1c36274b35e4cee12f7",
-  channelContractDigest: "0fa34e8d93f26e585e6d9baa0ecf0c09a38494d03247b91843e2bca0e93df242",
+  protocolDigest: CURRENT_PROTOCOL_IDENTITIES.protocolDigest,
+  limitsDigest: CURRENT_PROTOCOL_IDENTITIES.limitsDigest,
+  channelContractDigest: CURRENT_PROTOCOL_IDENTITIES.channelContractDigest,
 } as const)
 
 export function controlProtocolLimit(name: ControlProtocolLimitName): bigint {

@@ -170,7 +170,11 @@ function createProvider(overrides: {
       getViewSnapshot: overrides.getViewSnapshot ?? (async () => viewSnapshot()),
       reloadDocument: overrides.reloadDocument ?? (async () => true),
     },
-    resources: { async addResources(request) { return commandResult(request.canvasId) } },
+    resources: {
+      async addResources(request) {
+        return { ...commandResult(request.canvasId), preparedResources: [] }
+      },
+    },
     textResources: { save: overrides.saveText ?? (async () => ({ contentRevision: "a".repeat(64), warnings: [] })) },
   })
 }

@@ -431,10 +431,9 @@ function assertEndpoint(value: unknown): void {
 }
 
 function assertPlacement(value: unknown): void {
-  assertExactKeys(value, ["anchor", "gap", "obstacleProjectionDigest"], "CausalPlacement")
+  assertExactKeys(value, ["anchor", "gap"], "CausalPlacement")
   assertPoint(value.anchor)
   if (value.gap !== 24) invalid("placement gap must be 24")
-  parseDigest(value.obstacleProjectionDigest)
 }
 
 function assertResourceNode(value: unknown): void {

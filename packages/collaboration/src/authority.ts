@@ -2,6 +2,7 @@ import { parseDigest, type Digest } from "./codecs"
 import {
   KERNEL_DIGEST_DOMAINS,
   CURRENT_PROTOCOL_IDENTITIES,
+  PROTOCOL_DIGEST_DOMAIN_REGISTRY,
   PROTOCOL_SCHEMA_ARTIFACTS,
   PROTOCOL_TYPE_NAMESPACES,
 } from "./constants"
@@ -95,8 +96,10 @@ function parseVerifiedBundleCore(value: unknown): ProtocolSchemaBundleCore {
     return domain
   })
   if (
-    domainRegistry.length !== 129 ||
-    domainRegistry.some((domain, index) => index > 0 && domainRegistry[index - 1]! >= domain)
+    domainRegistry.length !== PROTOCOL_DIGEST_DOMAIN_REGISTRY.length ||
+    domainRegistry.some((domain, index) =>
+      (index > 0 && domainRegistry[index - 1]! >= domain) || domain !== PROTOCOL_DIGEST_DOMAIN_REGISTRY[index]
+    )
   ) {
     unavailable("ProtocolSchemaBundle domain registry is not the exact sorted current domain set")
   }
@@ -111,7 +114,7 @@ function parseVerifiedBundleCore(value: unknown): ProtocolSchemaBundleCore {
       "Yjs integrity",
     ),
     stateVectorCodec: requireLiteral(value.yjsWireCodec.stateVectorCodec, "Y.encodeStateVector", "Yjs state-vector codec"),
-    updateCodec: requireLiteral(value.yjsWireCodec.updateCodec, "Y.encodeStateAsUpdate", "Yjs update codec"),
+    updateCodec: requireLiteral(value.yjsWireCodec.updateCodec, "Y.Doc.update-event", "Yjs update codec"),
     updateVersion: requireLiteral(value.yjsWireCodec.updateVersion, "v1", "Yjs update version"),
     version: requireLiteral(value.yjsWireCodec.version, "13.6.31", "Yjs version"),
   })

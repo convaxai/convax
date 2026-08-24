@@ -39,7 +39,7 @@ in sync when invariants or test coverage change.
 
 | Invariant | Test File | Coverage |
 |-----------|-----------|----------|
-| `.convax/collaboration/` object/outbox/journal/head durability barrier | `packages/project/src/node/collaboration/persistence-store.test.ts` | fsync ordering |
+| `.convax/collaboration/` accepted-frame atomic WAL commit | `packages/project/src/node/collaboration/persistence-store.atomic.test.ts`, `packages/project/src/node/collaboration/accepted-frame-wal-file.test.ts` | one-sync append, response loss, tail repair, cold replay |
 | Managed asset SHA-256 CAS admission | `packages/project/src/node/project-canvas/project-canvas-resource-preparation.test.ts` | Asset import |
 | File publication before Canvas commit; retain on Canvas failure | `packages/project/src/node/project-canvas/project-canvas-resource-preparation.test.ts` | Partial success |
 | Browser localStorage is non-authoritative display cache only | `packages/desktop/src/renderer/project-reset-recovery.test.tsx` | Cache rejection |

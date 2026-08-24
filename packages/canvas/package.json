@@ -29,6 +29,11 @@
       "import": "./dist/collaboration/index.js",
       "default": "./dist/collaboration/index.js"
     },
+    "./collaboration-migration": {
+      "types": "./dist/collaboration-migration.d.ts",
+      "import": "./dist/collaboration-migration.js",
+      "default": "./dist/collaboration-migration.js"
+    },
     "./core": {
       "types": "./dist/core.d.ts",
       "import": "./dist/core.js",

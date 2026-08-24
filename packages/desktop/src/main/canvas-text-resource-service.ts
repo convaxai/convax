@@ -3,7 +3,7 @@ import { assertResourceRef, canvasProjectionResourceMetadataKey } from "@convax/
 import type { CanvasNode } from "@convax/canvas/core"
 import { ordinarySha256, parseProjectId } from "@convax/collaboration"
 import { projectIndexResourceReferenceDigest, type ProjectIndexCurrentBlobReferencePort } from "@convax/project"
-import { projectResourceBindingsKey } from "@convax/project/canvas"
+import { isEditableProjectTextPath, projectResourceBindingsKey } from "@convax/project/canvas"
 import type { ProjectCanvasResourcePreparation } from "@convax/project/node"
 import { ProjectTextFileConflictError, type ProjectTextFileCompareAndReplacePort } from "@convax/project-files"
 
@@ -138,9 +138,4 @@ function canonicalCanvasTextResource(node: CanvasNode) {
     return null
   }
   return value.mediaClass === "text" ? value : null
-}
-
-function isEditableProjectTextPath(path: string) {
-  const lower = path.toLowerCase()
-  return lower.endsWith(".md") || lower.endsWith(".markdown") || lower.endsWith(".txt")
 }

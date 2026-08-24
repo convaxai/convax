@@ -353,10 +353,10 @@ function createResetManifest(
     requestedProtocolDigest: native.protocolDigest,
     requestedSchemaDigest: native.schemaDigest,
     requestedUriProtocolDigest: native.uriProtocolDigest,
-    emptyProjectIndexCheckpointDigest: native.emptyProjectIndexCheckpointObjectDigest,
-    emptyProjectIndexFullUpdateDigest: native.emptyProjectIndexFullUpdateDigest,
-    emptyProjectIndexStateVectorDigest: native.emptyProjectIndexStateVectorDigest,
-    emptyProjectIndexCanonicalStateDigest: native.emptyProjectIndexCanonicalStateDigest,
+    emptyProjectIndexCheckpointDigest: native.projectIndexGenesisCheckpointObjectDigest,
+    emptyProjectIndexFullUpdateDigest: native.projectIndexGenesisFullUpdateDigest,
+    emptyProjectIndexStateVectorDigest: native.projectIndexGenesisStateVectorDigest,
+    emptyProjectIndexCanonicalStateDigest: native.projectIndexGenesisCanonicalStateDigest,
     projectResetConfirmationCoreDigest: expected.confirmation.coreDigest,
     projectResetApprovalCoreDigest: null,
     teamEpochRolloverRequestDigest: null,
@@ -380,10 +380,10 @@ function matchesNativeManifest(
     reset.requestedProtocolDigest === native.protocolDigest &&
     reset.requestedSchemaDigest === native.schemaDigest &&
     reset.requestedUriProtocolDigest === native.uriProtocolDigest &&
-    reset.emptyProjectIndexCheckpointDigest === native.emptyProjectIndexCheckpointObjectDigest &&
-    reset.emptyProjectIndexFullUpdateDigest === native.emptyProjectIndexFullUpdateDigest &&
-    reset.emptyProjectIndexStateVectorDigest === native.emptyProjectIndexStateVectorDigest &&
-    reset.emptyProjectIndexCanonicalStateDigest === native.emptyProjectIndexCanonicalStateDigest
+    reset.emptyProjectIndexCheckpointDigest === native.projectIndexGenesisCheckpointObjectDigest &&
+    reset.emptyProjectIndexFullUpdateDigest === native.projectIndexGenesisFullUpdateDigest &&
+    reset.emptyProjectIndexStateVectorDigest === native.projectIndexGenesisStateVectorDigest &&
+    reset.emptyProjectIndexCanonicalStateDigest === native.projectIndexGenesisCanonicalStateDigest
   )
 }
 

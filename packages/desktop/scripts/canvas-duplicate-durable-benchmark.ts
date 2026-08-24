@@ -357,6 +357,7 @@ async function captureShardState(
     headDigest: head.headDigest,
     canonicalStateDigest: head.canonicalStateDigest,
     frontierDigest: head.frontierDigest,
+    materializationDigest: head.materializationDigest,
     fullUpdate: Buffer.from(head.fullUpdate).toString("base64"),
     stateVector: Buffer.from(head.stateVector).toString("base64"),
   })
@@ -429,11 +430,7 @@ function groupStages(
     canonicalize: ["canonical-state-digest"],
     "state-encode": ["base-state-encode", "delta-encode", "frame-encode"],
     sign: ["sign"],
-    object: ["object"],
-    outbox: ["outbox"],
-    journal: ["journal"],
-    head: ["head"],
-    "post-head-check": ["post-head-check"],
+    "atomic-accepted-frame-commit": ["atomic-accepted-frame-commit"],
     "replica-apply": ["replica-apply"],
     projection: ["projection"],
   }

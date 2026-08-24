@@ -48,8 +48,8 @@ export function populateProjectIndexBenchmarkFixture(
   readonly fullUpdate: Uint8Array
   readonly ownerResourceCount: number
 } {
-  if (!Number.isSafeInteger(resourceCount) || resourceCount < 0 || resourceCount > 2048) {
-    throw new TypeError("ProjectIndex benchmark fixture resource count must be a safe integer from 0 through 2048")
+  if (!Number.isSafeInteger(resourceCount) || resourceCount < 0 || resourceCount > 4096) {
+    throw new TypeError("ProjectIndex benchmark fixture resource count must be a safe integer from 0 through 4096")
   }
   const emptySnapshot = validateProjectIndexYDoc(document)
   const inserted = Array.from({ length: resourceCount }, (_, index) => resourceRecords(emptySnapshot, index)).flat()
@@ -101,6 +101,7 @@ function genesis(): Y.Doc {
       protocolDigest,
       schemaDigest: PROJECT_INDEX_PROTOCOL_SCHEMA_ARTIFACT_DIGEST,
       uriProtocolDigest,
+      migrationImportBaseProofDigest: null,
     },
     rootEntry,
   )

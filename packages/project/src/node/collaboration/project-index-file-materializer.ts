@@ -1,8 +1,11 @@
 import { createHash, randomUUID } from "node:crypto"
+import { constants as fsConstants, type BigIntStats } from "node:fs"
 import fs from "node:fs/promises"
 import path from "node:path"
-import { parseProjectId, type Digest, type ProjectId } from "@convax/collaboration"
+import { parseDigest, parseProjectId, type Digest, type ProjectId } from "@convax/collaboration"
+import { parseProjectEntryId } from "@convax/project-files/identity"
 import type {
+  ProjectIndexAcceptedNativeMaterializationCoveragePort,
   ProjectIndexFileMaterializationEntry,
   ProjectIndexFileMaterializationPlan,
   ProjectIndexFileMaterializationProjectionPort,
@@ -41,6 +44,11 @@ export class ProjectIndexFileMaterializer {
   readonly #projectRoot: string
   readonly #projection: ProjectIndexFileMaterializationProjectionPort
   readonly #blobs: ProjectIndexMaterializationBlobPort
+  readonly #coveredAcceptedFrames = new Map<
+    Digest,
+    Parameters<ProjectIndexAcceptedNativeMaterializationCoveragePort["cover"]>[0]["entries"]
+  >()
+  #pendingBlobDigests = new Set<Digest>()
   #previous = new Map<string, MaterializedEntry>()
   #queue: Promise<void> = Promise.resolve()
 
@@ -71,18 +79,102 @@ export class ProjectIndexFileMaterializer {
   }
 
   reconcile(): Promise<ProjectIndexFileMaterializationResult> {
-    let resolveResult!: (value: ProjectIndexFileMaterializationResult) => void
+    return this.#enqueue(() => this.#reconcile())
+  }
+
+  #enqueue<T>(operation: () => Promise<T>): Promise<T> {
+    let resolveResult!: (value: T) => void
     let rejectResult!: (reason: unknown) => void
-    const result = new Promise<ProjectIndexFileMaterializationResult>((resolve, reject) => {
+    const result = new Promise<T>((resolve, reject) => {
       resolveResult = resolve
       rejectResult = reject
     })
     this.#queue = this.#queue.then(async () => {
-      try { resolveResult(await this.#reconcile()) } catch (error) { rejectResult(error) }
+      try { resolveResult(await operation()) } catch (error) { rejectResult(error) }
     }, async () => {
-      try { resolveResult(await this.#reconcile()) } catch (error) { rejectResult(error) }
+      try { resolveResult(await operation()) } catch (error) { rejectResult(error) }
     })
     return result
+  }
+
+  coverAcceptedFrame(
+    input: Parameters<ProjectIndexAcceptedNativeMaterializationCoveragePort["cover"]>[0],
+  ): void {
+    const frameDigest = parseDigest(input.frameDigest)
+    if (!Array.isArray(input.entries) || input.entries.length < 1 || input.entries.length > 32) {
+      throw new TypeError("Accepted native materialization coverage entries are outside bounds")
+    }
+    const paths = new Set<string>()
+    const entries = input.entries.map((entry) => {
+      this.#absolute(entry.path)
+      if (paths.has(entry.path)) throw new TypeError("Accepted native materialization coverage repeats a path")
+      paths.add(entry.path)
+      return entry.kind === "directory"
+        ? Object.freeze({ entryId: parseProjectEntryId(entry.entryId), kind: "directory" as const, path: entry.path })
+        : Object.freeze({
+            blobDigest: parseDigest(entry.blobDigest),
+            entryId: parseProjectEntryId(entry.entryId),
+            kind: "file" as const,
+            path: entry.path,
+          })
+    })
+    this.#coveredAcceptedFrames.delete(frameDigest)
+    this.#coveredAcceptedFrames.set(frameDigest, Object.freeze(entries))
+    while (this.#coveredAcceptedFrames.size > 64) {
+      this.#coveredAcceptedFrames.delete(this.#coveredAcceptedFrames.keys().next().value!)
+    }
+  }
+
+  async consumeAcceptedFrameCoverage(frameDigestInput: Digest): Promise<boolean> {
+    const frameDigest = parseDigest(frameDigestInput)
+    return this.#enqueue(() => this.#consumeAcceptedFrameCoverage(frameDigest))
+  }
+
+  async #consumeAcceptedFrameCoverage(frameDigest: Digest): Promise<boolean> {
+    const entries = this.#coveredAcceptedFrames.get(frameDigest)
+    this.#coveredAcceptedFrames.delete(frameDigest)
+    if (!entries) return false
+    try {
+      const projected = await this.#projection.queryFileMaterializationEntries({
+        projectId: this.#projectId,
+        paths: entries.map((entry) => entry.path),
+      })
+      this.#validatePlan(projected)
+      const projectedByPath = new Map(projected.entries.map((entry) => [entry.path, entry] as const))
+      if (projectedByPath.size !== entries.length) return false
+      for (const entry of entries) {
+        const ownerEntry = projectedByPath.get(entry.path)
+        if (
+          !ownerEntry ||
+          ownerEntry.entryId !== entry.entryId ||
+          ownerEntry.kind !== entry.kind ||
+          (entry.kind === "directory"
+            ? ownerEntry.reference !== null
+            : ownerEntry.reference?.blob.digest !== entry.blobDigest)
+        ) return false
+        const target = this.#absolute(entry.path)
+        if (entry.kind === "directory") {
+          if (!(await isStableContainedDirectory(target, this.#projectRoot))) return false
+          continue
+        }
+        if (await digestRegularFile(target, this.#projectRoot) !== entry.blobDigest) return false
+      }
+      for (const entry of entries) {
+        this.#previous.set(entry.entryId, Object.freeze({
+          blobDigest: entry.kind === "file" ? entry.blobDigest : null,
+          entryId: entry.entryId,
+          kind: entry.kind,
+          path: entry.path,
+        }))
+      }
+      return true
+    } catch {
+      return false
+    }
+  }
+
+  needsPublishedBlob(digest: Digest): boolean {
+    return this.#pendingBlobDigests.has(parseDigest(digest))
   }
 
   async #reconcile(): Promise<ProjectIndexFileMaterializationResult> {
@@ -91,6 +183,7 @@ export class ProjectIndexFileMaterializer {
     const materializedPaths: string[] = []
     const removedPaths: string[] = []
     const pendingPaths: Array<{ path: string; code: "blob-unavailable" | "native-path-conflict" }> = []
+    const pendingBlobDigests = new Set<Digest>()
     const next = new Map<string, MaterializedEntry>()
 
     for (const entry of plan.entries.filter((candidate) => candidate.kind === "directory")) {
@@ -112,7 +205,9 @@ export class ProjectIndexFileMaterializer {
         materializedPaths.push(entry.path)
       } catch (error) {
         if (isNodeDirectoryDurabilityError(error)) throw error
-        pendingPaths.push({ path: entry.path, code: isBlobUnavailable(error) ? "blob-unavailable" : "native-path-conflict" })
+        const blobUnavailable = isBlobUnavailable(error)
+        pendingPaths.push({ path: entry.path, code: blobUnavailable ? "blob-unavailable" : "native-path-conflict" })
+        if (blobUnavailable && entry.reference) pendingBlobDigests.add(entry.reference.blob.digest)
         if (previous) next.set(previous.entryId, previous)
       }
     }
@@ -129,6 +224,7 @@ export class ProjectIndexFileMaterializer {
       if (await this.#removeEmptyDirectory(entry.path)) removedPaths.push(entry.path)
     }
     this.#previous = next
+    this.#pendingBlobDigests = pendingBlobDigests
     return Object.freeze({
       materializedPaths: Object.freeze(materializedPaths),
       removedPaths: Object.freeze(removedPaths),
@@ -153,7 +249,7 @@ export class ProjectIndexFileMaterializer {
     if (entry.reference === null) throw new Error("ProjectIndex file reference is absent")
     const target = this.#absolute(entry.path)
     await this.#ensureDirectory(parentOf(entry.path))
-    const current = await digestRegularFile(target)
+    const current = await digestRegularFile(target, this.#projectRoot)
     if (current === entry.reference.blob.digest) return
     if (current !== null && !(previous?.path === entry.path && previous.blobDigest === current)) {
       throw new Error("Native Project path contains untracked bytes")
@@ -170,7 +266,7 @@ export class ProjectIndexFileMaterializer {
         await fs.link(staging, target)
         await fs.unlink(staging)
       } else {
-        const revalidated = await digestRegularFile(target)
+        const revalidated = await digestRegularFile(target, this.#projectRoot)
         if (revalidated !== current) throw new Error("Native Project file changed during materialization")
         await fs.rename(staging, target)
       }
@@ -184,7 +280,7 @@ export class ProjectIndexFileMaterializer {
   async #removeTrackedFile(entry: MaterializedEntry): Promise<boolean> {
     if (entry.blobDigest === null) return false
     const target = this.#absolute(entry.path)
-    const current = await digestRegularFile(target)
+    const current = await digestRegularFile(target, this.#projectRoot)
     if (current === null) return true
     if (current !== entry.blobDigest) return false
     await fs.unlink(target)
@@ -252,15 +348,23 @@ function inside(root: string, target: string): boolean {
   return relative !== ".." && !relative.startsWith(`..${path.sep}`) && !path.isAbsolute(relative)
 }
 
-async function digestRegularFile(target: string): Promise<Digest | null> {
-  let stat: Awaited<ReturnType<typeof fs.lstat>>
-  try { stat = await fs.lstat(target) } catch (error) {
+async function digestRegularFile(target: string, containmentRoot: string): Promise<Digest | null> {
+  let pathBefore: BigIntStats
+  try { pathBefore = await fs.lstat(target, { bigint: true }) } catch (error) {
     if (isNodeError(error) && error.code === "ENOENT") return null
     throw error
   }
-  if (!stat.isFile() || stat.isSymbolicLink()) throw new Error("Project materialization target is not a regular file")
-  const handle = await fs.open(target, "r")
+  if (!pathBefore.isFile() || pathBefore.isSymbolicLink() || pathBefore.nlink !== 1n) {
+    throw new Error("Project materialization target is not an owned regular file")
+  }
+  const resolvedBefore = await fs.realpath(target)
+  if (!inside(containmentRoot, resolvedBefore)) throw new Error("Project materialization target escaped Project root")
+  const handle = await fs.open(target, fsConstants.O_RDONLY | noFollowFlag())
   try {
+    const openedBefore = await handle.stat({ bigint: true })
+    if (!sameFileIdentity(pathBefore, openedBefore) || !openedBefore.isFile() || openedBefore.nlink !== 1n) {
+      throw new Error("Project materialization target changed before verification")
+    }
     const hash = createHash("sha256")
     const buffer = Buffer.allocUnsafe(1024 * 1024)
     let offset = 0
@@ -270,8 +374,45 @@ async function digestRegularFile(target: string): Promise<Digest | null> {
       hash.update(buffer.subarray(0, bytesRead))
       offset += bytesRead
     }
-    return hash.digest("hex") as Digest
+    const openedAfter = await handle.stat({ bigint: true })
+    const pathAfter = await fs.lstat(target, { bigint: true })
+    const resolvedAfter = await fs.realpath(target)
+    if (
+      !sameFileIdentity(openedBefore, openedAfter) ||
+      !sameFileIdentity(openedAfter, pathAfter) ||
+      pathAfter.isSymbolicLink() ||
+      pathAfter.nlink !== 1n ||
+      resolvedAfter !== resolvedBefore ||
+      !inside(containmentRoot, resolvedAfter)
+    ) {
+      throw new Error("Project materialization target changed during verification")
+    }
+    return parseDigest(hash.digest("hex"))
   } finally { await handle.close() }
+}
+
+function noFollowFlag(): number {
+  return process.platform === "win32" ? 0 : fsConstants.O_NOFOLLOW
+}
+
+function sameFileIdentity(left: BigIntStats, right: BigIntStats): boolean {
+  return left.dev === right.dev && left.ino === right.ino
+}
+
+async function isStableContainedDirectory(target: string, containmentRoot: string): Promise<boolean> {
+  const before = await fs.lstat(target, { bigint: true })
+  if (!before.isDirectory() || before.isSymbolicLink()) return false
+  const resolvedBefore = await fs.realpath(target)
+  if (!inside(containmentRoot, resolvedBefore)) return false
+  const after = await fs.lstat(target, { bigint: true })
+  const resolvedAfter = await fs.realpath(target)
+  return (
+    after.isDirectory() &&
+    !after.isSymbolicLink() &&
+    sameFileIdentity(before, after) &&
+    resolvedAfter === resolvedBefore &&
+    inside(containmentRoot, resolvedAfter)
+  )
 }
 
 async function fsyncFile(target: string): Promise<void> {

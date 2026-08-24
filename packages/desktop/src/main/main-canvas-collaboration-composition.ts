@@ -11,7 +11,10 @@ import {
 } from "@convax/collaboration"
 import type { ProjectIndexCanvasApplicationPort } from "@convax/project/canvas"
 import type { CanvasSubmitDiagnosticsPort } from "@convax/canvas/application"
-import type { NodeProjectCollaborationRuntimeCoordinator } from "@convax/project/node"
+import type {
+  NodeProjectCollaborationRuntimeCoordinator,
+  ProjectCollaborationRuntimeLease,
+} from "@convax/project/node"
 
 import {
   createCanvasCollaborationSessionOwner,
@@ -57,7 +60,7 @@ export function createMainCanvasCollaborationComposition(input: {
   readonly projects: Pick<NodeProjectCollaborationRuntimeCoordinator, "acquire">
   readonly projectIndexes: ProjectIndexCanvasApplicationPort
   readonly materializers: ProjectCollaborationMaterializerRegistry
-  readonly localAuthority: CurrentLocalReplicaAuthoritySource
+  readonly localAuthority: (project: ProjectCollaborationRuntimeLease) => CurrentLocalReplicaAuthoritySource
   readonly incomingAuthority: IncomingReplicaAuthoritySource
   readonly signatureVerifier: CollaborationKernelOptions["signatureVerifier"]
   readonly applicationCommands: CanvasApplicationCommandAdapter

@@ -541,6 +541,20 @@ try {
         }
         throw new Error("Timed out waiting for " + label)
       }
+      const waitForStableRead = async (read, label) => {
+        const deadline = Date.now() + timeoutMs
+        let lastError
+        while (Date.now() < deadline) {
+          try {
+            return await read()
+          } catch (error) {
+            lastError = error
+          }
+          await new Promise((resolve) => setTimeout(resolve, 50))
+        }
+        if (lastError instanceof Error) throw lastError
+        throw new Error("Timed out waiting for " + label)
+      }
       await waitFor(() => window.convax, "the packaged preload bridge")
       const mainProtocol = await window.convax.protocol.getVersion()
       if (mainProtocol !== window.convax.protocol.version) {
@@ -569,9 +583,14 @@ try {
       if (inventory.installed.length !== 0) {
         throw new Error("Fresh packaged Desktop installed product-selected Plugins: " + JSON.stringify(inventory.installed))
       }
-      const settingsSources = await window.convax.marketplaces.listMarketplaces()
-      const marketplaceCatalog = await window.convax.marketplaces.listCatalog()
-      const marketplaceInventory = await window.convax.marketplaces.listInstalled()
+      const [settingsSources, marketplaceCatalog, marketplaceInventory] = await waitForStableRead(
+        () => Promise.all([
+          window.convax.marketplaces.listMarketplaces(),
+          window.convax.marketplaces.listCatalog(),
+          window.convax.marketplaces.listInstalled(),
+        ]),
+        "a stable packaged Marketplace snapshot",
+      )
       const officialSource = settingsSources[0]
       if (
         settingsSources.length !== 1 ||

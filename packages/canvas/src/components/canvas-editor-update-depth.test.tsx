@@ -12,7 +12,12 @@ import {
   useRef,
 } from "react"
 import { createRoot, type Root } from "react-dom/client"
-import type { CanvasRendererCollaborationClient, CanvasRendererCommand } from "../collaboration"
+import type {
+  CanvasRendererCollaborationClient,
+  CanvasRendererCommand,
+  CanvasRendererProjectionChange,
+  CanvasRendererViewportQuery,
+} from "../collaboration"
 import type { CanvasEditorController } from "../editor-context"
 import type { CanvasInspectorProjection, CanvasSelectionProjection } from "../inspector"
 import type { CanvasFolderBrowseListing } from "../services"
@@ -170,6 +175,7 @@ mock.module("@xyflow/react", () => ({
   },
   ReactFlowProvider: Passthrough,
   SelectionMode: { Partial: "partial" },
+  ViewportPortal: Passthrough,
   applyEdgeChanges: (_changes: unknown, edges: unknown) => edges,
   applyNodeChanges: (
     changes: Array<{
@@ -301,6 +307,42 @@ class TestCanvasSession implements CanvasRendererCollaborationClient {
 
   undo() {
     return this.undoRequest()
+  }
+}
+
+class BoundedViewportTestCanvasSession extends TestCanvasSession {
+  readonly #projectionChangeListeners = new Set<(change: CanvasRendererProjectionChange) => void>()
+
+  override publish(projection: CanvasDocument) {
+    super.publish(projection)
+    const change = {
+      kind: "reset",
+      identity: {
+        format: "convax.canvas-certified-projection-identity",
+        canvasId: projection.id,
+        ownerSchemaDigest: "0".repeat(64),
+        stateCommitmentDigest: "1".repeat(64),
+      },
+    } as CanvasRendererProjectionChange
+    for (const listener of this.#projectionChangeListeners) listener(change)
+  }
+
+  queryViewport(_input: CanvasRendererViewportQuery) {
+    const projection = this.getProjection()
+    return Object.freeze({
+      edges: Object.freeze([...projection.edges]),
+      nodes: Object.freeze([...projection.nodes]),
+      truncated: false,
+    })
+  }
+
+  resolveNode(nodeId: string) {
+    return this.getProjection().nodes.find((node) => node.id === nodeId)
+  }
+
+  subscribeProjectionChanges(listener: (change: CanvasRendererProjectionChange) => void) {
+    this.#projectionChangeListeners.add(listener)
+    return () => this.#projectionChangeListeners.delete(listener)
   }
 }
 
@@ -594,6 +636,89 @@ test("switches Select and Hand modes through canvas shortcuts", async () => {
     expect(canvas?.dataset.canvasTool).toBe("select")
   } finally {
     EditorProbe = undefined
+    if (root) await act(async () => root?.unmount())
+    await restoreWindow()
+  }
+})
+
+test("keeps a bounded controlled node at its drag position until accepted authority arrives", async () => {
+  const restoreWindow = installTestWindow()
+  let root: Root | undefined
+  observedReactFlowProps = undefined
+
+  try {
+    const container = document.createElement("div")
+    document.body.append(container)
+    root = createRoot(container)
+    const node = createTextNode({
+      id: "bounded-drag-node",
+      metadata: {},
+      position: { x: 0, y: 0 },
+      resourceState: { status: "ready" },
+    })
+    const session = new BoundedViewportTestCanvasSession(
+      createCanvasDocument({ id: "bounded-drag", nodes: [node] }),
+    )
+
+    await act(async () => {
+      root?.render(<CanvasEditor services={createCanvasServices()} session={session} />)
+    })
+
+    await act(async () => {
+      observedReactFlowProps?.onNodeDragStart?.({ altKey: false, ctrlKey: false, metaKey: false }, node, [node])
+      observedReactFlowProps?.onNodesChange?.([
+        { id: node.id, position: { x: 80, y: 120 }, type: "position" },
+      ])
+    })
+    expect(observedReactFlowProps?.nodes?.find((candidate) => candidate.id === node.id)?.position).toEqual({
+      x: 80,
+      y: 120,
+    })
+    expect(session.getProjection().nodes[0]?.position).toEqual({ x: 0, y: 0 })
+    expect(session.commands).toEqual([])
+
+    await act(async () => {
+      observedReactFlowProps?.onNodeDragStop?.()
+      await Promise.resolve()
+    })
+    expect(session.commands).toEqual([
+      {
+        body: {
+          updates: [
+            {
+              node: { kind: "node", id: node.id, incarnation: `incarnation-${node.id}` },
+              position: { x: 80, y: 120 },
+            },
+          ],
+        },
+        format: "convax.canvas-renderer-command",
+        kind: "canvas.nodes.set-geometry",
+      },
+    ])
+    expect(session.getProjection().nodes[0]?.position).toEqual({ x: 0, y: 0 })
+    expect(observedReactFlowProps?.nodes?.find((candidate) => candidate.id === node.id)?.position).toEqual({
+      x: 80,
+      y: 120,
+    })
+
+    await act(async () => {
+      session.publish({
+        ...session.getProjection(),
+        nodes: session
+          .getProjection()
+          .nodes.map((candidate) =>
+            candidate.id === node.id ? { ...candidate, position: { x: 80, y: 120 } } : candidate,
+          ),
+      })
+    })
+    expect(session.getProjection().nodes[0]?.position).toEqual({ x: 80, y: 120 })
+    expect(observedReactFlowProps?.nodes?.find((candidate) => candidate.id === node.id)?.position).toEqual({
+      x: 80,
+      y: 120,
+    })
+    expect(session.commands).toHaveLength(1)
+  } finally {
+    observedReactFlowProps = undefined
     if (root) await act(async () => root?.unmount())
     await restoreWindow()
   }

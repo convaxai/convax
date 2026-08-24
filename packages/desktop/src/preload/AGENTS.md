@@ -59,17 +59,30 @@ and closed typed Canvas commands; never add whole-document save or
 renderer-supplied native authority.
 
 Canvas session mutation DTOs carry a strict accepted frame digest and complete
-session projection, including exact live node and edge incarnation tables;
-invalidations carry their frame digest. Resource mutation
+session projection, including exact owner projection identity plus live node and
+edge incarnation tables; invalidations carry their frame digest. Resource mutation
 requests carry the current session id and responses use a strict
-`accepted | unavailable` projection-delivery union. Preload does not synthesize a
-projection or downgrade malformed markers into a refresh.
-Targeted or full resource hydration carries the exact mounted Canvas `ref` and
-session id plus only an optional bounded unique node-id list. Preload validates that
-closed field set and never derives, drops, or widens its lease scope.
+`certified | unavailable` delivery union. The certified branch contains the closed
+Canvas owner patch, exact ref/session/frame/history binding, and a separate bounded
+runtime sidecar; it never contains a full document. Preload parses the owner codecs
+without constructing or modifying authority.
+Targeted resource hydration carries the exact mounted Canvas `ref`, session id, and
+a bounded unique exact-node incarnation set. Preload validates that closed field set
+and never derives, drops, or widens its lease scope.
 Pointer-originated resource adds may carry only the closed `center | top-left`
 anchor-origin marker. Preload validates and forwards it without calculating card
 geometry; Main and Canvas remain authoritative for final resource size and placement.
+`convax.desktop-ipc/47` resource-add results may carry only the unchanged validated
+Canvas-certified patch, its exact ProjectIndex-derived resource-hierarchy delta,
+and optional prepared-runtime sidecar whose ids belong to that patch's exact
+returned created-node set. Full projections carry an identity-bound complete or
+explicitly unavailable hierarchy snapshot. Preload uses Canvas's strict closed
+codecs and never accepts native paths or constructs a classification. Stale hydration requests
+carry the originating session and a bounded unique exact-node incarnation set;
+responses must contain exactly the corresponding bounded runtime patches. Preload
+rejects unknown fields, malformed runtime state, duplicate/partial ids and
+whole-document-shaped payloads; an intentionally empty prepared-runtime sidecar is
+valid because its loss cannot reverse the authoritative mutation.
 
 ## Validation
 

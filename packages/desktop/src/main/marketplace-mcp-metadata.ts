@@ -413,7 +413,12 @@ export class MarketplaceMcpMetadataStore {
         throw new Error("Selected managed MCP target does not match the declared command")
       }
       const metadata = await fs.lstat(selectedPath)
-      if (!metadata.isFile() || metadata.isSymbolicLink() || metadata.nlink !== 1 || (metadata.mode & 0o111) === 0) {
+      if (
+        !metadata.isFile() ||
+        metadata.isSymbolicLink() ||
+        metadata.nlink !== 1 ||
+        (process.platform !== "win32" && (metadata.mode & 0o111) === 0)
+      ) {
         throw new Error("Selected managed MCP target is not one executable regular file")
       }
       const bytes = await readBoundedAuthorityFile(selectedPath, 128 * 1024 * 1024, "Selected managed MCP target")

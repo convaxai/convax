@@ -11,9 +11,9 @@ import {
   parseUint32,
   parseUint64,
   createSelectedDocumentOwnerArtifactFactory,
+  currentProtocolDescriptor,
   type CheckpointCarrierSectionKind,
   type CheckpointValidationCarrierIndex,
-  type Digest,
   type OwnerProcessValueFactory,
   type SelectedDocumentOwnerArtifactDefinition,
 } from "@convax/collaboration"
@@ -33,6 +33,12 @@ const encoder = new TextEncoder()
 const digest = (label: string) => ordinarySha256(encoder.encode(label))
 const id = (byte: number) => parseId128(encodeBase64url(Uint8Array.from({ length: 16 }, () => byte)))
 const signature = encodeBase64url(Uint8Array.from({ length: 64 }, () => 9)) as never
+const currentProtocol = currentProtocolDescriptor()
+const currentCanvasArtifact = currentProtocol.artifacts.find((artifact) => artifact.name === "canvas-schema")
+if (currentCanvasArtifact === undefined || currentCanvasArtifact.format !== "convax.canvas-protocol-schema") {
+  throw new Error("The current protocol descriptor does not contain the Canvas owner artifact")
+}
+const currentCanvasSchemaDigest = currentCanvasArtifact.digest
 
 function carrierFixture(): Readonly<{
   carrier: Uint8Array
@@ -76,13 +82,13 @@ function carrierFixture(): Readonly<{
     validationArtifactSetDigest: digest("artifact-set"),
     sections,
     totalSectionBytes: String(offset) as never,
-    protocolDigest: "8295f918e8f7b8297c080db03672fc410542280f639d9b40a8e324e560f07ae9" as Digest,
+    protocolDigest: currentProtocol.protocolDigest,
   }
   return { carrier: encodeCheckpointValidationCarrier(index, sectionBytes), index }
 }
 
 function fakeOwnerDefinition(): SelectedDocumentOwnerArtifactDefinition<"canvas"> {
-  const schemaDigest = "09d5f8748d91474de45eb3a88fe6d3054adb79e8a44dd311c9024ab95b27250a" as Digest
+  const schemaDigest = currentCanvasSchemaDigest
   const descriptor = Object.freeze({
     format: "convax.owner-canonicalizer-descriptor" as const,
     owner: "canvas" as const,
@@ -91,6 +97,15 @@ function fakeOwnerDefinition(): SelectedDocumentOwnerArtifactDefinition<"canvas"
     canonicalStateCodec: "restricted-jcs-utf8" as const,
     exactBytePolicy: "parse-reencode-byte-equal" as const,
     unknownStatePolicy: "reject" as const,
+    stateCommitment: Object.freeze({
+      format: "convax.owner-state-commitment-descriptor" as const,
+      commitmentCodec: "sha256-merkle-patricia-v1" as const,
+      canonicalKeyPathPolicy: "nfc-utf8-no-nul-bounded-v1" as const,
+      maxCanonicalNameUtf8Bytes: "128" as const,
+      maxCanonicalKeyUtf8Bytes: "1024" as const,
+      scalarNames: Object.freeze(["format"]),
+      collectionNames: Object.freeze([]),
+    }),
   })
   return { owner: "canvas", createDefinitions(process: OwnerProcessValueFactory<"canvas">) { return { protocol: {
     owner: "canvas",
@@ -98,9 +113,25 @@ function fakeOwnerDefinition(): SelectedDocumentOwnerArtifactDefinition<"canvas"
     canonicalizerDescriptor: descriptor,
     canonicalizerDigest: ownerCanonicalizerDescriptorDigest(descriptor),
     decodeIntent: () => ({ kind: "noop" }),
-    validateBase: () => process.wrapValidatedState(null),
+    validateBase: (document) => {
+      const state = process.wrapValidatedState(null)
+      const commitment = process.stateCommitment.build({
+        descriptor: descriptor.stateCommitment,
+        scalars: [{ name: "format", value: descriptor.canonicalStateFormat }],
+        collections: [],
+      })
+      return process.bindStateCommitment(document, state, commitment)
+    },
     applyIntent: () => process.wrapApplyResult(null),
-    validatePost: () => process.wrapValidatedState(null),
+    validatePost: (_base, document) => {
+      const state = process.wrapValidatedState(null)
+      const commitment = process.stateCommitment.build({
+        descriptor: descriptor.stateCommitment,
+        scalars: [{ name: "format", value: descriptor.canonicalStateFormat }],
+        collections: [],
+      })
+      return process.bindStateCommitment(document, state, commitment)
+    },
     canonicalStateBytes: () => encodeRestrictedJcs({ format: descriptor.canonicalStateFormat }),
     deriveActualWriteEvidence: () => { throw new Error("not used") },
   }, closure: {

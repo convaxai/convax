@@ -7,6 +7,7 @@ export {
   PROJECT_INDEX_PROTOCOL_SCHEMA_ARTIFACT_DIGEST,
   createProjectIndexReconstructionYDoc,
   createProjectIndexDocumentOwnerRuntime,
+  projectIndexCanonicalStateCommitmentDigest,
   decodeProjectIndexBlobPublicationCurrentnessRequest,
   decodeProjectIndexCanvasGenesisCurrentnessRequest,
   deriveProjectCanvasIdForOperation,

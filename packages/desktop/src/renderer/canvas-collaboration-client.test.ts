@@ -1,7 +1,18 @@
 import { describe, expect, mock, test } from "bun:test"
 import { createCanvasDocument, createTextNode } from "@convax/canvas"
-import type { CanvasRendererCommand } from "@convax/canvas/collaboration"
-import { encodeBase64url, parseActorId, parseDigest, parseId128 } from "@convax/collaboration"
+import type {
+  CanvasCertifiedProjectionPatch,
+  CanvasRendererCommand,
+  CanvasRendererProjectionPatchChange,
+} from "@convax/canvas/collaboration"
+import {
+  encodeBase64url,
+  encodeRestrictedJcs,
+  parseActorId,
+  parseDigest,
+  parseId128,
+  parseUint64,
+} from "@convax/collaboration"
 import type {
   CanvasRendererSessionTransport,
   CanvasSessionInvalidationDto,
@@ -10,12 +21,13 @@ import type {
 import type { CanvasResourceAddResult } from "../desktop-protocol"
 import { openDesktopCanvasRendererSession } from "./canvas-collaboration-client"
 
-const ref = { canvasId: "canvas-one", scopeId: "project-one" }
+const ref = { canvasId: `cv_${"1".repeat(64)}`, scopeId: "project-one" }
 const id = (fill: number) => parseId128(encodeBase64url(new Uint8Array(16).fill(fill)))
 const actor = (fill: number) => parseActorId(encodeBase64url(new Uint8Array(32).fill(fill)))
 const sessionId = id(1)
 const frameDigest = (fill: string) => parseDigest(fill.repeat(64))
-const entity = { kind: "node" as const, id: "node-one", incarnation: id(2) }
+const entitySuffix = encodeBase64url(new Uint8Array(32).fill(2))
+const entity = { kind: "node" as const, id: `n_${entitySuffix}`, incarnation: `ni_${entitySuffix}` }
 const receipt = {
   format: "convax.canvas-operation-receipt" as const,
   actorId: actor(3),
@@ -27,8 +39,109 @@ const receipt = {
   semanticRoot: true,
   historyMaterialDigest: parseDigest("c".repeat(64)),
 }
+const createdSuffix = encodeBase64url(new Uint8Array(32).fill(5))
+const createdEntity = Object.freeze({
+  kind: "node" as const,
+  id: `n_${createdSuffix}`,
+  incarnation: `ni_${createdSuffix}`,
+})
+const resourceReceipt = Object.freeze({
+  ...receipt,
+  operationId: id(5),
+  intentKind: "canvas.resources.add" as const,
+  resultEntities: Object.freeze([createdEntity]),
+})
+
+function resourcePatch(
+  baseStateCommitmentDigest = parseDigest("2".repeat(64)),
+  resultStateCommitmentDigest = parseDigest("3".repeat(64)),
+): CanvasCertifiedProjectionPatch {
+  return {
+    format: "convax.canvas-certified-projection-patch",
+    kind: "resource-append",
+    canvasId: ref.canvasId as never,
+    ownerSchemaDigest: parseDigest("1".repeat(64)),
+    baseStateCommitmentDigest,
+    resultStateCommitmentDigest,
+    receipt: resourceReceipt,
+    nodes: [
+      {
+        ref: createdEntity,
+        role: "file",
+        position: { x: 320, y: 0 },
+        size: { width: 320, height: 180 },
+        data: {
+          format: "convax.canvas-node-data",
+          kind: "resource",
+          title: "Created by Main",
+          resource: {
+            format: "convax.canvas-resource-ref",
+            uri:
+              `convax-project://project_0123456789abcdef0123456789abcdef/epochs/` +
+              `AQEBAQEBAQEBAQEBAQEBAQ/entries/pf_${"1".repeat(64)}` +
+              `?blob=sha256%3A${"2".repeat(64)}&path=Notes%2FCreated.md`,
+            mediaClass: "text",
+            mime: "text/markdown",
+            byteLength: parseUint64("5"),
+            contentDigest: parseDigest("2".repeat(64)),
+            ownerProofDigest: parseDigest("4".repeat(64)),
+          },
+        },
+        plugin: null,
+        parent: null,
+        generationLifecycle: "none",
+      },
+    ],
+    edges: [],
+  }
+}
+
+function resourceResult(
+  patch = resourcePatch(),
+  runtimePatches: readonly Readonly<{ nodeId: string; state: { status: "ready"; text?: string } }>[] = [],
+): CanvasResourceAddResult {
+  return {
+    createdNodeIds: [createdEntity.id],
+    delivery: {
+      format: "convax.canvas-resource-certified-projection-delivery",
+      status: "certified",
+      ref,
+      sessionId,
+      acceptedFrameDigest: frameDigest("e"),
+      canUndo: true,
+      canRedo: false,
+      patch,
+      resourceHierarchy: {
+        format: "convax.canvas-resource-hierarchy-delta",
+        projectionIdentity: {
+          format: "convax.canvas-certified-projection-identity",
+          canvasId: patch.canvasId,
+          ownerSchemaDigest: patch.ownerSchemaDigest,
+          stateCommitmentDigest: patch.resultStateCommitmentDigest,
+        },
+        entries: [{
+          entity: createdEntity,
+          nodeId: createdEntity.id,
+          classification: {
+            kind: "path",
+            key: { segments: ["notes", "created.md"], coverage: "leaf" },
+          },
+        }],
+      },
+      runtimePatches,
+    },
+    operationReceipt: resourceReceipt,
+    warnings: [],
+  }
+}
 
 function projection(x: number, overrides: Partial<CanvasSessionProjectionDto> = {}): CanvasSessionProjectionDto {
+  const projectionIdentity = overrides.projectionIdentity ?? {
+    format: "convax.canvas-certified-projection-identity",
+    canvasId: ref.canvasId as never,
+    ownerSchemaDigest: parseDigest("1".repeat(64)),
+    stateCommitmentDigest: parseDigest("2".repeat(64)),
+  }
   return {
     format: "convax.canvas-session-projection",
     ref,
@@ -41,10 +154,75 @@ function projection(x: number, overrides: Partial<CanvasSessionProjectionDto> = 
     }),
     edgeEntities: [],
     nodeEntities: [{ nodeId: entity.id, entity }],
+    projectionIdentity,
+    resourceHierarchy: overrides.resourceHierarchy ?? {
+      format: "convax.canvas-resource-hierarchy-snapshot",
+      projectionIdentity,
+      completeness: "complete",
+      entries: [],
+    },
     canUndo: x > 0,
     canRedo: false,
     ...overrides,
   }
+}
+
+function projectionWithCreated(): CanvasSessionProjectionDto {
+  return projection(0, {
+    canUndo: true,
+    document: createCanvasDocument({
+      id: ref.canvasId,
+      nodes: [
+        createTextNode({
+          id: entity.id,
+          metadata: {},
+          position: { x: 0, y: 0 },
+          resourceState: { status: "stale" },
+        }),
+        createTextNode({
+          id: createdEntity.id,
+          label: "Created by Main",
+          metadata: {},
+          position: { x: 320, y: 0 },
+          resourceState: { status: "stale" },
+        }),
+      ],
+    }),
+    nodeEntities: [
+      { nodeId: entity.id, entity },
+      { nodeId: createdEntity.id, entity: createdEntity },
+    ],
+    projectionIdentity: {
+      format: "convax.canvas-certified-projection-identity",
+      canvasId: ref.canvasId as never,
+      ownerSchemaDigest: parseDigest("1".repeat(64)),
+      stateCommitmentDigest: parseDigest("3".repeat(64)),
+    },
+  })
+}
+
+function projectionWithNodeCount(nodeCount: number): CanvasSessionProjectionDto {
+  const entities = Array.from({ length: nodeCount }, (_, index) => {
+    const bytes = new Uint8Array(32)
+    bytes[0] = 200
+    new DataView(bytes.buffer).setUint32(28, index)
+    const suffix = encodeBase64url(bytes)
+    return Object.freeze({ kind: "node" as const, id: `n_${suffix}`, incarnation: `ni_${suffix}` })
+  }).sort((left, right) => (left.id < right.id ? -1 : left.id > right.id ? 1 : 0))
+  return projection(0, {
+    document: createCanvasDocument({
+      id: ref.canvasId,
+      nodes: entities.map((entry, index) =>
+        createTextNode({
+          id: entry.id,
+          metadata: {},
+          position: { x: (index % 32) * 360, y: Math.floor(index / 32) * 220 },
+          resourceState: { status: "stale" },
+        }),
+      ),
+    }),
+    nodeEntities: entities.map((entry) => Object.freeze({ nodeId: entry.id, entity: entry })),
+  })
 }
 
 function command(x: number): CanvasRendererCommand {
@@ -198,32 +376,117 @@ describe("Desktop Canvas renderer collaboration client", () => {
   test("keeps resource delivery in the session lane and skips the same-frame invalidation query", async () => {
     const bridge = transport()
     const client = await openDesktopCanvasRendererSession({ ref, transport: bridge })
-    const next = projection(5)
+    let patchChange: CanvasRendererProjectionPatchChange | undefined
+    client.subscribeProjectionChanges?.((change) => {
+      if (change.kind === "patch") patchChange = change
+    })
     const delivered = await client.runResourceMutation(async () => {
-      bridge.setProjection(next)
       bridge.emit({
         format: "convax.canvas-session-invalidation",
         ref,
         sessionId,
         frameDigest: frameDigest("e"),
       })
-      return {
-        createdNodeIds: [],
-        delivery: {
-          status: "accepted",
-          acceptedFrameDigest: frameDigest("e"),
-          projection: next,
-        },
-        operationReceipt: receipt,
-        warnings: [],
-      }
+      return resourceResult(resourcePatch(), [
+        { nodeId: createdEntity.id, state: { status: "ready", text: "immediate" } },
+      ])
     })
     await client.drain()
 
     expect(delivered.projectionDelivered).toBeTrue()
-    expect(client.getProjection().nodes[0]?.position.x).toBe(5)
+    expect(client.resolveNodeEntity(createdEntity.id)).toEqual(createdEntity)
+    expect(delivered.preparedResources).toMatchObject([
+      { nodeId: createdEntity.id, resourceIdentity: expect.any(String), state: { status: "ready", text: "immediate" } },
+    ])
+    expect(patchChange?.preparedResources).toEqual(delivered.preparedResources)
+    expect(client.ownsProjectionChange(patchChange!)).toBeTrue()
+    expect(client.queryViewport({ rect: { x: -1, y: -1, width: 1_000, height: 500 } }).nodes.map((node) => node.id))
+      .toContain(createdEntity.id)
+    expect(client.queryResourceHierarchy({ segments: ["notes"] })).toEqual({
+      status: "available",
+      targets: [{ entity: createdEntity, nodeId: createdEntity.id }],
+    })
+    expect(client.queryResourceHierarchy({ segments: ["notes", "created.md"] })).toEqual({
+      status: "available",
+      targets: [{ entity: createdEntity, nodeId: createdEntity.id }],
+    })
     expect(bridge.query).not.toHaveBeenCalled()
     client.dispose()
+  })
+
+  test("keeps a durable certified append while making a missing hierarchy delta fail closed", async () => {
+    const bridge = transport()
+    const client = await openDesktopCanvasRendererSession({ ref, transport: bridge })
+    const result = resourceResult()
+    const delivery = result.delivery
+    if (delivery.status !== "certified") throw new Error("fixture must be certified")
+    const missingHierarchy = Object.freeze({
+      ...result,
+      delivery: Object.freeze({
+        ...delivery,
+        resourceHierarchy: Object.freeze({
+          ...delivery.resourceHierarchy,
+          entries: Object.freeze([]),
+        }),
+      }),
+    })
+
+    const accepted = await client.runResourceMutation(async () => missingHierarchy)
+
+    expect(accepted.projectionDelivered).toBeTrue()
+    expect(client.resolveNodeEntity(createdEntity.id)).toEqual(createdEntity)
+    expect(client.queryResourceHierarchy({ segments: ["notes"] })).toEqual({ status: "unavailable" })
+    expect(bridge.query).not.toHaveBeenCalled()
+    client.dispose()
+  })
+
+  test("keeps certified resource delivery bytes and hot projection visits constant at 1/1k/10k", async () => {
+    const deliveryByteLengths: number[] = []
+    for (const nodeCount of [1, 1_000, 10_000]) {
+      const bridge = transport(projectionWithNodeCount(nodeCount))
+      const client = await openDesktopCanvasRendererSession({ ref, transport: bridge })
+      let hotVisitedEntries = 0
+      let fullNotifications = 0
+      client.subscribe(() => {
+        fullNotifications += 1
+        hotVisitedEntries += client.getProjection().nodes.length
+      })
+      client.subscribeProjectionChanges?.((change) => {
+        if (change.kind !== "patch") return
+        hotVisitedEntries += change.changes.nodes.length + change.changes.edges.length
+      })
+      const result = resourceResult()
+      deliveryByteLengths.push(encodeRestrictedJcs(result.delivery).byteLength)
+
+      const delivered = await client.runResourceMutation(async () => result)
+
+      expect(delivered.projectionDelivered).toBeTrue()
+      expect(bridge.query).not.toHaveBeenCalled()
+      expect(fullNotifications).toBe(0)
+      expect(hotVisitedEntries).toBe(1)
+      expect(client.resolveNodeEntity(createdEntity.id)).toEqual(createdEntity)
+      client.dispose()
+    }
+    expect(new Set(deliveryByteLengths).size).toBe(1)
+  }, 30_000)
+
+  test("falls back to one full query for a mismatched or rejected certified patch", async () => {
+    for (const patch of [
+      resourcePatch(parseDigest("9".repeat(64))),
+      resourcePatch(parseDigest("2".repeat(64)), parseDigest("2".repeat(64))),
+    ]) {
+      const bridge = transport()
+      const client = await openDesktopCanvasRendererSession({ ref, transport: bridge })
+      bridge.setProjection(projectionWithCreated())
+
+      const delivered = await client.runResourceMutation(async () => resourceResult(patch))
+
+      expect(delivered.projectionDelivered).toBeTrue()
+      expect(delivered.preparedResources).toEqual([])
+      expect(bridge.query).toHaveBeenCalledTimes(1)
+      expect(client.resolveNodeEntity(createdEntity.id)).toEqual(createdEntity)
+      client.dispose()
+    }
   })
 
   test("publishes an undo presentation immediately and reconciles it with Main's actual root", async () => {
@@ -355,7 +618,7 @@ describe("Desktop Canvas renderer collaboration client", () => {
     const pendingUndo = client.undo()
     expect(client.visualOverlay?.getSnapshot().operations[0]?.items).toMatchObject([
       {
-        entity: { entityId: "node-one", incarnation: id(2), kind: "node" },
+        entity: { entityId: entity.id, incarnation: entity.incarnation, kind: "node" },
         kind: "replace-presentation",
         position: { x: 0, y: 0 },
         size: { height: 180, width: 320 },
@@ -471,43 +734,11 @@ describe("Desktop Canvas renderer collaboration client", () => {
 
   test("undoes an owner-derived resource creation without predicting its entity id", async () => {
     const bridge = transport()
-    const createdEntity = { kind: "node" as const, id: "node-created", incarnation: id(5) }
     let releaseResource!: () => void
     const operation = () =>
       new Promise<CanvasResourceAddResult>((resolve) => {
         releaseResource = () => {
-          const next = projection(0, {
-            canUndo: true,
-            document: createCanvasDocument({
-              id: ref.canvasId,
-              nodes: [
-                createTextNode({
-                  id: entity.id,
-                  metadata: {},
-                  position: { x: 0, y: 0 },
-                  resourceState: { status: "stale" },
-                }),
-                createTextNode({
-                  id: createdEntity.id,
-                  label: "Created by Main",
-                  metadata: {},
-                  position: { x: 320, y: 0 },
-                  resourceState: { status: "stale" },
-                }),
-              ],
-            }),
-            nodeEntities: [
-              { nodeId: entity.id, entity },
-              { nodeId: createdEntity.id, entity: createdEntity },
-            ],
-          })
-          bridge.setProjection(next)
-          resolve({
-            createdNodeIds: [createdEntity.id],
-            delivery: { status: "accepted", acceptedFrameDigest: frameDigest("d"), projection: next },
-            operationReceipt: receipt,
-            warnings: [],
-          })
+          resolve(resourceResult())
         }
       })
     let releaseUndo!: () => void
@@ -580,7 +811,7 @@ describe("Desktop Canvas renderer collaboration client", () => {
     const pendingRedo = client.redo()
     expect(client.visualOverlay?.getSnapshot().operations.at(-1)?.items).toMatchObject([
       {
-        entity: { entityId: "node-one", incarnation: id(2), kind: "node" },
+        entity: { entityId: entity.id, incarnation: entity.incarnation, kind: "node" },
         kind: "replace-presentation",
         position: { x: 6, y: 0 },
         size: { height: 180, width: 320 },

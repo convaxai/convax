@@ -1,11 +1,15 @@
 import type { CanvasDocumentRef, CanvasResourceSource } from "@convax/canvas/application"
-import type { BoundedOperationReceipt } from "@convax/canvas/collaboration"
-import type { CanvasDocument, CanvasPoint } from "@convax/canvas/core"
+import type {
+  BoundedOperationReceipt,
+  CanvasCertifiedProjectionPatch,
+  CanvasEntityRef,
+  CanvasRendererResourceHierarchyDelta,
+} from "@convax/canvas/collaboration"
+import type { CanvasPoint, CanvasResourceRuntimeState } from "@convax/canvas/core"
 import type { Digest, Id128 } from "@convax/collaboration"
-import type { CanvasSessionProjectionDto } from "./canvas-session-contracts"
 
 export const desktopProtocolChannel = "desktop:protocol-version"
-export const desktopProtocolVersion = "convax.desktop-ipc/44"
+export const desktopProtocolVersion = "convax.desktop-ipc/47"
 export const canvasResourceHydrationMaximumTargetCount = 4_096
 export const canvasResourceHydrationMaximumTargetIdLength = 256
 export const canvasResourceIpcChannel = "canvas:resource-add"
@@ -32,9 +36,16 @@ export interface CanvasTextResourceClient {
 
 export type CanvasResourceProjectionDelivery =
   | Readonly<{
-      status: "accepted"
+      format: "convax.canvas-resource-certified-projection-delivery"
+      status: "certified"
+      ref: CanvasDocumentRef
+      sessionId: Id128
       acceptedFrameDigest: Digest
-      projection: CanvasSessionProjectionDto
+      canUndo: boolean
+      canRedo: boolean
+      patch: CanvasCertifiedProjectionPatch
+      resourceHierarchy: CanvasRendererResourceHierarchyDelta
+      runtimePatches: readonly CanvasResourceRuntimePatch[]
     }>
   | Readonly<{ status: "unavailable" }>
 
@@ -43,6 +54,26 @@ export interface CanvasResourceAddResult {
   operationReceipt: BoundedOperationReceipt
   delivery: CanvasResourceProjectionDelivery
   warnings: readonly string[]
+}
+
+export interface CanvasResourceRuntimePatch {
+  readonly nodeId: string
+  readonly state: CanvasResourceRuntimeState
+}
+
+export interface CanvasResourceHydrationTarget {
+  readonly entity: CanvasEntityRef & { readonly kind: "node" }
+  readonly nodeId: string
+}
+
+export interface CanvasResourceHydrateStaleInput {
+  readonly ref: CanvasDocumentRef
+  readonly sessionId: Id128
+  readonly targets: readonly CanvasResourceHydrationTarget[]
+}
+
+export interface CanvasResourceHydrateStaleResult {
+  readonly patches: readonly CanvasResourceRuntimePatch[]
 }
 
 export interface CanvasResourceAddInput {
@@ -106,16 +137,10 @@ export interface CanvasConnectedImageReadResult {
   size: number
 }
 
-export interface CanvasResourceHydrateStaleInput {
-  ref: CanvasDocumentRef
-  sessionId: Id128
-  nodeIds?: readonly string[]
-}
-
 export interface CanvasResourceClient {
   add(input: CanvasResourceAddInput): Promise<CanvasResourceAddResult>
   createLocalFileToken(file: File): string
-  hydrateStale(input: CanvasResourceHydrateStaleInput): Promise<CanvasDocument>
+  hydrateStale(input: CanvasResourceHydrateStaleInput): Promise<CanvasResourceHydrateStaleResult>
   readConnectedImage(input: CanvasConnectedImageReadInput): Promise<CanvasConnectedImageReadResult>
   relink(input: CanvasResourceRelinkInput): Promise<CanvasResourceRelinkResult>
   saveEditableCopy(input: CanvasResourceSaveEditableCopyInput): Promise<CanvasResourceRelinkResult>

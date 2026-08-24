@@ -288,6 +288,7 @@ function genesis(): Y.Doc {
     protocolDigest,
     schemaDigest: PROJECT_INDEX_PROTOCOL_SCHEMA_ARTIFACT_DIGEST,
     uriProtocolDigest: digest("uri"),
+    migrationImportBaseProofDigest: null,
   }, rootEntry)
 }
 

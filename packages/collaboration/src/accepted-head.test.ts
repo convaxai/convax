@@ -3,176 +3,141 @@ import * as Y from "yjs"
 import {
   createAcceptedHeadMaterializationEvidence,
   createLocalAcceptedHeadMaterializationEvidence,
+  parseAcceptedHeadDurableDeltaMetadata,
   replicaActorHeadSetDigest,
   validateAcceptedHeadMaterializationEvidence,
 } from "./accepted-head"
 import { causalFrontierDigest } from "./causal"
 import { encodeBase64url, parseActorId, parseDigest, parseId128, parseProjectId, parseUint64 } from "./codecs"
 import type { AcceptedHeadMaterializationEvidence, AcceptedHeadView } from "./ports"
-import { encodeFullUpdate, encodeStateVector } from "./yjs-codec"
-import { nativeOrdinarySha256, ordinarySha256 } from "./digest"
+import { encodeCandidateDelta, encodeFullUpdate, encodeStateVector, yjsUpdateDigest } from "./yjs-codec"
 import * as publicSurface from "./index"
 
-describe("accepted-head materialization evidence", () => {
-  test("native SHA has portable parity and falls back when subtle fails", async () => {
-    const bytes = new TextEncoder().encode("accepted-head-native-parity")
-    expect(await nativeOrdinarySha256(bytes)).toBe(ordinarySha256(bytes))
-    expect(
-      await nativeOrdinarySha256(bytes, {
-        digest: async () => {
-          throw new Error("subtle unavailable")
-        },
-      }),
-    ).toBe(ordinarySha256(bytes))
-  })
-  test("does not expose the evidence issuer from the package root", () => {
+describe("accepted-head delta commitment evidence", () => {
+  test("does not expose the private issuer from the package root", () => {
     expect("createAcceptedHeadMaterializationEvidence" in publicSurface).toBe(false)
+    expect("createLocalAcceptedHeadMaterializationEvidence" in publicSurface).toBe(false)
   })
 
-  test("binds one validated post state to the exact base, frame, frontier, and actor heads", () => {
-    const baseDocument = new Y.Doc()
-    const postDocument = new Y.Doc()
-    const scope = projectIndexScope()
-    const frontier = Object.freeze({ format: "convax.causal-frontier" as const, heads: Object.freeze([]) })
-    const actorHeads = Object.freeze({
-      format: "convax.replica-actor-head-set" as const,
-      scope,
-      heads: Object.freeze([]),
-    })
-    const previous: AcceptedHeadView = Object.freeze({
-      scope,
-      headDigest: digest("1"),
-      frontier,
-      frontierDigest: causalFrontierDigest(frontier),
-      actorHeads,
-      fullUpdate: encodeFullUpdate(baseDocument),
-      stateVector: encodeStateVector(baseDocument),
-      canonicalStateDigest: digest("2"),
-    })
-    Y.applyUpdate(postDocument, previous.fullUpdate)
-    postDocument.getMap("entries").set("resource", { kind: "file" })
-    const ref = Object.freeze({
-      scope,
-      frameDigest: digest("3"),
-      actorId: actorId(),
-      actorSequence: parseUint64("1"),
-      operationId: parseId128(encodeBase64url(new Uint8Array(16).fill(4))),
-    })
-    const nextHead = Object.freeze({
-      format: "convax.causal-head-ref" as const,
-      actorId: ref.actorId,
-      actorSequence: ref.actorSequence,
-      frameDigest: ref.frameDigest,
-      lamport: parseUint64("1"),
-    })
-    const resultingFrontier = Object.freeze({
-      format: "convax.causal-frontier" as const,
-      heads: Object.freeze([nextHead]),
-    })
-    const evidence = createAcceptedHeadMaterializationEvidence({
-      previous,
-      ref,
-      nextHead,
-      resultingFrontier,
-      postDocument,
-      canonicalStateDigest: digest("5"),
-    })
-
-    const accepted = validateAcceptedHeadMaterializationEvidence({ previous, ref, evidence })
-    expect(accepted).not.toBe("rejected")
-    if (accepted === "rejected") throw new Error("expected accepted materialization evidence")
-    expect(accepted.headDigest).toBe(previous.headDigest)
-    expect(accepted.frontierDigest).toBe(causalFrontierDigest(resultingFrontier))
-    expect(replicaActorHeadSetDigest(accepted.actorHeads)).toBe(evidence.resultingActorHeadsDigest)
-    expect(accepted.fullUpdate).toEqual(encodeFullUpdate(postDocument))
-    expect(accepted.stateVector).toEqual(encodeStateVector(postDocument))
-    expect(accepted.canonicalStateDigest).toBe(digest("5"))
-    expect(
-      validateAcceptedHeadMaterializationEvidence({
-        previous,
-        ref,
-        evidence: { ...evidence },
-      }),
-    ).toBe("rejected")
-
-    baseDocument.destroy()
-    postDocument.destroy()
-  })
-
-  test("async local evidence has exact sync parity and remains privately authoritative", async () => {
+  test("binds one metadata-only transition to the exact prior head and frame", () => {
     const fixture = evidenceFixture()
     try {
-      const local = await createLocalAcceptedHeadMaterializationEvidence({
-        previous: fixture.previous,
-        ref: fixture.ref,
-        nextHead: fixture.nextHead,
-        resultingFrontier: fixture.resultingFrontier,
-        postDocument: fixture.postDocument,
-        canonicalStateDigest: digest("5"),
-      })
-      expect(local).toEqual(fixture.evidence)
-      local.fullUpdate.fill(0xff)
-      local.stateVector.fill(0xff)
-      const accepted = validateAcceptedHeadMaterializationEvidence({
-        previous: fixture.previous,
-        ref: fixture.ref,
-        evidence: local,
-      })
-      expect(accepted).not.toBe("rejected")
-      if (accepted === "rejected") throw new Error("expected private local evidence")
-      expect(accepted.fullUpdate).toEqual(encodeFullUpdate(fixture.postDocument))
-      expect(accepted.stateVector).toEqual(encodeStateVector(fixture.postDocument))
-      expect(accepted.frontierDigest).toBe(causalFrontierDigest(fixture.resultingFrontier))
-    } finally {
-      fixture.baseDocument.destroy()
-      fixture.postDocument.destroy()
-    }
-  })
-
-  test("rejects stale bases, mismatched frames, and mutated post-state fields", () => {
-    const fixture = evidenceFixture()
-    try {
-      expect(
-        validateAcceptedHeadMaterializationEvidence({
-          previous: { ...fixture.previous, headDigest: digest("9") },
-          ref: fixture.ref,
-          evidence: fixture.evidence,
-        }),
-      ).toBe("rejected")
-      expect(
-        validateAcceptedHeadMaterializationEvidence({
-          previous: fixture.previous,
-          ref: { ...fixture.ref, frameDigest: digest("8") },
-          evidence: fixture.evidence,
-        }),
-      ).toBe("rejected")
-      const changedFullUpdate = Uint8Array.from(fixture.evidence.fullUpdate)
-      changedFullUpdate[0] = (changedFullUpdate[0] ?? 0) ^ 1
-      expect(rejects(fixture, { fullUpdate: changedFullUpdate })).toBe(true)
-      expect(
-        rejects(fixture, { stateVector: Uint8Array.of(1) as AcceptedHeadMaterializationEvidence["stateVector"] }),
-      ).toBe(true)
-      expect(rejects(fixture, { canonicalStateDigest: digest("7") })).toBe(true)
-    } finally {
-      fixture.baseDocument.destroy()
-      fixture.postDocument.destroy()
-    }
-  })
-
-  test("ignores in-place mutation of issued public typed-array bytes", () => {
-    const fixture = evidenceFixture()
-    try {
-      const expected = encodeFullUpdate(fixture.postDocument)
-      fixture.evidence.fullUpdate[0] = (fixture.evidence.fullUpdate[0] ?? 0) ^ 1
       const accepted = validateAcceptedHeadMaterializationEvidence({
         previous: fixture.previous,
         ref: fixture.ref,
         evidence: fixture.evidence,
       })
       expect(accepted).not.toBe("rejected")
-      if (accepted === "rejected") throw new Error("expected private issued bytes")
-      expect(accepted.fullUpdate).toEqual(expected)
-      expect(accepted.fullUpdate).not.toEqual(fixture.evidence.fullUpdate)
+      if (accepted === "rejected") throw new Error("expected accepted delta evidence")
+      expect(accepted.transition.frontierDigest).toBe(causalFrontierDigest(fixture.resultingFrontier))
+      expect(replicaActorHeadSetDigest(accepted.transition.actorHeads)).toBe(fixture.evidence.resultingActorHeadsDigest)
+      expect(accepted.transition.stateVector).toEqual(encodeStateVector(fixture.postDocument))
+      expect(accepted.transition.canonicalStateDigest).toBe(digest("5"))
+      expect(accepted.transition.materializationDigest).toBe(fixture.evidence.resultingMaterializationDigest)
+      expect(accepted.durableDelta.stateVector).toEqual(accepted.transition.stateVector)
+      expect(fixture.evidence.work).toEqual({
+        fullUpdateEncodes: 0,
+        historicalBytesVisited: 0,
+        candidateFullClones: 0,
+      })
+      expect("fullUpdate" in fixture.evidence).toBe(false)
+      expect("fullUpdateDigest" in fixture.evidence).toBe(false)
+      expect("baseMaterializedStateDigest" in fixture.evidence).toBe(false)
+      expect("stateVector" in fixture.evidence).toBe(false)
+      expect("resultingFrontier" in fixture.evidence).toBe(false)
+      expect("resultingActorHeads" in fixture.evidence).toBe(false)
+      expect(() => parseAcceptedHeadDurableDeltaMetadata(fixture.evidence)).toThrow(
+        "AcceptedHeadDurableDeltaMetadata",
+      )
+    } finally {
+      fixture.baseDocument.destroy()
+      fixture.postDocument.destroy()
+    }
+  })
+
+  test("local evidence has no full-update work and reports candidate clone structure", () => {
+    const fixture = evidenceFixture()
+    try {
+      const local = createLocalAcceptedHeadMaterializationEvidence({
+        previous: fixture.previous,
+        ref: fixture.ref,
+        nextHead: fixture.nextHead,
+        resultingFrontier: fixture.resultingFrontier,
+        postStateVector: encodeStateVector(fixture.postDocument),
+        yjsUpdateDigest: fixture.yjsUpdateDigest,
+        canonicalStateDigest: digest("5"),
+        candidateFullClones: 1,
+      })
+      expect(local.work).toEqual({
+        fullUpdateEncodes: 0,
+        historicalBytesVisited: 0,
+        candidateFullClones: 1,
+      })
+      expect(local.resultingMaterializationDigest).toBe(fixture.evidence.resultingMaterializationDigest)
+    } finally {
+      fixture.baseDocument.destroy()
+      fixture.postDocument.destroy()
+    }
+  })
+
+  test("rejects stale metadata, cross-frame reuse, structural clones, and digest tampering", () => {
+    const fixture = evidenceFixture()
+    try {
+      expect(rejects(fixture, { previous: { ...fixture.previous, headDigest: digest("9") } })).toBe(true)
+      expect(rejects(fixture, { ref: { ...fixture.ref, frameDigest: digest("8") } })).toBe(true)
+      expect(rejects(fixture, { evidence: { ...fixture.evidence } as AcceptedHeadMaterializationEvidence })).toBe(true)
+      expect(rejects(fixture, {
+        evidence: {
+          ...fixture.evidence,
+          resultingMaterializationDigest: digest("7"),
+        } as AcceptedHeadMaterializationEvidence,
+      })).toBe(true)
+      const staleVector = Uint8Array.of(1) as AcceptedHeadView["stateVector"]
+      expect(rejects(fixture, { previous: { ...fixture.previous, stateVector: staleVector } })).toBe(true)
+    } finally {
+      fixture.baseDocument.destroy()
+      fixture.postDocument.destroy()
+    }
+  })
+
+  test("does not visit or bind historical full-update bytes on the hot validator", () => {
+    const fixture = evidenceFixture()
+    try {
+      fixture.previous.fullUpdate.fill(0xff)
+      const accepted = validateAcceptedHeadMaterializationEvidence({
+        previous: fixture.previous,
+        ref: fixture.ref,
+        evidence: fixture.evidence,
+      })
+      expect(accepted).not.toBe("rejected")
+      expect(fixture.evidence.work.historicalBytesVisited).toBe(0)
+    } finally {
+      fixture.baseDocument.destroy()
+      fixture.postDocument.destroy()
+    }
+  })
+
+  test("mutable durable projections cannot alter the private issued transition", () => {
+    const fixture = evidenceFixture()
+    try {
+      const expected = encodeStateVector(fixture.postDocument)
+      const first = validateAcceptedHeadMaterializationEvidence({
+        previous: fixture.previous,
+        ref: fixture.ref,
+        evidence: fixture.evidence,
+      })
+      expect(first).not.toBe("rejected")
+      if (first === "rejected") throw new Error("expected private issued transition")
+      first.durableDelta.stateVector.fill(0xff)
+      const second = validateAcceptedHeadMaterializationEvidence({
+        previous: fixture.previous,
+        ref: fixture.ref,
+        evidence: fixture.evidence,
+      })
+      expect(second).not.toBe("rejected")
+      if (second === "rejected") throw new Error("expected private issued transition")
+      expect(second.transition.stateVector).toEqual(expected)
+      expect(second.durableDelta.stateVector).toEqual(expected)
     } finally {
       fixture.baseDocument.destroy()
       fixture.postDocument.destroy()
@@ -199,7 +164,9 @@ function evidenceFixture() {
     fullUpdate: encodeFullUpdate(baseDocument),
     stateVector: encodeStateVector(baseDocument),
     canonicalStateDigest: digest("2"),
+    materializationDigest: digest("6"),
   })
+  Y.applyUpdate(postDocument, previous.fullUpdate)
   postDocument.getMap("entries").set("resource", "value")
   const ref = Object.freeze({
     scope,
@@ -219,28 +186,42 @@ function evidenceFixture() {
     format: "convax.causal-frontier" as const,
     heads: Object.freeze([nextHead]),
   })
+  const update = encodeCandidateDelta(postDocument, previous.stateVector)
+  const updateDigest = yjsUpdateDigest(update)
   const evidence = createAcceptedHeadMaterializationEvidence({
     previous,
     ref,
     nextHead,
     resultingFrontier,
-    postDocument,
+    postStateVector: encodeStateVector(postDocument),
+    yjsUpdateDigest: updateDigest,
     canonicalStateDigest: digest("5"),
   })
-  return { baseDocument, postDocument, previous, ref, nextHead, resultingFrontier, evidence }
+  return {
+    baseDocument,
+    postDocument,
+    previous,
+    ref,
+    nextHead,
+    resultingFrontier,
+    yjsUpdateDigest: updateDigest,
+    evidence,
+  }
 }
 
 function rejects(
   fixture: ReturnType<typeof evidenceFixture>,
-  change: Partial<AcceptedHeadMaterializationEvidence>,
+  change: Partial<{
+    previous: AcceptedHeadView
+    ref: typeof fixture.ref
+    evidence: AcceptedHeadMaterializationEvidence
+  }>,
 ): boolean {
-  return (
-    validateAcceptedHeadMaterializationEvidence({
-      previous: fixture.previous,
-      ref: fixture.ref,
-      evidence: { ...fixture.evidence, ...change },
-    }) === "rejected"
-  )
+  return validateAcceptedHeadMaterializationEvidence({
+    previous: change.previous ?? fixture.previous,
+    ref: change.ref ?? fixture.ref,
+    evidence: change.evidence ?? fixture.evidence,
+  }) === "rejected"
 }
 
 function projectIndexScope() {

@@ -6,18 +6,20 @@ import path from "node:path"
 import {
   CANVAS_PROTOCOL_SCHEMA_ARTIFACT_DIGEST,
   buildCanvasProjectionIndex,
+  canvasSnapshotFromValidatedOwnerState,
   createCanvasReconstructionYDoc,
   createCanvasDocumentOwnerRuntime,
   createCanvasYDoc,
   derivedNodeRef,
   encodeCanvasCanonicalState,
+  readCanvasCertifiedProjectionIdentity,
   validateCanvasYDoc,
   type CanvasTypedIntentUnion,
 } from "@convax/canvas/collaboration"
 import {
   CollaborationKernel,
+  acceptedHeadMaterializedStateDigest,
   applyYjsUpdate,
-  canonicalStateDigest,
   causalFrontierDigest,
   encodeBase64url,
   encodeFullUpdate,
@@ -89,7 +91,7 @@ afterEach(async () => {
   await Promise.all(roots.splice(0).map((root) => fs.rm(root, { recursive: true, force: true })))
 })
 
-describe("real Canvas collaboration session", () => {
+describe.skipIf(process.platform === "win32")("real Canvas collaboration session", () => {
   test("reopens disconnected durable edits, reconnects over CVXPEER2, converges and ACKs only durable receive", async () => {
     const authority = await loadHistoricalTestAuthority()
     const runtime = createCanvasRuntime(authority)
@@ -214,7 +216,7 @@ function createCanvasRuntime(authority: CurrentProtocolAuthority): DocumentOwner
   return createCanvasDocumentOwnerRuntime(authority)
 }
 
-function canvasScope(): DocumentScope {
+function canvasScope(): DocumentScope & { readonly docKind: "canvas" } {
   return Object.freeze({
     projectId: parseProjectId("project"),
     projectEpoch: id128(1),
@@ -227,7 +229,7 @@ function canvasScope(): DocumentScope {
 function createGenesis(
   authority: CurrentProtocolAuthority,
   runtime: DocumentOwnerRuntime<"canvas">,
-  scope: DocumentScope,
+  scope: DocumentScope & { readonly docKind: "canvas" },
 ): { acceptedBase: Omit<NodeAcceptedReplicaHead, "headDigest">; checkpointBytes: Uint8Array; checkpointDigest: Digest } {
   const document = createCanvasYDoc(
     scope,
@@ -239,22 +241,33 @@ function createGenesis(
   try {
     const fullUpdate = encodeFullUpdate(document)
     const frontier = Object.freeze({ format: "convax.causal-frontier" as const, heads: Object.freeze([]) })
-    const acceptedBase = Object.freeze({
+    const validated = runtime.protocolPort.validateBase(document)
+    if (typeof validated === "string") throw new Error(`Canvas genesis owner state was ${validated}`)
+    const snapshot = canvasSnapshotFromValidatedOwnerState(validated)
+    const projectionIdentity = snapshot && readCanvasCertifiedProjectionIdentity(snapshot)
+    if (!projectionIdentity) throw new Error("Canvas genesis owner state commitment is unavailable")
+    const checkpointDigest = ordinarySha256(fullUpdate)
+    const acceptedBaseWithoutMaterialization = Object.freeze({
       scope,
       frontier,
       frontierDigest: causalFrontierDigest(frontier),
       actorHeads: Object.freeze({ format: "convax.replica-actor-head-set" as const, scope, heads: Object.freeze([]) }),
       fullUpdate,
       stateVector: encodeStateVector(document),
-      canonicalStateDigest: canonicalStateDigest(
-        runtime.protocolPort.schemaDigest,
-        encodeCanvasCanonicalState(document),
-      ),
+      canonicalStateDigest: projectionIdentity.stateCommitmentDigest,
+    })
+    const acceptedBase = Object.freeze({
+      ...acceptedBaseWithoutMaterialization,
+      materializationDigest: acceptedHeadMaterializedStateDigest({
+        ...acceptedBaseWithoutMaterialization,
+        headDigest: checkpointDigest,
+        materializationDigest: checkpointDigest,
+      }),
     })
     return {
       acceptedBase,
       checkpointBytes: new Uint8Array(fullUpdate),
-      checkpointDigest: ordinarySha256(fullUpdate),
+      checkpointDigest,
     }
   } finally {
     document.destroy()
@@ -280,14 +293,14 @@ function replicaIdentity(seed: number): ReplicaIdentity {
 async function openReplica(input: {
   authority: CurrentProtocolAuthority
   runtime: DocumentOwnerRuntime<"canvas">
-  scope: DocumentScope
+  scope: DocumentScope & { readonly docKind: "canvas" }
   genesis: ReturnType<typeof createGenesis>
   collaborationDirectory: string
   identity: ReplicaIdentity
   initialize: boolean
 }) {
   const createFacts = () => createEmptyCanvasFacts(input.runtime)
-  const materializers = createProjectCollaborationMaterializerRegistry()
+  const materializers = createProjectCollaborationMaterializerRegistry(input.authority)
   const persistence = await NodeCollaborationPersistence.open({
     collaborationDirectory: input.collaborationDirectory,
     localActorId: input.identity.actorId,

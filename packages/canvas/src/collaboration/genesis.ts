@@ -3,8 +3,8 @@ import {
   assertDenseArray,
   assertDocumentOwnerRuntime,
   assertExactKeys,
-  canonicalStateDigest as computeCanonicalStateDigest,
   causalFrontierDigest,
+  consumeOwnerStateCommitmentDigest,
   decodeRestrictedJcs,
   encodeFullUpdate,
   encodeRestrictedJcs,
@@ -108,6 +108,9 @@ export interface ValidatedCanvasGenesisIdentity {
   readonly scope: DocumentScope
   readonly identity: CanvasIdentity
   readonly authorActorId: ActorId
+  readonly authorReplicaId: ReplicaId
+  readonly authorAuthorizationDigest: Digest
+  readonly authorAuthorityKind: "local-project-owner" | "team-replica"
   readonly authorAuthorityDigest: Digest
 }
 
@@ -259,7 +262,8 @@ export type BuildCanvasGenesisProofCarrierResult =
       acceptedBase: CanvasGenesisAcceptedBase
       validatedIdentity: ValidatedCanvasGenesisIdentity
     }>
-  | Readonly<{ status: "pending" | "rejected" }>
+  | Readonly<{ status: "pending" }>
+  | Readonly<{ status: "rejected"; code?: string }>
 
 export async function buildCanvasGenesisProofCarrier(input: {
   readonly authority: CurrentProtocolAuthority
@@ -269,6 +273,41 @@ export async function buildCanvasGenesisProofCarrier(input: {
   readonly projectIndexRouteDependencyFrameDigest: Digest
   readonly author: CanvasGenesisBuildAuthor
 }): Promise<BuildCanvasGenesisProofCarrierResult> {
+  return buildCanvasGenesisProofCarrierInternal({
+    ...input,
+    projectIndexRouteDependencyKind: "frame",
+  })
+}
+
+/** Fresh current non-empty Canvas base used only by the sealed predecessor import. */
+export async function buildImmediatePredecessorImportedCanvasGenesisProofCarrier(input: {
+  readonly authority: CurrentProtocolAuthority
+  readonly runtime: DocumentOwnerRuntime<"canvas">
+  readonly verifier: CanvasGenesisProofCarrierVerifier
+  readonly scope: DocumentScope
+  readonly projectIndexRouteDependencyFrameDigest: Digest
+  readonly author: CanvasGenesisBuildAuthor
+  readonly document: Y.Doc
+}): Promise<BuildCanvasGenesisProofCarrierResult> {
+  if (!(input.document instanceof Y.Doc)) {
+    return Object.freeze({ status: "rejected", code: "canvas-genesis-migration-document-invalid" })
+  }
+  return buildCanvasGenesisProofCarrierInternal({
+    ...input,
+    projectIndexRouteDependencyKind: "migration-import-base",
+  })
+}
+
+async function buildCanvasGenesisProofCarrierInternal(input: {
+  readonly authority: CurrentProtocolAuthority
+  readonly runtime: DocumentOwnerRuntime<"canvas">
+  readonly verifier: CanvasGenesisProofCarrierVerifier
+  readonly scope: DocumentScope
+  readonly projectIndexRouteDependencyFrameDigest: Digest
+  readonly projectIndexRouteDependencyKind: "frame" | "migration-import-base"
+  readonly author: CanvasGenesisBuildAuthor
+  readonly document?: Y.Doc
+}): Promise<BuildCanvasGenesisProofCarrierResult> {
   try {
     assertDocumentOwnerRuntime(input.runtime, input.authority)
     const canvasArtifactDigest = selectedCanvasArtifact(input.authority)
@@ -276,27 +315,34 @@ export async function buildCanvasGenesisProofCarrier(input: {
       !liveVerifiers.has(input.verifier) ||
       input.verifier.canvasArtifactDigest !== canvasArtifactDigest ||
       input.runtime.artifactDigest !== canvasArtifactDigest
-    ) return Object.freeze({ status: "rejected" })
+    ) return Object.freeze({ status: "rejected", code: "canvas-genesis-verifier-not-live" })
     const scope = parseDocumentScope(input.scope)
-    if (scope.docKind !== "canvas") return Object.freeze({ status: "rejected" })
+    if (scope.docKind !== "canvas") return Object.freeze({ status: "rejected", code: "canvas-genesis-scope-invalid" })
     const author = parseBuildAuthor(input.author)
     const validationArtifacts = selectedValidationArtifacts(input.authority)
     if (!sameArtifactMaterial(author.validationArtifacts, validationArtifacts)) {
-      return Object.freeze({ status: "rejected" })
+      return Object.freeze({ status: "rejected", code: "canvas-genesis-author-artifact-mismatch" })
     }
-    const document = createCanvasYDoc(
-      scope,
-      canvasArtifactDigest,
-      input.authority.protocolDigest,
-      parseDigest(input.projectIndexRouteDependencyFrameDigest),
-      author.authorReplicaId,
-    )
+    const ownsDocument = input.document === undefined
+    const document = input.document ?? createCanvasYDoc(
+        scope,
+        canvasArtifactDigest,
+        input.authority.protocolDigest,
+        parseDigest(input.projectIndexRouteDependencyFrameDigest),
+        author.authorReplicaId,
+      )
     try {
       const fullUpdate = encodeFullUpdate(document)
       const stateVector = encodeStateVector(document)
       const canonicalState = input.runtime.protocolPort.canonicalStateBytes(document)
-      if (canonicalState === "rejected") return Object.freeze({ status: "rejected" })
-      const canonicalStateDigest = computeCanonicalStateDigest(canvasArtifactDigest, canonicalState)
+      if (canonicalState === "rejected") {
+        return Object.freeze({ status: "rejected", code: "canvas-genesis-canonical-state-invalid" })
+      }
+      const validatedBase = input.runtime.protocolPort.validateBase(document)
+      if (typeof validatedBase === "string") {
+        return Object.freeze({ status: "rejected", code: `canvas-genesis-base-${validatedBase}` })
+      }
+      const canonicalStateDigest = requireCanvasStateCommitmentDigest(input.runtime, document, validatedBase)
       const frontier: CausalFrontier = Object.freeze({ format: "convax.causal-frontier", heads: Object.freeze([]) })
       const actorHeads: ReplicaActorHeadSet = Object.freeze({
         format: "convax.replica-actor-head-set",
@@ -348,7 +394,16 @@ export async function buildCanvasGenesisProofCarrier(input: {
         validationArtifacts,
       })
       const verified = input.verifier(proofCarrierExactBytes)
-      if (verified.status !== "validated") return Object.freeze({ status: verified.status })
+      if (verified.status !== "validated") {
+        return verified.status === "pending"
+          ? Object.freeze({ status: "pending" })
+          : Object.freeze({ status: "rejected", code: verified.code })
+      }
+      if (
+        verified.identity.identity.projectIndexRouteDependency.kind !== input.projectIndexRouteDependencyKind ||
+        verified.identity.identity.projectIndexRouteDependency.digest !==
+        parseDigest(input.projectIndexRouteDependencyFrameDigest)
+      ) return Object.freeze({ status: "rejected", code: "canvas-genesis-dependency-mismatch" })
       return Object.freeze({
         status: "built",
         checkpointObjectDigest,
@@ -366,10 +421,15 @@ export async function buildCanvasGenesisProofCarrier(input: {
         validatedIdentity: verified.identity,
       })
     } finally {
-      document.destroy()
+      if (ownsDocument) document.destroy()
     }
-  } catch {
-    return Object.freeze({ status: "rejected" })
+  } catch (error) {
+    return Object.freeze({
+      status: "rejected",
+      code: error instanceof Error
+        ? `canvas-genesis-build-exception:${error.name}:${error.message}`
+        : "canvas-genesis-build-exception",
+    })
   }
 }
 
@@ -467,11 +527,12 @@ function createVerifier(
       }
       const validatedBase = runtime.protocolPort.validateBase(document)
       if (typeof validatedBase === "string") return reject("canvas-genesis-proof-state-invalid")
+      const stateCommitmentDigest = requireCanvasStateCommitmentDigest(runtime, document, validatedBase)
       const canonicalState = runtime.protocolPort.canonicalStateBytes(document)
       if (
         canonicalState === "rejected" ||
         !sameBytes(canonicalState, decoded.sections[1]!) ||
-        computeCanonicalStateDigest(canvasArtifactDigest, canonicalState) !== decoded.index.canonicalStateDigest ||
+        stateCommitmentDigest !== decoded.index.canonicalStateDigest ||
         yjsUpdateDigest(fullUpdate) !== decoded.index.fullUpdateDigest ||
         stateVectorDigest(stateVector) !== decoded.index.stateVectorDigest
       ) return reject("canvas-genesis-proof-state-invalid")
@@ -487,6 +548,9 @@ function createVerifier(
         scope: cloneScope(decoded.index.scope),
         identity: Object.freeze({ ...snapshot.identity }),
         authorActorId: authorResult.authorActorId,
+        authorReplicaId: authorResult.authorReplicaId,
+        authorAuthorizationDigest: checkpoint.core.authorAuthorizationDigest,
+        authorAuthorityKind: decoded.index.authorAuthorityKind,
         authorAuthorityDigest: authorResult.authorAuthorityDigest,
       })
       return Object.freeze({ status: "validated", exactBytesSha256, canvasArtifactDigest, identity })
@@ -498,6 +562,16 @@ function createVerifier(
   }) as CanvasGenesisProofCarrierVerifier
   Object.defineProperty(callable, "canvasArtifactDigest", { value: canvasArtifactDigest, enumerable: true })
   return Object.freeze(callable)
+}
+
+function requireCanvasStateCommitmentDigest(
+  runtime: DocumentOwnerRuntime<"canvas">,
+  document: Y.Doc,
+  state: import("@convax/collaboration").OwnerValidatedState<"canvas">,
+): Digest {
+  const digest = consumeOwnerStateCommitmentDigest(runtime, document, state)
+  if (digest === null) throw new TypeError("Canvas validated state commitment is unavailable")
+  return digest
 }
 
 interface ParsedBuildAuthor extends Omit<CanvasGenesisBuildAuthor, "validationArtifacts"> {

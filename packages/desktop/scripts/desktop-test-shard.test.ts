@@ -28,7 +28,7 @@ describe("Desktop test sharding", () => {
     }
   })
 
-  test("keeps the Windows quality matrix bound to both Desktop shards", async () => {
+  test("runs non-Desktop Windows tests once and partitions Desktop without omissions", async () => {
     const repositoryRoot = path.join(import.meta.dir, "..", "..", "..")
     const [workflow, turbo] = await Promise.all([
       readFile(path.join(repositoryRoot, ".github", "workflows", "package-boundaries.yml"), "utf8"),
@@ -38,9 +38,16 @@ describe("Desktop test sharding", () => {
     const testJob = normalizedWorkflow.split("\n  desktop-package:")[0]?.split("\n  test:")[1]
     const desktopTestTask = turbo.split('"@convax/desktop#test":')[1]?.split("\n    }")[0]
 
-    expect(testJob).toContain("desktop_shard: 1/1")
-    expect(testJob).toContain("platform: windows shard 1/2\n            desktop_shard: 1/2")
-    expect(testJob).toContain("platform: windows shard 2/2\n            desktop_shard: 2/2")
+    expect(testJob).toContain("platform: linux\n            test_scope: workspace\n            desktop_shard: 1/1")
+    expect(testJob).toContain("platform: windows non-desktop\n            test_scope: non-desktop")
+    expect(testJob).toContain(
+      "platform: windows shard 1/2\n            test_scope: desktop\n            desktop_shard: 1/2",
+    )
+    expect(testJob).toContain(
+      "platform: windows shard 2/2\n            test_scope: desktop\n            desktop_shard: 2/2",
+    )
+    expect(testJob).toContain("run: bun turbo test --filter='!@convax/desktop'")
+    expect(testJob).toContain("run: bun --cwd packages/desktop test")
     expect(testJob).toContain("CONVAX_DESKTOP_TEST_SHARD: ${{ matrix.desktop_shard }}")
     expect(desktopTestTask).toContain('"env": ["CONVAX_DESKTOP_TEST_SHARD"]')
   })

@@ -32,6 +32,8 @@ import {
   type ReplicaEditAuthorization,
 } from "@convax/project/collaboration-protocol"
 
+import { syncDirectoryEntry } from "./filesystem-durability"
+
 const RECORD_FORMAT = "convax.desktop-team-authority-record/1" as const
 const POINTER_FORMAT = "convax.desktop-team-authority-pointer/1" as const
 
@@ -280,7 +282,7 @@ async function writeImmutable(target: string, bytes: Uint8Array): Promise<void> 
   try {
     const handle = await fs.open(target, constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | constants.O_NOFOLLOW, 0o600)
     try { await handle.writeFile(bytes); await handle.sync() } finally { await handle.close() }
-    await syncDirectory(path.dirname(target))
+    await syncDirectoryEntry(path.dirname(target))
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error
     const existing = new Uint8Array(await fs.readFile(target))
@@ -292,15 +294,10 @@ async function replaceDurably(target: string, bytes: Uint8Array): Promise<void> 
   const temporary = path.join(path.dirname(target), `.${path.basename(target)}.${randomUUID()}.tmp`)
   const handle = await fs.open(temporary, constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | constants.O_NOFOLLOW, 0o600)
   try { await handle.writeFile(bytes); await handle.sync() } finally { await handle.close() }
-  try { await fs.rename(temporary, target); await syncDirectory(path.dirname(target)) } catch (error) {
+  try { await fs.rename(temporary, target); await syncDirectoryEntry(path.dirname(target)) } catch (error) {
     await fs.unlink(temporary).catch(() => undefined)
     throw error
   }
-}
-
-async function syncDirectory(directory: string): Promise<void> {
-  const handle = await fs.open(directory, constants.O_RDONLY | constants.O_DIRECTORY | constants.O_NOFOLLOW)
-  try { await handle.sync() } finally { await handle.close() }
 }
 
 function sameBytes(left: Uint8Array, right: Uint8Array): boolean {

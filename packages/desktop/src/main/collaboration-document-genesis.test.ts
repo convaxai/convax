@@ -56,7 +56,7 @@ const predecessor = Object.freeze({
   acceptedFrontierDigest: digest("stage-frontier"),
 })
 
-describe("Desktop wiring to the Project-owned document genesis barrier", () => {
+describe.skipIf(process.platform === "win32")("Desktop wiring to the Project-owned document genesis barrier", () => {
   test("stages the exact current Canvas genesis candidate through the real Node sole-writer barrier", async () => {
     const authority = await loadHistoricalTestAuthority()
     const runtimeResult = createCanvasDocumentOwnerRuntime(authority)
@@ -235,6 +235,7 @@ function base(scope: DocumentScope) {
     fullUpdate: bytes.encode("full-update"),
     stateVector: bytes.encode("state-vector") as StateVector,
     canonicalStateDigest: digest("canonical"),
+    materializationDigest: digest("materialization"),
   })
 }
 

@@ -145,9 +145,17 @@ identity. Canvas owns one Canvas schema and reducer, Project owns one ProjectInd
 schema and reducer, and Desktop packages and loads that one descriptor.
 
 - There is no authority selector, active/pinned release pair, dual-version
-  dispatcher, promotion bridge, successor runtime, or predecessor decoder.
+  dispatcher, promotion bridge, successor runtime, or predecessor decoder on an
+  opened Project. A sealed migration-only reader may recognize the one exact
+  immediate predecessor during the pre-open gate; it is not a selectable runtime
+  protocol and cannot decode any other identity.
   Production runtime, build, and packaging never derive protocol behavior from a
   release directory, a pointer file, a durable record shape, or directory presence.
+- Each current schema artifact is a generated exact restricted-JCS review record
+  containing its owner, semantic contract and sorted exact-file SHA-256 source
+  closure. Repository checks reproduce the artifact bytes, their domain-separated
+  digests and the one descriptor anchor. Runtime never reads those source manifests;
+  they make the current literals auditable without activating an archived release.
 - A new Project creates its current ProjectIndex genesis directly and each new
   Canvas creates its current Canvas genesis directly. There is no earlier genesis
   followed by a later promotion, and sharing does not change protocol.
@@ -162,13 +170,16 @@ schema and reducer, and Desktop packages and loads that one descriptor.
   for historical verification, atomically makes the new binding current, and keeps
   editing. It never reads retired vault ciphertext, rewrites or re-signs history, or
   treats key rotation as a protocol or Project reset.
-- Frame magic, wire format, and `protocolDigest` must equal the built descriptor.
-  Anything else is `unsupported-project-data`; never try a second decoder, guess a
-  layout, or reinterpret unknown bytes.
-- Unsupported collaboration data may only be archived unchanged, exported as
-  user-visible resources, or replaced by a new current genesis after an explicit
-  user confirmation that retains a recoverable backup. Startup, checkpoint, and GC
-  never reset, delete, re-sign, renumber, or rewrite it.
+- Frame magic, wire format, and `protocolDigest` must equal the built descriptor
+  after the pre-open gate. The gate may migrate only the code-pinned exact immediate
+  predecessor: it validates the complete old causal/signature closure, rebuilds
+  semantic owner state under the one current protocol in a same-filesystem staging
+  tree, verifies that tree by reopening it, and atomically publishes it. Successful
+  publication removes the transient rollback tree; it does not retain an archive.
+  Unknown identities, corrupt bytes, missing Team authority, and any failed or
+  ambiguous migration remain unchanged and become recovery/unsupported data. They
+  are never guessed, reset, deleted, re-signed as a local owner, or passed to a
+  second runtime decoder.
 - Version-suffixed identifiers still present in this repository are legacy names of
   that one current implementation. Renaming them is mechanical cleanup and never
   admits a second protocol, decoder, kernel, or reducer.
@@ -329,13 +340,21 @@ user directory.
   or business operations. Edge adapters do not recreate domain invariants.
 - Main's per-shard `replicaDoc`, rebuilt from accepted durable causal objects, is
   the sole local ProjectIndex/Canvas document authority. A command mutates only an
-  isolated `candidateDoc`; the exact final signed frame crosses the
-  object/outbox/journal/head barrier before entering `replicaDoc`.
+  isolated `candidateDoc`; the exact final signed frame and owner-certified head
+  transition cross the one atomic accepted-frame persistence port before entering
+  `replicaDoc`. The current native layout makes a normal local root visible through
+  one checksummed WAL record and one file sync; it never exposes partially advanced
+  object, outbox, journal, or head state.
 - ProjectIndexYDoc is the only Project route/tombstone and current `shardEpoch`
   authority. The service registry is bounded anti-rollback/discovery metadata only;
   it never grants, denies, adds, removes, or blocks a Project floor scope. Each
   CanvasYDoc owns that Canvas; no JSON mirror or single revision counter spanning
   the document is a parallel authority.
+- Fixed-size mutation hot paths are bounded by changed bytes and changed keys, not
+  retained document or history cardinality. Add Text must not enumerate unrelated
+  Canvas nodes, ProjectIndex entries, canonical pairs, accepted frames, or renderer
+  entities. Cold open/recovery/checkpoint/export and genuinely bulk commands may do
+  work proportional to the state or output they explicitly process.
 - Checkpoint pruning requires both a service content certificate and exact causal
   floor ACK coverage from every active editor in the bound membership snapshot.
   Missing either gate retains history while editing and replication continue.
@@ -396,12 +415,13 @@ user directory.
 - Only `@convax/project/node` may read or write private Project metadata. Renderer,
   Preload, Agent tools, and general file operations use typed capabilities and never
   edit `.convax` JSON.
-- Unsupported portable data is never silently reset, overwritten, migrated, deleted,
-  or garbage-collected. Breaking cutovers require an explicit schema/protocol bump,
-  preserved bytes, and rejection tests. After an explicit confirmed reset, the exact
-  retired `.convax` tree remains in the inert sibling
-  `.convax-archive-<reset-token-suffix>` until the user explicitly removes it; runtime
-  open and mutation paths never inspect that archive as authority.
+- Unsupported portable data is never silently reset, overwritten, deleted, or
+  garbage-collected. The sole migration exception is the code-pinned exact immediate
+  predecessor at the Project pre-open gate. It must preserve ordinary Project files,
+  validate and rebuild all collaboration semantics into a fully verified current
+  staging tree, and use a crash-recoverable same-filesystem switch. Unknown or
+  damaged formats remain byte-exact and closed; there is no archive-as-runtime,
+  best-effort import, local-owner downgrade, or confirmation-driven data reset.
 - File publication and Canvas mutation are not one transaction. Publish without
   clobbering first; if Canvas commit fails, retain the file and report partial
   success rather than inventing a cross-file WAL.

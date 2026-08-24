@@ -13,7 +13,6 @@ import {
   effectivePluginDigest,
   edgeIdentityDigest,
   nodeIdentityDigest,
-  obstacleProjectionDigest,
 } from "./projection"
 import { materializeCanvasSemanticHistoryIntent } from "./reducer"
 import { createCanvasExternalFactContext, discoverCanvasValueDependencies } from "./external-facts"
@@ -320,7 +319,6 @@ function constructIntent(
         placement: Object.freeze({
           anchor: Object.freeze({ ...CANVAS_PLUGIN_SURFACE_ANCHOR }),
           gap: 24 as const,
-          obstacleProjectionDigest: obstacleProjectionDigest(snapshot),
         }),
         node: Object.freeze({
           ordinal,
@@ -365,7 +363,6 @@ function constructIntent(
         placement: Object.freeze({
           anchor: Object.freeze({ ...command.anchor }),
           gap: 24 as const,
-          obstacleProjectionDigest: obstacleProjectionDigest(snapshot),
         }),
         nodes: Object.freeze(nodes.map(({ ordinal, node, item }) => Object.freeze({
           ordinal,
@@ -407,7 +404,6 @@ function constructIntent(
         placement: Object.freeze({
           anchor: Object.freeze({ ...command.anchor }),
           gap: 24 as const,
-          obstacleProjectionDigest: obstacleProjectionDigest(snapshot),
         }),
         nodes: Object.freeze(nodes.map(({ ordinal, node, item }) => Object.freeze({
           ordinal,
@@ -1010,9 +1006,7 @@ function creationEndpoint(
 
 function connectableGuard(snapshot: CanvasSnapshot, ref: CanvasEntityRef & { readonly kind: "node" }) {
   const node = requireLiveNode(snapshot, ref)
-  if (buildCanvasProjectionIndex(snapshot).projection.nodes.find((candidate) =>
-    sameCanonicalValue(candidate.ref, ref),
-  )?.data.kind === "group") {
+  if (buildCanvasProjectionIndex(snapshot).nodesByKey.get(canvasEntityKey(ref))?.data.kind === "group") {
     throw new TypeError("Structural group is not connectable")
   }
   return Object.freeze({

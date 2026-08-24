@@ -18,8 +18,10 @@ import {
   decodeProjectIndexBlobPublicationCurrentnessRequest,
   projectIndexIntentDigest,
   projectIndexIntentDependencies,
+  projectIndexResourceReferenceDigest,
   validateProjectIndexYDoc,
   type ProjectEntryRecord,
+  type ProjectEntryLocationClaim,
   type ProjectIndexIntent,
 } from "../collaboration/project-index"
 import { ProjectIndexFileApplication } from "./project-index-file-application"
@@ -33,6 +35,128 @@ const uriProtocolDigest = digest("uri")
 const rootDirectoryId = `pd_${"a".repeat(64)}` as const
 
 describe("ProjectIndexFileApplication", () => {
+  test("projects only requested live paths without enumerating entries or content families for directories", async () => {
+    const document = genesis()
+    const context = constructionContext(actor(1), id128(28), "1")
+    const setup = new ProjectIndexFileApplication({
+      session: applyingSession(document, context, []),
+      facts: { async resolve() { return { status: "resolved", port: {} as never } } },
+      blobs: {
+        async admitManaged() { throw new Error("not used") },
+        async publish() { throw new Error("not used") },
+      },
+      createOperationId: () => context.operationId,
+    })
+    const created = await setup.createDirectory({ projectId, path: "Notes" })
+    if (created.status !== "committed") throw new Error("directory setup failed")
+    const snapshot = validateProjectIndexYDoc(document)
+    const state = Object.freeze({ owner: "project-index" as const, value: snapshot }) as OwnerValidatedState<"project-index">
+    const application = new ProjectIndexFileApplication({
+      session: {
+        scope: context.scope as ProjectIndexDocumentSessionPort["scope"],
+        async query(project) { return project(state) },
+        async submit() { throw new Error("not used") },
+      },
+      facts: { async resolve() { return { status: "resolved", port: {} as never } } },
+      blobs: {
+        async admitManaged() { throw new Error("not used") },
+        async publish() { throw new Error("not used") },
+      },
+      createOperationId: () => context.operationId,
+    })
+
+    await withRejectedSnapshotIteration(snapshot, async () => {
+      expect(await application.queryFileMaterializationEntries({
+        projectId,
+        paths: ["missing", "Notes", "Notes"],
+      })).toEqual({
+        projectId,
+        entries: [{ entryId: created.entryId, kind: "directory", path: "Notes", reference: null }],
+      })
+    })
+  })
+
+  test("queries the live owner snapshot on every exact-path request and does not cache across heads", async () => {
+    const document = genesis()
+    const context = constructionContext(actor(1), id128(27), "1")
+    let state = validated(document)
+    let queries = 0
+    const application = new ProjectIndexFileApplication({
+      session: {
+        scope: context.scope as ProjectIndexDocumentSessionPort["scope"],
+        async query(project) { queries += 1; return project(state) },
+        async submit() { throw new Error("not used") },
+      },
+      facts: { async resolve() { return { status: "resolved", port: {} as never } } },
+      blobs: {
+        async admitManaged() { throw new Error("not used") },
+        async publish() { throw new Error("not used") },
+      },
+      createOperationId: () => context.operationId,
+    })
+    expect((await application.queryFileMaterializationEntries({ projectId, paths: ["Notes"] })).entries).toEqual([])
+
+    const creator = new ProjectIndexFileApplication({
+      session: applyingSession(document, context, []),
+      facts: { async resolve() { return { status: "resolved", port: {} as never } } },
+      blobs: {
+        async admitManaged() { throw new Error("not used") },
+        async publish() { throw new Error("not used") },
+      },
+      createOperationId: () => context.operationId,
+    })
+    const created = await creator.createDirectory({ projectId, path: "Notes" })
+    if (created.status !== "committed") throw new Error("directory setup failed")
+    state = validated(document)
+
+    expect((await application.queryFileMaterializationEntries({ projectId, paths: ["Notes"] })).entries).toEqual([
+      { entryId: created.entryId, kind: "directory", path: "Notes", reference: null },
+    ])
+    expect(queries).toBe(2)
+  })
+
+  test("reuses the path index only for the same immutable owner snapshot", async () => {
+    const snapshot = validateProjectIndexYDoc(genesis())
+    let locationScans = 0
+    const entryLocations: ReadonlyMap<string, ProjectEntryLocationClaim> = Object.freeze({
+      get size() { return snapshot.entryLocations.size },
+      has(key: string) { return snapshot.entryLocations.has(key) },
+      get(key: string) { return snapshot.entryLocations.get(key) },
+      entries() { return snapshot.entryLocations.entries() },
+      keys() { return snapshot.entryLocations.keys() },
+      values() { locationScans += 1; return snapshot.entryLocations.values() },
+      forEach(
+        callback: (value: ProjectEntryLocationClaim, key: string, map: ReadonlyMap<string, ProjectEntryLocationClaim>) => void,
+        thisArg?: unknown,
+      ) { snapshot.entryLocations.forEach((value, key) => callback.call(thisArg, value, key, entryLocations)) },
+      [Symbol.iterator]() { return snapshot.entryLocations[Symbol.iterator]() },
+    })
+    const state = Object.freeze({
+      owner: "project-index" as const,
+      value: Object.freeze({ ...snapshot, entryLocations }),
+    }) as OwnerValidatedState<"project-index">
+    const context = constructionContext(actor(1), id128(29), "1")
+    const session = {
+      scope: context.scope,
+      async query<T>(project: (base: OwnerValidatedState<"project-index">) => T) { return project(state) },
+      async submit() { throw new Error("not used") },
+    } as ProjectIndexDocumentSessionPort
+    const application = new ProjectIndexFileApplication({
+      session,
+      facts: { async resolve() { return { status: "resolved", port: {} as never } } },
+      blobs: {
+        async admitManaged() { throw new Error("not used") },
+        async publish() { throw new Error("not used") },
+      },
+      createOperationId: () => context.operationId,
+    })
+
+    await application.queryFileMaterializationPlan({ projectId })
+    await application.queryFileMaterializationPlan({ projectId })
+
+    expect(locationScans).toBe(1)
+  })
+
   test("keeps blob fact request identity stable when the frame carries a different wire intent digest", () => {
     const context = constructionContext(actor(1), id128(10), "1")
     const snapshot = validateProjectIndexYDoc(genesis())
@@ -122,6 +246,71 @@ describe("ProjectIndexFileApplication", () => {
         storageClass: "project-file",
       }),
     ])
+  })
+
+  test("covers only an explicitly file-first accepted frame and never lets coverage deny its commit", async () => {
+    const document = genesis()
+    const context = constructionContext(actor(1), id128(42), "1")
+    const covered: unknown[] = []
+    const bytes = new TextEncoder().encode("already native\n")
+    const application = new ProjectIndexFileApplication({
+      session: applyingSession(document, context, []),
+      facts: { async resolve() { return { status: "resolved", port: {} as never } } },
+      blobs: {
+        async admitManaged() { throw new Error("not used") },
+        async publish() {},
+      },
+      createOperationId: () => context.operationId,
+      nativeMaterializationCoverage: {
+        cover(input) { covered.push(input) },
+      },
+    })
+
+    expect(await application.publishFile({
+      projectId,
+      path: "already-native.md",
+      exactBytes: bytes,
+      mime: "text/markdown",
+      contentPolicy: "conflict-preserving-text",
+    })).toMatchObject({ status: "committed" })
+    expect(covered).toEqual([])
+
+    const secondDocument = genesis()
+    const secondContext = constructionContext(actor(1), id128(43), "1")
+    const coveredApplication = new ProjectIndexFileApplication({
+      session: applyingSession(secondDocument, secondContext, []),
+      facts: { async resolve() { return { status: "resolved", port: {} as never } } },
+      blobs: {
+        async admitManaged() { throw new Error("not used") },
+        async publish() {},
+      },
+      createOperationId: () => secondContext.operationId,
+      nativeMaterializationCoverage: {
+        cover(input) {
+          covered.push(input)
+          throw new Error("disposable coverage failed")
+        },
+      },
+    })
+    const coveredResult = await coveredApplication.publishFile({
+      projectId,
+      path: "already-native.md",
+      exactBytes: bytes,
+      mime: "text/markdown",
+      contentPolicy: "conflict-preserving-text",
+      nativeMaterialization: "already-current",
+    })
+    expect(coveredResult).toMatchObject({ status: "committed" })
+    if (coveredResult.status !== "committed") throw new Error("covered publication failed")
+    expect(covered).toEqual([{
+      frameDigest: digest(`frame-${secondContext.operationId}`),
+      entries: [{
+        blobDigest: digestBytes(bytes),
+        entryId: coveredResult.entryId,
+        kind: "file",
+        path: "already-native.md",
+      }],
+    }])
   })
 
   test("reuses a verified digest and exact byte view without the compatibility copy-and-hash path", async () => {
@@ -247,6 +436,16 @@ describe("ProjectIndexFileApplication", () => {
           : "",
       }),
     ]))
+    const exact = await application(constructionContext(actor(1), id128(34), "5"))
+      .queryFileMaterializationEntries({
+        projectId,
+        paths: ["missing", "Notes/nested.md", "Notes"],
+      })
+    expect(exact.entries).toEqual([
+      expect.objectContaining({ entryId: file.entryId, kind: "file", path: "Notes/nested.md" }),
+      { entryId: winner.entryId, kind: "directory", path: "Notes", reference: null },
+    ])
+    expect(exact.entries[0]?.reference?.blob.digest).toBe(digestBytes(new TextEncoder().encode("nested\n")))
   })
 
   test("reports durable blob admission failure without committing ProjectIndex", async () => {
@@ -342,6 +541,20 @@ describe("ProjectIndexFileApplication", () => {
         storageClass: "managed-blob",
       }),
     ])
+    if (first.status !== "committed" || !first.reference) throw new Error("Managed reference fixture is absent")
+    const ownerProofDigest = projectIndexResourceReferenceDigest(first.reference)
+    expect(await projection.queryCurrentResourcesExact({
+      projectId,
+      targets: [{ uri: first.reference.canonicalUri, ownerProofDigest }],
+    })).toEqual([{
+      materializedPath: null,
+      reference: first.reference,
+      storageClass: "managed-blob",
+    }])
+    expect(await projection.queryCurrentResourcesExact({
+      projectId,
+      targets: [{ uri: first.reference.canonicalUri, ownerProofDigest: digest("stale-owner-proof") }],
+    })).toEqual([])
   })
 })
 
@@ -361,13 +574,35 @@ function applyingSession(document: Y.Doc, context: OwnerIntentConstructionContex
       )
       if (applied === "rejected") throw new Error("ProjectIndex test intent rejected")
       order.push("commit")
-      return {} as never
+      return { frame: { frameDigest: digest(`frame-${context.operationId}`) } } as never
     },
   }
 }
 
 function validated(document: Y.Doc): OwnerValidatedState<"project-index"> {
   return { owner: "project-index", value: validateProjectIndexYDoc(document) } as OwnerValidatedState<"project-index">
+}
+
+async function withRejectedSnapshotIteration<T>(
+  snapshot: ReturnType<typeof validateProjectIndexYDoc>,
+  run: () => Promise<T>,
+): Promise<T> {
+  const prototype = Object.getPrototypeOf(snapshot.entries) as object
+  const keys: readonly PropertyKey[] = ["entries", "keys", "values", "forEach", Symbol.iterator]
+  const descriptors = keys.map((key) => {
+    const descriptor = Object.getOwnPropertyDescriptor(prototype, key)
+    if (descriptor === undefined) throw new Error(`ProjectIndex snapshot map lacks ${String(key)}`)
+    Object.defineProperty(prototype, key, {
+      configurable: true,
+      value() { throw new Error("exact file query enumerated ProjectIndex snapshot history") },
+    })
+    return [key, descriptor] as const
+  })
+  try {
+    return await run()
+  } finally {
+    for (const [key, descriptor] of descriptors) Object.defineProperty(prototype, key, descriptor)
+  }
 }
 
 function genesis(): Y.Doc {
@@ -394,6 +629,7 @@ function genesis(): Y.Doc {
     protocolDigest,
     schemaDigest: PROJECT_INDEX_PROTOCOL_SCHEMA_ARTIFACT_DIGEST,
     uriProtocolDigest,
+    migrationImportBaseProofDigest: null,
   }, rootEntry)
 }
 

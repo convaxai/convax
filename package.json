@@ -25,6 +25,8 @@
     "skills:check": "bun scripts/repository-skill-check.ts",
     "package:boundaries": "bun scripts/package-boundary-check.ts",
     "plugin-api:history-policy": "bun scripts/plugin-api-history-policy.ts",
+    "protocol:generate": "bun scripts/collaboration-protocol/schema-artifacts.ts && bun scripts/collaboration-protocol/reanchor-protocol-digest.ts && bun scripts/collaboration-protocol/generate.ts",
+    "protocol:check": "bun scripts/collaboration-protocol/schema-artifacts.ts --check && bun scripts/collaboration-protocol/generate.ts --check",
     "pack:check": "bun run package:boundaries && bun scripts/package-pack-smoke.ts",
     "check:test-coverage": "bun scripts/architecture-test-coverage-check.ts",
     "check": "bun run skills:check && bun run lint && bun run typecheck && bun run test && bun run pack:check && bun --cwd packages/desktop smoke:open-project",

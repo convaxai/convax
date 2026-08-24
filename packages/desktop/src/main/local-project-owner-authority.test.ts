@@ -4,18 +4,29 @@ import os from "node:os"
 import path from "node:path"
 import {
   createWebCryptoEd25519Verifier,
+  encodeRestrictedJcs,
   ordinarySha256,
+  parseActorId,
   parseCanvasId,
+  parseDigest,
   parseId128,
+  parseMemberId,
   parseProjectId,
   parseReplicaId,
+  parseValidationArtifactSet,
+  structuredDigest,
+  type Digest,
 } from "@convax/collaboration"
+import { IMMEDIATE_PREDECESSOR_PROTOCOL } from "@convax/collaboration/migration"
 import { buildCanvasGenesisProofCarrier } from "@convax/canvas/collaboration"
 import { PROJECT_INDEX_PROTOCOL_SCHEMA_ARTIFACT_DIGEST } from "@convax/project"
 
 import { loadHistoricalTestAuthority } from "./collaboration-authority.test-support"
 import { ElectronReplicaSigningVault } from "./electron-replica-signing-vault"
-import { NodeDurableLocalProjectOwnerAuthority } from "./local-project-owner-authority"
+import {
+  NodeDurableLocalProjectOwnerAuthority,
+  type DurableLocalProjectOwnerBinding,
+} from "./local-project-owner-authority"
 import { createMainCanvasOwnerRuntime } from "./main-canvas-collaboration-composition"
 import { createCanvasDocumentGenesisAuthority } from "./canvas-document-genesis"
 import { createLocalProjectOwnerCanvasGenesisAuthority } from "./local-project-owner-canvas-genesis"
@@ -72,7 +83,10 @@ describe("durable local Project owner authority", () => {
 
   test("rotates a missing local key without changing the Project epoch or historical binding", async () => {
     const fixture = await createFixture()
-    const previous = await fixture.owner().ensureForDurableProject(fixture.input)
+    const authority = fixture.owner()
+    const changes: string[] = []
+    authority.subscribeCurrentChange((change) => changes.push(change.bindingDigest))
+    const previous = await authority.ensureForDurableProject(fixture.input)
     const message = Buffer.alloc(32, 19)
     const previousSignature = await previous.signer.sign(message)
     const [keyEntry] = await fs.readdir(fixture.keyRoot)
@@ -86,7 +100,7 @@ describe("durable local Project owner authority", () => {
     await fs.rm(path.join(fixture.userData, "owners", "rotation-claims"), { recursive: true })
     await fs.rm(path.join(fixture.userData, "owners", "rotation-bindings"), { recursive: true })
 
-    const rotated = await fixture.owner().resolveCurrent({
+    const rotated = await authority.resolveCurrent({
       projectId: previous.binding.projectId,
       projectEpoch: previous.binding.projectEpoch,
     })
@@ -103,6 +117,7 @@ describe("durable local Project owner authority", () => {
     expect(current.binding.replicaId).not.toBe(previous.binding.replicaId)
     expect(current.binding.actorId).not.toBe(previous.binding.actorId)
     expect(current.binding.bindingDigest).not.toBe(previous.binding.bindingDigest)
+    expect(changes).toEqual([current.binding.bindingDigest])
     await expect(
       fixture.owner().resolveBindingExact({
         projectId: previous.binding.projectId,
@@ -194,6 +209,129 @@ describe("durable local Project owner authority", () => {
     expect((await authority.ensureForDurableProject(fixture.input)).binding).toEqual(prepared.owner.binding)
   })
 
+  test("inspects missing and corrupt predecessor authority without creating owner storage", async () => {
+    const missing = await createFixture()
+    const missingBefore = await snapshotTree(missing.userData)
+    expect(
+      await missing.owner().inspectImmediatePredecessorMigrationAuthority({
+        ...missing.input,
+        projectEpoch: fixedId(21),
+        projectIndexShardEpoch: fixedId(22),
+        initializationAuthorityDigest: ordinarySha256(new TextEncoder().encode("missing-predecessor")),
+      }),
+    ).toBe("missing")
+    expect(await snapshotTree(missing.userData)).toEqual(missingBefore)
+
+    const corrupt = await createFixture()
+    const target = predecessorBindingTarget(corrupt)
+    await fs.mkdir(path.dirname(target), { recursive: true })
+    await fs.writeFile(target, "not-a-canonical-owner-binding")
+    const corruptBefore = await snapshotTree(corrupt.userData)
+    expect(
+      await corrupt.owner().inspectImmediatePredecessorMigrationAuthority({
+        ...corrupt.input,
+        projectEpoch: fixedId(23),
+        projectIndexShardEpoch: fixedId(24),
+        initializationAuthorityDigest: ordinarySha256(new TextEncoder().encode("corrupt-predecessor")),
+      }),
+    ).toBe("rejected")
+    expect(await snapshotTree(corrupt.userData)).toEqual(corruptBefore)
+  })
+
+  test("verified predecessor inspection is read-only and does not publish the current binding", async () => {
+    const fixture = await createFixture()
+    const predecessor = await installImmediatePredecessorOwner(fixture)
+    const before = await snapshotTree(fixture.userData)
+
+    const prepared = await fixture.owner().inspectImmediatePredecessorMigrationAuthority({
+      ...fixture.input,
+      projectEpoch: predecessor.projectEpoch,
+      projectIndexShardEpoch: predecessor.projectIndexShardEpoch,
+      initializationAuthorityDigest: predecessor.bindingDigest,
+    })
+
+    expect(prepared).not.toBe("missing")
+    expect(prepared).not.toBe("rejected")
+    expect(await snapshotTree(fixture.userData)).toEqual(before)
+    expect(await exists(currentBindingTarget(fixture))).toBeFalse()
+  })
+
+  test("activation publishes the inspected epoch and shard with a retry-stable closure-bound operation", async () => {
+    const fixture = await createFixture()
+    const predecessor = await installImmediatePredecessorOwner(fixture)
+    const authority = fixture.owner()
+    const prepared = await authority.inspectImmediatePredecessorMigrationAuthority({
+      ...fixture.input,
+      projectEpoch: predecessor.projectEpoch,
+      projectIndexShardEpoch: predecessor.projectIndexShardEpoch,
+      initializationAuthorityDigest: predecessor.bindingDigest,
+    })
+    if (prepared === "missing" || prepared === "rejected") throw new Error("predecessor inspection failed")
+    const closure = ordinarySha256(new TextEncoder().encode("verified-source-closure-a"))
+
+    const first = await authority.activateImmediatePredecessorMigrationAuthority(prepared, closure)
+    const retry = await authority.activateImmediatePredecessorMigrationAuthority(prepared, closure)
+    const restartedAuthority = fixture.owner()
+    const resumedPreparation = await restartedAuthority.inspectImmediatePredecessorMigrationAuthority({
+      ...fixture.input,
+      projectEpoch: predecessor.projectEpoch,
+      projectIndexShardEpoch: predecessor.projectIndexShardEpoch,
+      initializationAuthorityDigest: predecessor.bindingDigest,
+    })
+    if (resumedPreparation === "missing" || resumedPreparation === "rejected") {
+      throw new Error("published current authority did not resume its predecessor migration")
+    }
+    const resumed = await restartedAuthority.activateImmediatePredecessorMigrationAuthority(
+      resumedPreparation,
+      closure,
+    )
+
+    expect(first.currentOwner.binding.projectEpoch).toBe(predecessor.projectEpoch)
+    expect(first.currentOwner.binding.projectIndexShardEpoch).toBe(predecessor.projectIndexShardEpoch)
+    expect(first.currentOwner.binding.memberId).toBe(predecessor.memberId)
+    expect(first.currentOwner.binding.protocolDigest).toBe(fixture.authority.protocolDigest)
+    expect(first.currentOwner.binding.actorId).not.toBe(predecessor.actorId)
+    expect(first.currentOwner.binding.replicaId).not.toBe(predecessor.replicaId)
+    expect(retry.currentOwner.binding).toEqual(first.currentOwner.binding)
+    expect(retry.migrationOperationId).toBe(first.migrationOperationId)
+    expect(resumed.currentOwner.binding).toEqual(first.currentOwner.binding)
+    expect(resumed.migrationOperationId).toBe(first.migrationOperationId)
+    expect(await exists(currentBindingTarget(fixture))).toBeTrue()
+    expect(await fs.readFile(predecessorLegacyVaultTarget(fixture, predecessor))).toEqual(
+      Buffer.from("legacy-safe-storage-ciphertext"),
+    )
+    expect(await exists(path.join(
+      fixture.userData,
+      "owners",
+      "retired-bindings",
+      `${predecessor.bindingDigest}.jcs`,
+    ))).toBeTrue()
+  })
+
+  test("rejects foreign predecessor preparations and malformed closure digests before publication", async () => {
+    const fixture = await createFixture()
+    const predecessor = await installImmediatePredecessorOwner(fixture)
+    const authority = fixture.owner()
+    const prepared = await authority.inspectImmediatePredecessorMigrationAuthority({
+      ...fixture.input,
+      projectEpoch: predecessor.projectEpoch,
+      projectIndexShardEpoch: predecessor.projectIndexShardEpoch,
+      initializationAuthorityDigest: predecessor.bindingDigest,
+    })
+    if (prepared === "missing" || prepared === "rejected") throw new Error("predecessor inspection failed")
+
+    await expect(
+      fixture.owner().activateImmediatePredecessorMigrationAuthority(
+        prepared,
+        ordinarySha256(new TextEncoder().encode("foreign-source-closure")),
+      ),
+    ).rejects.toThrow("not owned by this resolver")
+    await expect(
+      authority.activateImmediatePredecessorMigrationAuthority(prepared, "not-a-digest" as Digest),
+    ).rejects.toThrow()
+    expect(await exists(currentBindingTarget(fixture))).toBeFalse()
+  })
+
   test("builds and verifies Canvas genesis directly from the unshared local owner", async () => {
     const fixture = await createFixture()
     const ownerAuthority = fixture.owner()
@@ -261,6 +399,7 @@ async function createFixture() {
     authority,
     userData,
     keyRoot,
+    vault,
     input: { projectId, projectRoot },
     owner: (faults?: ConstructorParameters<typeof NodeDurableLocalProjectOwnerAuthority>[0]["faults"]) =>
       new NodeDurableLocalProjectOwnerAuthority({
@@ -280,4 +419,152 @@ async function createFixture() {
         ...(faults ? { faults } : {}),
       }),
   }
+}
+
+type LocalOwnerFixture = Awaited<ReturnType<typeof createFixture>>
+
+async function installImmediatePredecessorOwner(
+  fixture: LocalOwnerFixture,
+): Promise<DurableLocalProjectOwnerBinding> {
+  const projectEpoch = fixedId(31)
+  const projectIndexShardEpoch = fixedId(32)
+  const memberId = parseMemberId(fixedId(33))
+  const replicaId = parseReplicaId("replica_8295cafe")
+  const legacyKeySource = new ElectronReplicaSigningVault(path.join(fixture.userData, "legacy-key-source"))
+  const key = await legacyKeySource.createReplicaKey({
+    projectId: fixture.input.projectId,
+    projectEpoch,
+    replicaId,
+  })
+  const bindingWithoutDigest = Object.freeze({
+    format: "convax.desktop-local-project-owner-binding" as const,
+    projectId: fixture.input.projectId,
+    projectEpoch,
+    projectIndexShardEpoch,
+    memberId,
+    replicaId,
+    localConfirmationKeyId: `local-owner-${fixture.input.projectId}`,
+    genesisOperationId: fixedId(34),
+    genesisCheckpointId: fixedId(35),
+    protocolDigest: IMMEDIATE_PREDECESSOR_PROTOCOL.protocolDigest,
+    schemaDigest: IMMEDIATE_PREDECESSOR_PROTOCOL.projectPersistenceSchemaDigest,
+    uriProtocolDigest: IMMEDIATE_PREDECESSOR_PROTOCOL.uriProtocolDigest,
+    validationArtifactSetDigest: immediatePredecessorValidationArtifactSetDigest(),
+    actorId: parseActorId(key.publicKey),
+    publicKey: key.publicKey,
+  })
+  const binding: DurableLocalProjectOwnerBinding = Object.freeze({
+    ...bindingWithoutDigest,
+    bindingDigest: ordinarySha256(encodeRestrictedJcs(bindingWithoutDigest)),
+  })
+  const target = predecessorBindingTarget(fixture)
+  await fs.mkdir(path.dirname(target), { recursive: true })
+  await fs.writeFile(target, encodeRestrictedJcs(binding), { mode: 0o600 })
+  const legacyVault = predecessorLegacyVaultTarget(fixture, binding)
+  await fs.mkdir(path.dirname(legacyVault), { recursive: true })
+  await fs.writeFile(legacyVault, Buffer.from("legacy-safe-storage-ciphertext"), { mode: 0o600 })
+  return binding
+}
+
+function predecessorLegacyVaultTarget(
+  fixture: LocalOwnerFixture,
+  binding: Pick<DurableLocalProjectOwnerBinding, "projectId" | "projectEpoch" | "replicaId">,
+): string {
+  const selector = structuredDigest("convax.desktop-replica-vault-native-key", {
+    projectId: binding.projectId,
+    projectEpoch: binding.projectEpoch,
+    replicaId: binding.replicaId,
+  })
+  return path.join(fixture.userData, "replica-vault", `${selector}.vault`)
+}
+
+function immediatePredecessorValidationArtifactSetDigest(): Digest {
+  const validationArtifacts = parseValidationArtifactSet({
+    format: "convax.validation-artifact-set",
+    artifacts: [
+      {
+        owner: "canvas",
+        format: "convax.canvas-protocol-schema",
+        artifactDigest: IMMEDIATE_PREDECESSOR_PROTOCOL.canvasSchemaDigest,
+      },
+      {
+        owner: "control-plane",
+        format: "convax.control-plane-protocol-schema",
+        artifactDigest: IMMEDIATE_PREDECESSOR_PROTOCOL.controlPlaneSchemaDigest,
+      },
+      {
+        owner: "kernel",
+        format: "convax.collaboration-kernel-protocol-schema",
+        artifactDigest: IMMEDIATE_PREDECESSOR_PROTOCOL.collaborationKernelSchemaDigest,
+      },
+      {
+        owner: "project-index",
+        format: "convax.project-persistence-protocol-schema",
+        artifactDigest: IMMEDIATE_PREDECESSOR_PROTOCOL.projectPersistenceSchemaDigest,
+      },
+    ],
+  })
+  return structuredDigest("convax.validation-artifact-set", validationArtifacts)
+}
+
+function predecessorBindingTarget(fixture: LocalOwnerFixture): string {
+  return path.join(
+    fixture.userData,
+    "owners",
+    "bindings",
+    `${ownerSelectorDigest(fixture.input.projectId, IMMEDIATE_PREDECESSOR_PROTOCOL.protocolDigest)}.jcs`,
+  )
+}
+
+function currentBindingTarget(fixture: LocalOwnerFixture): string {
+  return path.join(
+    fixture.userData,
+    "owners",
+    "bindings",
+    `${ownerSelectorDigest(fixture.input.projectId, fixture.authority.protocolDigest)}.jcs`,
+  )
+}
+
+function ownerSelectorDigest(projectId: string, protocolDigest: Digest): Digest {
+  return structuredDigest("convax.desktop-local-project-owner-selector", {
+    format: "convax.desktop-local-project-owner-selector",
+    projectId,
+    protocolDigest,
+  })
+}
+
+function fixedId(byte: number) {
+  return parseId128(Buffer.alloc(16, byte).toString("base64url"))
+}
+
+async function exists(target: string): Promise<boolean> {
+  try {
+    await fs.lstat(target)
+    return true
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return false
+    throw error
+  }
+}
+
+async function snapshotTree(root: string): Promise<readonly string[]> {
+  if (!(await exists(root))) return Object.freeze([])
+  const snapshot: string[] = []
+  const visit = async (directory: string): Promise<void> => {
+    const entries = await fs.readdir(directory, { withFileTypes: true })
+    for (const entry of entries.sort((left, right) => left.name.localeCompare(right.name))) {
+      const target = path.join(directory, entry.name)
+      const relative = path.relative(root, target)
+      if (entry.isDirectory() && !entry.isSymbolicLink()) {
+        snapshot.push(`directory:${relative}`)
+        await visit(target)
+      } else if (entry.isFile() && !entry.isSymbolicLink()) {
+        snapshot.push(`file:${relative}:${ordinarySha256(await fs.readFile(target))}`)
+      } else {
+        snapshot.push(`unsupported:${relative}`)
+      }
+    }
+  }
+  await visit(root)
+  return Object.freeze(snapshot)
 }

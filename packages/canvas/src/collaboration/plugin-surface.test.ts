@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test"
 import { parseUint32 } from "@convax/collaboration"
 import { adaptCanvasApplicationCommand } from "./application-command-adapter"
 import { constructCanvasAuthoritativeIntent } from "./command-construction"
+import { assertCanvasTypedIntent } from "./intent-validation"
 import { createCanvasFileRendererRegistry } from "../file-renderer-registry"
 import { buildCanvasProjectionIndex, projectCanvasDocument } from "./projection"
 import { applyCanvasCandidateIntent } from "./reducer"
@@ -77,7 +78,7 @@ describe("Canvas generic Plugin surface creation", () => {
     }
   })
 
-  test("rejects a caller-selected node id, a second ordinal, and a stale placement", () => {
+  test("rejects a caller-selected node id, a second ordinal, and the retired placement schema", () => {
     const document = newCanvas()
     const operationContext = context(1, 1, 1)
     const foreign = derivedNodeRef(context(2, 9, 9), U0)
@@ -91,9 +92,9 @@ describe("Canvas generic Plugin surface creation", () => {
     ;(misordinal.body as { node: { ordinal: unknown } }).node.ordinal = parseUint32("1")
     expect(applyCanvasCandidateIntent(document, operationContext, misordinal, VALID_FACTS)).toBe("rejected")
 
-    const stale = pluginSurfaceIntent(document, operationContext)
-    ;(stale.body as { placement: { obstacleProjectionDigest: unknown } }).placement.obstacleProjectionDigest = digest(9)
-    expect(applyCanvasCandidateIntent(document, operationContext, stale, VALID_FACTS)).toBe("rejected")
+    const legacy = pluginSurfaceIntent(document, operationContext)
+    ;(legacy.body as { placement: Record<string, unknown> }).placement.obstacleProjectionDigest = digest(9)
+    expect(() => assertCanvasTypedIntent(legacy)).toThrow()
   })
 
   test("projects an installed surface as the Plugin renderer kind and keeps its portable state", () => {

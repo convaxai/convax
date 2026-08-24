@@ -22,10 +22,10 @@ import {
   type ProjectIndexBlobPublicationPort,
   type ProjectCanvasGenesisStagingPort,
   type ProjectIndexCanvasApplicationPort,
+  type ProjectIndexAcceptedNativeMaterializationCoveragePort,
   type ProjectIndexFactResolutionPort,
   type ProjectIndexFileApplicationPort,
   type ProjectIndexFileMaterializationProjectionPort,
-  type ProjectIndexManagedBlobAdmission,
 } from "@convax/project/canvas"
 import {
   PROJECT_INDEX_PROTOCOL_SCHEMA_ARTIFACT_DIGEST,
@@ -73,44 +73,137 @@ type ProjectIndexScope = DocumentScope & {
   readonly docId: "project-index"
 }
 
-const projectIndexBlobAdmissionChunkBytes = 1024 * 1024
-
 type BlobPublicationTrace = <T>(byteLength: number, operation: () => Promise<T>) => Promise<T>
 
+const maximumPendingMaterializationFrames = 64
+
+export interface MainProjectIndexFileMaterializationScheduler {
+  acceptedFrame(frameDigest: Digest): void
+  publishedBlob(digest: Digest): void
+  flush(): Promise<void>
+  dispose(): void
+}
+
 /**
- * Adapts ProjectIndex's process-local exact byte view to the native streaming
- * durability verifier. Each chunk is only a view over the caller-owned bytes;
- * the blob store remains responsible for length, SHA-256, fsync and publication.
+ * Coalesces owner invalidations without making Main a second ProjectIndex
+ * authority. A local file-first mutation may suppress the full plan only after
+ * Project's materializer verifies the exact accepted frame coverage against the
+ * current native path. Remote, unknown and failed coverage stays fail-open and
+ * performs one full reconciliation for the whole burst.
+ */
+export function createMainProjectIndexFileMaterializationScheduler(input: {
+  readonly projectId: ProjectId
+  readonly materializer: Pick<
+    ProjectIndexFileMaterializer,
+    "consumeAcceptedFrameCoverage" | "needsPublishedBlob" | "reconcile"
+  >
+  readonly reportError?: (error: unknown) => void
+  readonly scheduleTask?: (run: () => void) => () => void
+}): MainProjectIndexFileMaterializationScheduler {
+  const projectId = parseProjectId(input.projectId)
+  const reportError = input.reportError ?? ((error: unknown) => {
+    console.error(`Failed to reconcile Project files for ${projectId}`, error)
+  })
+  const scheduleTask = input.scheduleTask ?? ((run: () => void) => {
+    const handle = setImmediate(run)
+    return () => clearImmediate(handle)
+  })
+  const pendingFrames = new Set<Digest>()
+  let fullReconcileRequested = false
+  let cancelScheduled: (() => void) | undefined
+  let tail = Promise.resolve()
+  let disposed = false
+
+  const hasPendingWork = () => fullReconcileRequested || pendingFrames.size > 0
+  const drainOnce = async () => {
+    if (disposed) return
+    const frames = [...pendingFrames]
+    pendingFrames.clear()
+    let needsFullReconcile = fullReconcileRequested
+    fullReconcileRequested = false
+    for (const frameDigest of frames) {
+      try {
+        if (!(await input.materializer.consumeAcceptedFrameCoverage(frameDigest))) {
+          needsFullReconcile = true
+        }
+      } catch {
+        needsFullReconcile = true
+      }
+    }
+    if (needsFullReconcile && !disposed) await input.materializer.reconcile()
+  }
+  const queueDrain = (): Promise<void> => {
+    const run = () => drainOnce()
+    tail = tail.then(run, run).catch((error: unknown) => {
+      try { reportError(error) } catch { /* Observer failures never affect durable state. */ }
+    })
+    return tail
+  }
+  const schedule = () => {
+    if (disposed || cancelScheduled) return
+    cancelScheduled = scheduleTask(() => {
+      cancelScheduled = undefined
+      void queueDrain().finally(() => {
+        if (hasPendingWork()) schedule()
+      })
+    })
+  }
+
+  return Object.freeze({
+    acceptedFrame(frameDigestInput: Digest) {
+      if (disposed) return
+      const frameDigest = parseDigest(frameDigestInput)
+      if (pendingFrames.size >= maximumPendingMaterializationFrames) {
+        fullReconcileRequested = true
+      } else {
+        pendingFrames.add(frameDigest)
+      }
+      schedule()
+    },
+    publishedBlob(digestInput: Digest) {
+      if (disposed) return
+      const digest = parseDigest(digestInput)
+      if (!input.materializer.needsPublishedBlob(digest)) return
+      fullReconcileRequested = true
+      schedule()
+    },
+    async flush() {
+      if (disposed) return
+      cancelScheduled?.()
+      cancelScheduled = undefined
+      do {
+        await queueDrain()
+      } while (!disposed && hasPendingWork())
+    },
+    dispose() {
+      if (disposed) return
+      disposed = true
+      cancelScheduled?.()
+      cancelScheduled = undefined
+      pendingFrames.clear()
+      fullReconcileRequested = false
+    },
+  })
+}
+
+/**
+ * Adapts ProjectIndex publication to the native blob owner. Already-materialized
+ * exact bytes stay on the owner's byte path so a verified present blob avoids
+ * stream staging and fsync; managed native inputs retain the bounded stream path.
+ * The blob store remains responsible for length, SHA-256 and durable publication.
  */
 export function createMainProjectIndexBlobPublicationPort(input: {
-  readonly blobs: Pick<ProjectBlobReplicationStore, "admitVerifiedStream">
+  readonly blobs: Pick<ProjectBlobReplicationStore, "admitVerifiedBytes" | "admitVerifiedStream">
   readonly tracePublication?: BlobPublicationTrace
 }): ProjectIndexBlobPublicationPort {
   const tracePublication: BlobPublicationTrace = input.tracePublication ?? ((_byteLength, operation) => operation())
   const port: ProjectIndexBlobPublicationPort = {
     admitManaged: ({ reference, admission }) =>
       input.blobs.admitVerifiedStream(reference, admission).then(() => undefined),
-    publish: ({ reference, exactBytes }) => {
-      const admission: ProjectIndexManagedBlobAdmission = {
-        blob: reference.blob,
-        async readChunks(consume: Parameters<ProjectIndexManagedBlobAdmission["readChunks"]>[0], signal?: AbortSignal) {
-          signal?.throwIfAborted()
-          for (let offset = 0; offset < exactBytes.byteLength; offset += projectIndexBlobAdmissionChunkBytes) {
-            signal?.throwIfAborted()
-            await consume(
-              exactBytes.subarray(
-                offset,
-                Math.min(offset + projectIndexBlobAdmissionChunkBytes, exactBytes.byteLength),
-              ),
-            )
-          }
-          signal?.throwIfAborted()
-        },
-      }
-      return tracePublication(exactBytes.byteLength, () =>
-        input.blobs.admitVerifiedStream(reference, Object.freeze(admission)).then(() => undefined),
-      )
-    },
+    publish: ({ reference, exactBytes }) =>
+      tracePublication(exactBytes.byteLength, () =>
+        input.blobs.admitVerifiedBytes(reference, exactBytes).then(() => undefined),
+      ),
   }
   return Object.freeze(port)
 }
@@ -179,12 +272,16 @@ export function createLocalProjectOwnerIndexRegistrationPort(
 ): MainProjectIndexFirstRegistrationPort {
   const port: MainProjectIndexFirstRegistrationPort = {
     async ensureRegistered({ projectId, projectRoot }) {
+      // Project owns the one-shot predecessor gate. It must run before Desktop
+      // asks the current-only portable-data reader to classify the directory,
+      // including direct/background ProjectIndex opens that did not come through
+      // the Renderer touch flow.
+      await projects.ensureRegisteredProjectPrivateStorage({ projectId, projectRoot })
       const resolution = await resolvePortableProjectData(projectRoot)
       if (resolution.status === "unsupported-project-data") throw resolution.error
       if (resolution.status === "recovery-required") {
         throw new Error("Project collaboration reset recovery must finish before first registration")
       }
-      await projects.ensureRegisteredProjectPrivateStorage({ projectId, projectRoot })
       const authorityTuple = {
         protocolDigest: authority.protocolDigest,
         schemaDigest: PROJECT_INDEX_PROTOCOL_SCHEMA_ARTIFACT_DIGEST,
@@ -389,7 +486,7 @@ export class MainProjectIndexRuntimeRegistry
       readonly projects: Pick<NodeProjectCollaborationRuntimeCoordinator, "acquire" | "resolveProjectRoot">
       readonly firstRegistration: MainProjectIndexFirstRegistrationPort
       readonly materializers: ProjectCollaborationMaterializerRegistry
-      readonly localAuthority: CurrentLocalReplicaAuthoritySource
+      readonly localAuthority: (project: ProjectCollaborationRuntimeLease) => CurrentLocalReplicaAuthoritySource
       readonly incomingAuthority: IncomingReplicaAuthoritySource
       readonly signatureVerifier: CollaborationKernelOptions["signatureVerifier"]
       readonly createOperationId: () => Id128
@@ -423,9 +520,31 @@ export class MainProjectIndexRuntimeRegistry
     return (await this.open(projectId)).application.queryCurrentResources({ projectId })
   }
 
+  async queryCurrentResourcesExact(
+    input: Parameters<NonNullable<ProjectIndexCurrentBlobReferencePort["queryCurrentResourcesExact"]>>[0],
+  ) {
+    const projectId = parseProjectId(input.projectId)
+    const application = (await this.open(projectId)).application
+    if (!application.queryCurrentResourcesExact) {
+      throw new Error("ProjectIndex exact current-resource projection is unavailable")
+    }
+    return application.queryCurrentResourcesExact({ projectId, targets: input.targets })
+  }
+
   async queryCurrentResourceReferences(input: { readonly projectId: ProjectId }) {
     const projectId = parseProjectId(input.projectId)
     return (await this.open(projectId)).application.queryCurrentResourceReferences({ projectId })
+  }
+
+  async queryCurrentResourceReferencesExact(
+    input: Parameters<NonNullable<ProjectIndexCurrentResourceReferenceQueryPort["queryCurrentResourceReferencesExact"]>>[0],
+  ) {
+    const projectId = parseProjectId(input.projectId)
+    const application = (await this.open(projectId)).application
+    if (!application.queryCurrentResourceReferencesExact) {
+      throw new Error("ProjectIndex exact current-resource reference query is unavailable")
+    }
+    return application.queryCurrentResourceReferencesExact({ projectId, targets: input.targets })
   }
 
   async queryAvailableBlobs(input: Parameters<ProjectBlobAvailabilityQueryPort["queryAvailableBlobs"]>[0]) {
@@ -463,6 +582,17 @@ export class MainProjectIndexRuntimeRegistry
   ) {
     const projectId = parseProjectId(input.projectId)
     return (await this.open(projectId)).fileApplication.queryFileMaterializationPlan({ projectId })
+  }
+
+  async queryFileMaterializationEntries(
+    input: Parameters<ProjectIndexFileMaterializationProjectionPort["queryFileMaterializationEntries"]>[0],
+  ) {
+    const projectId = parseProjectId(input.projectId)
+    const projection = (await this.open(projectId)).fileApplication
+    return projection.queryFileMaterializationEntries({
+      projectId,
+      paths: input.paths,
+    })
   }
 
   async quiesceProject(projectIdInput: string): Promise<void> {
@@ -533,7 +663,7 @@ export class MainProjectIndexRuntimeRegistry
         scope: registeredScope,
         owner,
         actorId: project.localActorId,
-        localAuthority: this.options.localAuthority,
+        localAuthority: this.options.localAuthority(project),
         incomingAuthority: this.options.incomingAuthority,
         incomingFacts: descriptor.incomingFacts,
         createDocument: descriptor.createDocument,
@@ -586,28 +716,34 @@ export class MainProjectIndexRuntimeRegistry
           }
         }
       }
+      let fileMaterializer: ProjectIndexFileMaterializer | undefined
       const fileApplication = new ProjectIndexFileApplication({
         session,
         facts: descriptor.facts,
         blobs: createMainProjectIndexBlobPublicationPort({ blobs, tracePublication: traceBlobPublication }),
         createOperationId: this.options.createOperationId,
+        nativeMaterializationCoverage: Object.freeze({
+          cover(input: Parameters<ProjectIndexAcceptedNativeMaterializationCoveragePort["cover"]>[0]) {
+            fileMaterializer?.coverAcceptedFrame(input)
+          },
+        }),
       })
-      const fileMaterializer = await ProjectIndexFileMaterializer.open({
+      fileMaterializer = await ProjectIndexFileMaterializer.open({
         projectId,
         projectRoot,
         projection: fileApplication,
         blobs,
       })
-      const scheduleReconcile = () => {
-        void fileMaterializer.reconcile().catch((error: unknown) => {
-          console.error(`Failed to reconcile Project files for ${projectId}`, error)
-        })
-      }
-      const unsubscribeSession = session.subscribe(scheduleReconcile)
-      const unsubscribeBlobs = blobs.subscribePublished(scheduleReconcile)
+      const materialization = createMainProjectIndexFileMaterializationScheduler({
+        projectId,
+        materializer: fileMaterializer,
+      })
+      const unsubscribeSession = session.subscribe((event) => materialization.acceptedFrame(event.frameDigest))
+      const unsubscribeBlobs = blobs.subscribePublished((digest) => materialization.publishedBlob(digest))
       disposeFileMaterialization = () => {
         unsubscribeSession()
         unsubscribeBlobs()
+        materialization.dispose()
       }
       await fileMaterializer.reconcile()
       return Object.freeze({

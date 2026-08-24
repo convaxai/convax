@@ -25,14 +25,21 @@ import type {
 export interface AcceptedClosureStore {
   loadInstalledBase(scope: DocumentScope): Promise<NodeAcceptedReplicaHead>
   listAcceptedFrames(scope: DocumentScope): Promise<readonly NodeAcceptedFrameObject[]>
-  readAcceptedFrame(scope: DocumentScope, frameDigest: Digest): Promise<Uint8Array | null>
+  readAcceptedFrame(scope: DocumentScope, frameDigest: Digest): Promise<NodeAcceptedFrameObject | null>
 }
+
+type IndexedAcceptedFrame = Readonly<{
+  frame: DecodedCausalEditFrame
+  durableDelta: unknown
+}>
 
 export interface AcceptedCausalClosureIndex extends CausalClosurePort {
   warm(store: AcceptedClosureStore): Promise<NodeAcceptedReplicaHead>
   hydrate(store: AcceptedClosureStore, frameDigest: Digest): Promise<boolean>
-  materializationOrder(frontier: DecodedCausalEditFrame["context"]["baseFrontier"]): readonly DecodedCausalEditFrame[] | "pending"
-  observe(ref: NodeAcceptedFrameObject["ref"], exactFrameBytes: Readonly<Uint8Array>): void
+  materializationOrder(
+    frontier: DecodedCausalEditFrame["context"]["baseFrontier"],
+  ): readonly IndexedAcceptedFrame[] | "pending"
+  observe(ref: NodeAcceptedFrameObject["ref"], exactFrameBytes: Readonly<Uint8Array>, durableDelta: unknown): void
 }
 
 /**
@@ -45,7 +52,7 @@ export function createAcceptedCausalClosureIndex(input: {
 }): AcceptedCausalClosureIndex {
   const scope = parseDocumentScope(input.scope)
   const roots = new Set<Digest>()
-  const frames = new Map<Digest, DecodedCausalEditFrame>()
+  const frames = new Map<Digest, IndexedAcceptedFrame>()
   const parents = new Map<Digest, readonly Digest[]>()
   let warmed = false
 
@@ -78,27 +85,29 @@ export function createAcceptedCausalClosureIndex(input: {
     },
     materializationOrder(frontier) {
       requireWarmed()
-      const ordered: DecodedCausalEditFrame[] = []
+      const ordered: IndexedAcceptedFrame[] = []
       const emitted = new Set<Digest>()
       for (const head of frontier.heads) {
         if (!append(parseDigest(head.frameDigest), emitted, ordered, new Set())) return "pending"
       }
       return Object.freeze(ordered)
     },
-    observe(ref, exactFrameBytes) {
+    observe(ref, exactFrameBytes, durableDelta) {
       requireWarmed()
-      ingest({ ref, exactFrameBytes })
+      ingest({ ref, exactFrameBytes: new Uint8Array(exactFrameBytes), durableDelta })
     },
   }
   return Object.freeze(index)
 
-  function ingest(object: NodeAcceptedFrameObject): DecodedCausalEditFrame {
+  function ingest(object: NodeAcceptedFrameObject): IndexedAcceptedFrame {
     const frame = inspectAcceptedFrameObject(input.authority, object.ref, object.exactFrameBytes)
     assertSameScope(frame.header.core.scope, scope)
     const digest = parseDigest(frame.frameDigest)
     const existing = frames.get(digest)
     if (existing) {
-      if (!sameBytes(existing.bytes, frame.bytes)) throw new Error("Accepted frame digest aliases different exact bytes")
+      if (!sameBytes(existing.frame.bytes, frame.bytes)) {
+        throw new Error("Accepted frame digest aliases different exact bytes")
+      }
       return existing
     }
     const directParents = Object.freeze(frame.context.baseFrontier.heads.map((head) => parseDigest(head.frameDigest)))
@@ -107,9 +116,10 @@ export function createAcceptedCausalClosureIndex(input: {
         throw new Error("Accepted frame closure has a predecessor outside the installed base and durable suffix")
       }
     }
-    frames.set(digest, frame)
+    const indexed = Object.freeze({ frame, durableDelta: structuredClone(object.durableDelta) })
+    frames.set(digest, indexed)
     parents.set(digest, directParents)
-    return frame
+    return indexed
   }
 
   async function hydrateDigest(
@@ -121,15 +131,16 @@ export function createAcceptedCausalClosureIndex(input: {
     if (visiting.has(digest)) throw new Error("Accepted causal closure contains a cycle")
     visiting.add(digest)
     try {
-      const exact = await store.readAcceptedFrame(scope, digest)
-      if (exact === null) return false
-      const frame = decodeCausalEditFrame(input.authority, exact)
+      const object = await store.readAcceptedFrame(scope, digest)
+      if (object === null) return false
+      const frame = decodeCausalEditFrame(input.authority, object.exactFrameBytes)
       if (frame.frameDigest !== digest) throw new Error("Accepted frame lookup returned another digest")
+      if (frame.frameDigest !== object.ref.frameDigest) throw new Error("Accepted frame object reference mismatches lookup")
       assertSameScope(frame.header.core.scope, scope)
       for (const parent of frame.context.baseFrontier.heads) {
         if (!await hydrateDigest(store, parseDigest(parent.frameDigest), visiting)) return false
       }
-      ingest({ ref: frameObjectRefFromDecodedFrame(frame), exactFrameBytes: exact })
+      ingest(object)
       return true
     } finally {
       visiting.delete(digest)
@@ -139,19 +150,19 @@ export function createAcceptedCausalClosureIndex(input: {
   function append(
     digest: Digest,
     emitted: Set<Digest>,
-    ordered: DecodedCausalEditFrame[],
+    ordered: IndexedAcceptedFrame[],
     visiting: Set<Digest>,
   ): boolean {
     if (roots.has(digest) || emitted.has(digest)) return true
-    const frame = frames.get(digest)
+    const indexed = frames.get(digest)
     const directParents = parents.get(digest)
-    if (!frame || !directParents) return false
+    if (!indexed || !directParents) return false
     if (visiting.has(digest)) throw new Error("Accepted causal closure contains a cycle")
     visiting.add(digest)
     for (const parent of directParents) if (!append(parent, emitted, ordered, visiting)) return false
     visiting.delete(digest)
     emitted.add(digest)
-    ordered.push(frame)
+    ordered.push(indexed)
     return true
   }
 
@@ -192,19 +203,20 @@ export function createProductionNodeReplicaHeadMaterializer(input: {
       }
       return Object.freeze({ ref, requiredBlobDigests: Object.freeze(requiredBlobDigests) })
     },
-    async applyAcceptedFrame({ previous, ref, exactBytes }) {
+    async applyAcceptedFrame({ previous, ref, exactBytes, durableDelta }) {
       return materializeAcceptedFrame({
         authority: input.authority,
         owner: input.owner,
         previous,
         ref,
         exactFrameBytes: exactBytes,
+        durableDelta,
         causalClosure: input.causalClosure,
         createDocument: input.createDocument,
       })
     },
-    observeAcceptedFrame(ref, exactBytes) {
-      input.causalClosure.observe(ref, exactBytes)
+    observeAcceptedFrame(ref, exactBytes, durableDelta) {
+      input.causalClosure.observe(ref, exactBytes, durableDelta)
     },
     actorHeadsDigest: replicaActorHeadSetDigest,
   }
@@ -233,13 +245,14 @@ export function createDurableExactBaseResolver(input: {
         if (order === "pending") return "pending"
         let current = cloneHead(input.installedBase)
         for (const accepted of order) {
-          const ref = frameObjectRefFromDecodedFrame(accepted)
+          const ref = frameObjectRefFromDecodedFrame(accepted.frame)
           current = materializeAcceptedFrame({
             authority: input.authority,
             owner: input.owner,
             previous: current,
             ref,
-            exactFrameBytes: accepted.bytes,
+            exactFrameBytes: accepted.frame.bytes,
+            durableDelta: accepted.durableDelta,
             causalClosure: input.index,
             createDocument: input.createDocument,
           })

@@ -100,7 +100,6 @@ import { createCanvasRendererRequestHandler } from "./canvas-renderer-request-ha
 import { resolveWorkspaceCanvasViewportInsets } from "./canvas-viewport-occlusion"
 import { publishCanvasSelectionToWorkbench } from "./canvas-workbench-selection"
 import { addCanvasUploadResources, resolveCanvasUploadPresentations } from "./canvas-upload"
-import { collectStaleCanvasResourceNodeIds } from "./canvas-resource-hydration"
 import { canvasPerformanceDiagnosticsEnabled, installCanvasLongTaskDiagnostics } from "./canvas-performance-diagnostics"
 import {
   closeDesktopSettings,
@@ -169,7 +168,10 @@ import {
   serviceCatalogAgentModelsForScope,
   serviceGenerationAvailabilityVersion,
 } from "./service-catalog-controller"
-import { subscribeMountedCanvasResourceInvalidation } from "./project-resource-invalidation"
+import {
+  hydrateCanvasResourceTargetsInBatches,
+  subscribeMountedCanvasResourceInvalidation,
+} from "./project-resource-invalidation"
 import { SettingsView } from "./settings-view"
 import { readWorkbenchLayoutPreferences, writeWorkbenchLayoutPreferences } from "./workbench-layout-preferences"
 import { readLastCanvasPreference, writeLastCanvasPreference } from "./workbench-preferences"
@@ -200,6 +202,10 @@ const canvasShortcutScopeId = "desktop.canvas"
 const canvasInteractionShortcutScopeId = "desktop.canvas.interaction"
 const canvasNodeInputShortcutScopeId = "desktop.canvas.node-input"
 const conversationShortcutScopeId = "desktop.conversation"
+
+function isStaleCanvasResourceState(value: unknown): boolean {
+  return value !== null && typeof value === "object" && "status" in value && value.status === "stale"
+}
 
 function isCanvasIgnoredShortcutTarget(target: Element) {
   return Boolean(target.closest("[data-canvas-shortcuts='ignore']"))
@@ -822,6 +828,8 @@ function App() {
     })
   }, [activeCanvasId, activeProjectId])
   const activeCanvasSession = mountedCanvasSession?.key === canvasSessionScopeKey ? mountedCanvasSession.session : null
+  const activeCanvasSessionRef = useRef<DesktopCanvasRendererSession | null>(activeCanvasSession)
+  activeCanvasSessionRef.current = activeCanvasSession
   const activeCanvasSessionFailure =
     canvasSessionFailure?.key === canvasSessionScopeKey ? canvasSessionFailure.message : null
   const publishCanvasSelection = useCallback(
@@ -1230,22 +1238,67 @@ function App() {
         },
       },
       hydration: {
-        async hydrateStale({ document, signal }) {
+        async hydrateStale({ document, nodeIds, signal }) {
           if (!activeProjectId || !activeCanvasId || !activeCanvasSession) {
             throw new Error("Open a Project Canvas before refreshing resources")
           }
           if (signal.aborted) throw signal.reason
-          const staleNodeIds = collectStaleCanvasResourceNodeIds(document)
-          if (staleNodeIds.length === 0) return document
-          const hydrated = await window.convax.canvas.resources.hydrateStale({
-            ref: activeCanvasSession.ref,
+          const requestedNodeIds =
+            nodeIds ??
+            document.nodes.flatMap((node) =>
+              isStaleCanvasResourceState(node.data.resourceState) ? [node.id] : [],
+            )
+          if (requestedNodeIds.length === 0) return document
+          const requestedNodeIdSet = new Set(requestedNodeIds)
+          if (requestedNodeIdSet.size !== requestedNodeIds.length) {
+            throw new Error("Canvas resource refresh targets are duplicated")
+          }
+          const documentNodes = new Map(document.nodes.map((node) => [node.id, node]))
+          const targets = requestedNodeIds.map((nodeId) => {
+            const node = documentNodes.get(nodeId)
+            const entity = activeCanvasSession.resolveNodeEntity(nodeId)
+            if (!node || !isStaleCanvasResourceState(node.data.resourceState) || !entity) {
+              throw new Error("Canvas resource refresh target is outside the mounted session")
+            }
+            return { entity, nodeId }
+          })
+          const patchesResult = await hydrateCanvasResourceTargetsInBatches({
+            client: window.convax.canvas.resources,
+            ref: { canvasId: activeCanvasId, scopeId: activeProjectId },
             sessionId: activeCanvasSession.sessionId,
-            nodeIds: staleNodeIds,
+            signal,
+            targets,
           })
           if (signal.aborted) throw signal.reason
-          return hydrated
+          const patches = new Map(patchesResult.map((patch) => [patch.nodeId, patch.state]))
+          return {
+            ...document,
+            nodes: document.nodes.map((node) => {
+              if (!requestedNodeIdSet.has(node.id)) return node
+              const state = patches.get(node.id)
+              if (!state) throw new Error("Canvas resource refresh response is incomplete")
+              return { ...node, data: { ...node.data, resourceState: state } }
+            }),
+          }
         },
-        markStale: markProjectCanvasResourcesStale,
+        markStale(document, nodeIds) {
+          if (nodeIds === undefined) return markProjectCanvasResourcesStale(document)
+          const selected = new Set(nodeIds)
+          if (selected.size === 0) return document
+          const marked = markProjectCanvasResourcesStale({
+            ...document,
+            nodes: document.nodes.filter((node) => selected.has(node.id)),
+          })
+          const markedById = new Map(marked.nodes.map((node) => [node.id, node]))
+          let changed = false
+          const nodes = document.nodes.map((node) => {
+            const next = markedById.get(node.id)
+            if (!next || next === node) return node
+            changed = true
+            return next
+          })
+          return changed ? { ...document, nodes } : document
+        },
       },
       mutation: {
         preparePresentation(request) {
@@ -1278,6 +1331,7 @@ function App() {
           return {
             authoritativeProjectionDelivered: delivery.projectionDelivered,
             createdNodeIds: delivery.result.createdNodeIds,
+            preparedResources: delivery.preparedResources,
             warnings: delivery.result.warnings,
           }
         },

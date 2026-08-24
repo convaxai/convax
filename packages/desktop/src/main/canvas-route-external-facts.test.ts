@@ -52,9 +52,12 @@ describe("route-scoped Canvas external facts", () => {
 
   test("verifies current resource proofs only from the exact live ProjectIndex reference", async () => {
     const fixture = currentResourceFixture()
-    const queryCurrentResourceReferences = mock(async () => [fixture.reference])
+    const queryCurrentResourceReferences = mock(async () => {
+      throw new Error("Canvas commit facts must not query all ProjectIndex resources")
+    })
+    const queryCurrentResourceReferencesExact = mock(async () => [fixture.reference])
     const authority = createProjectIndexBackedCanvasExternalFactAuthority({
-      currentResources: { queryCurrentResourceReferences },
+      currentResources: { queryCurrentResourceReferences, queryCurrentResourceReferencesExact },
       availableBlobs: { queryAvailableBlobs: async () => [] },
     })
     const request = {
@@ -72,14 +75,24 @@ describe("route-scoped Canvas external facts", () => {
       },
       requirement: {} as never,
     })).resolves.toBe("rejected")
-    expect(queryCurrentResourceReferences).toHaveBeenCalledWith({ projectId: fixture.scope.projectId })
+    expect(queryCurrentResourceReferences).not.toHaveBeenCalled()
+    expect(queryCurrentResourceReferencesExact).toHaveBeenCalledWith({
+      projectId: fixture.scope.projectId,
+      targets: [{
+        uri: fixture.reference.canonicalUri,
+        ownerProofDigest: fixture.proof.ownerProofDigest,
+      }],
+    })
   })
 
   test("verifies retained history resources from exact durable blob availability", async () => {
     const fixture = currentResourceFixture()
     const queryAvailableBlobs = mock(async (input: { blobs: readonly unknown[] }) => input.blobs as never)
     const authority = createProjectIndexBackedCanvasExternalFactAuthority({
-      currentResources: { queryCurrentResourceReferences: async () => [] },
+      currentResources: {
+        queryCurrentResourceReferences: async () => [],
+        queryCurrentResourceReferencesExact: async () => [],
+      },
       availableBlobs: { queryAvailableBlobs },
     })
     const proof = {
@@ -106,7 +119,10 @@ describe("route-scoped Canvas external facts", () => {
     })
 
     const pending = createProjectIndexBackedCanvasExternalFactAuthority({
-      currentResources: { queryCurrentResourceReferences: async () => [] },
+      currentResources: {
+        queryCurrentResourceReferences: async () => [],
+        queryCurrentResourceReferencesExact: async () => [],
+      },
       availableBlobs: { queryAvailableBlobs: async () => [] },
     })
     await expect(pending.verify({ scope: fixture.scope, request, requirement: {} as never }))

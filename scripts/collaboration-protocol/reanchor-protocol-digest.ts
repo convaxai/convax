@@ -35,10 +35,11 @@ const core = Object.freeze({
 
 const protocolDigest = structuredDigest(KERNEL_DIGEST_DOMAINS.protocolSchemaBundleCore, core)
 const constantsPath = join(import.meta.dir, "../../packages/collaboration/src/constants.ts")
-let text = readFileSync(constantsPath, "utf8")
-const updated = text.replace(/protocolDigest:\s*"[a-f0-9]{64}"/, `protocolDigest: "${protocolDigest}"`)
-if (updated === text) throw new Error("Could not locate protocolDigest anchor")
-writeFileSync(constantsPath, updated)
+const text = readFileSync(constantsPath, "utf8")
+const anchorPattern = /protocolDigest:\s*"[a-f0-9]{64}"/
+if (!anchorPattern.test(text)) throw new Error("Could not locate protocolDigest anchor")
+const updated = text.replace(anchorPattern, `protocolDigest: "${protocolDigest}"`)
+if (updated !== text) writeFileSync(constantsPath, updated)
 console.log(`reanchored protocolDigest=${protocolDigest}`)
 console.log(
   `sorted=${[...PROTOCOL_DIGEST_DOMAIN_REGISTRY].every((d, i, a) => i === 0 || a[i - 1]! < d)} count=${PROTOCOL_DIGEST_DOMAIN_REGISTRY.length}`,

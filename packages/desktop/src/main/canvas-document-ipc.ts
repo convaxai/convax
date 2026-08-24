@@ -6,6 +6,7 @@ import {
   type CanvasResourcePreparationResult,
   type CanvasResourceSource,
 } from "@convax/canvas/application"
+import { assertEntityRef, type CanvasEntityRef } from "@convax/canvas/collaboration"
 import {
   getIncomingConnectedCanvasFileNodeIds,
   isCanvasEmptyMediaNodeData,
@@ -14,7 +15,6 @@ import {
 } from "@convax/canvas/core"
 import {
   getProjectResourceReference,
-  markProjectCanvasResourcesStale,
   projectResourceBindingsKey,
   requireProjectResourceReference,
 } from "@convax/project/canvas"
@@ -52,7 +52,10 @@ type CanvasDocumentHydrator = Pick<ProjectCanvasResourceHydrator, "hydrate"> &
 interface CanvasDocumentIpcOptions {
   isTrustedSender: (event: IpcMainInvokeEvent) => boolean
   prepareProjectCanvasAccess?: (projectId: string) => () => void
-  sessions?: Pick<CanvasCollaborationSessionOwner, "requireRendererLease">
+  sessions?: Pick<
+    CanvasCollaborationSessionOwner,
+    "queryRendererResourceTargets" | "requireRendererLease"
+  >
 }
 
 export function registerCanvasDocumentIpc(
@@ -112,16 +115,23 @@ export function registerCanvasDocumentIpc(
           sessionId: input.sessionId,
         })
       requireLiveLease()
-      const loaded = await application.query(input.ref)
+      const projection = await sessions.queryRendererResourceTargets(input.ref, input.sessionId, input.targets)
       requireLiveLease()
-      const staleDocument = input.nodeIds ? loaded.projection : markProjectCanvasResourcesStale(loaded.projection)
+      const targets = requireLiveResourceHydrationTargets(projection, input.targets)
       const hydrated = await hydrateStale({
-        document: staleDocument,
-        ...(input.nodeIds === undefined ? {} : { nodeIds: input.nodeIds }),
+        document: {
+          ...projection,
+          edges: [],
+          nodes: targets.map(({ node }) => node),
+        },
         projectId: input.ref.scopeId,
       })
       requireLiveLease()
-      return hydrated
+      const patches = resourceRuntimePatches(hydrated, input.targets)
+      const currentProjection = await sessions.queryRendererResourceTargets(input.ref, input.sessionId, input.targets)
+      requireLiveResourceHydrationTargets(currentProjection, input.targets, targets)
+      requireLiveLease()
+      return { patches }
     })
     disposers.push(() => ipcMain.removeHandler(canvasResourceHydrateStaleIpcChannel))
   }
@@ -162,44 +172,38 @@ function requireRendererCommandRequest(value: unknown): CanvasRendererCommandReq
 interface CanvasResourceHydrateStaleRequest {
   readonly ref: CanvasDocumentRef
   readonly sessionId: Id128
-  readonly nodeIds?: readonly string[]
+  readonly targets: readonly CanvasResourceHydrationTarget[]
+}
+
+interface CanvasResourceHydrationTarget {
+  readonly entity: CanvasEntityRef & { readonly kind: "node" }
+  readonly nodeId: string
 }
 
 function requireCanvasResourceHydrateStaleRequest(value: unknown): CanvasResourceHydrateStaleRequest {
-  if (!isRecord(value)) throw new Error("Canvas resource refresh request must be an object")
-  for (const key of Object.keys(value)) {
-    if (key !== "ref" && key !== "sessionId" && key !== "nodeIds") {
-      throw new Error(`Canvas resource refresh request contains unsupported field: ${key}`)
-    }
-  }
-  if (!("ref" in value) || !("sessionId" in value)) {
-    throw new Error("Canvas resource refresh request is missing its mounted session scope")
-  }
-  const ref = requireCanvasResourceHydrationRef(value.ref)
-  const sessionId = parseId128(value.sessionId)
-  if (value.nodeIds === undefined) return Object.freeze({ ref, sessionId })
-  if (
-    !Array.isArray(value.nodeIds) ||
-    value.nodeIds.length === 0 ||
-    value.nodeIds.length > canvasResourceHydrationMaximumTargetCount
-  ) {
-    throw new Error("Canvas resource refresh target node ids are invalid")
-  }
-  const nodeIds = value.nodeIds.map((nodeId) => {
-    const id = requireNonEmptyString(nodeId, "Canvas resource refresh target node id")
-    if (
-      id !== id.trim() ||
-      id.length > canvasResourceHydrationMaximumTargetIdLength ||
-      /[\u0000-\u001f\u007f]/u.test(id)
-    ) {
-      throw new Error("Canvas resource refresh target node id is invalid")
-    }
-    return id
+  const record = requireExactDataRecord(value, ["ref", "sessionId", "targets"], "Canvas resource refresh request")
+  const ref = requireCanvasResourceHydrationRef(record.ref)
+  const sessionId = parseId128(record.sessionId)
+  const requestTargets = requireDenseDataArray(
+    record.targets,
+    1,
+    canvasResourceHydrationMaximumTargetCount,
+    "Canvas resource refresh targets",
+  )
+  const nodeIds = new Set<string>()
+  const targets = requestTargets.map((candidate): CanvasResourceHydrationTarget => {
+    const target = requireExactDataRecord(candidate, ["entity", "nodeId"], "Canvas resource refresh target")
+    const nodeId = requireCanvasResourceHydrationIdentity(target.nodeId, "Canvas resource refresh node id")
+    if (nodeIds.has(nodeId)) throw new Error("Canvas resource refresh target is invalid")
+    assertEntityRef(target.entity, "node")
+    if (target.entity.id !== nodeId) throw new Error("Canvas resource refresh target is invalid")
+    nodeIds.add(nodeId)
+    return Object.freeze({
+      entity: structuredClone(target.entity) as CanvasResourceHydrationTarget["entity"],
+      nodeId,
+    })
   })
-  if (new Set(nodeIds).size !== nodeIds.length) {
-    throw new Error("Canvas resource refresh target node ids must be unique")
-  }
-  return Object.freeze({ ref, sessionId, nodeIds: Object.freeze(nodeIds) })
+  return Object.freeze({ ref, sessionId, targets: Object.freeze(targets) })
 }
 
 function requireCanvasResourceHydrationRef(value: unknown): CanvasDocumentRef {
@@ -215,11 +219,61 @@ function requireCanvasResourceHydrationRef(value: unknown): CanvasDocumentRef {
 
 function requireCanvasResourceHydrationIdentity(value: unknown, label: string): string {
   const identity = requireNonEmptyString(value, label)
-  if (identity !== identity.trim() || identity.length > canvasResourceHydrationMaximumTargetIdLength) {
+  if (
+    identity !== identity.trim() ||
+    identity.length > canvasResourceHydrationMaximumTargetIdLength ||
+    /[\u0000-\u001f\u007f]/u.test(identity)
+  ) {
     throw new Error(`${label} is invalid`)
   }
-  if (/[\u0000-\u001f\u007f]/u.test(identity)) throw new Error(`${label} is invalid`)
   return identity
+}
+
+function requireLiveResourceHydrationTargets(
+  projection: { nodes: readonly CanvasNode[] },
+  targets: readonly CanvasResourceHydrationTarget[],
+  previous?: readonly { metadata: unknown; node: CanvasNode }[],
+) {
+  const nodes = new Map(projection.nodes.map((node) => [node.id, node]))
+  if (nodes.size !== projection.nodes.length) {
+    throw new Error("Canvas resource refresh target is stale or outside the live session")
+  }
+  return targets.map((target, index) => {
+    const node = nodes.get(target.nodeId)
+    if (
+      !node ||
+      !isStaleResourceRuntimeState(node.data.resourceState) ||
+      (previous && !sameCanvasRuntimeValue(previous[index]?.metadata, node.data.metadata))
+    ) {
+      throw new Error("Canvas resource refresh target is stale or outside the live session")
+    }
+    return { metadata: structuredClone(node.data.metadata), node }
+  })
+}
+
+function resourceRuntimePatches(
+  hydrated: { id: string; nodes: readonly CanvasNode[] },
+  targets: readonly CanvasResourceHydrationTarget[],
+) {
+  const nodes = new Map(hydrated.nodes.map((node) => [node.id, node]))
+  if (nodes.size !== targets.length) throw new Error("Canvas resource refresh result is incomplete")
+  return targets.map(({ nodeId }) => {
+    const state = nodes.get(nodeId)?.data.resourceState
+    if (!state) throw new Error("Canvas resource refresh result is incomplete")
+    return { nodeId, state: structuredClone(state) }
+  })
+}
+
+function isStaleResourceRuntimeState(value: unknown) {
+  return isRecord(value) && value.status === "stale"
+}
+
+function sameCanvasRuntimeValue(left: unknown, right: unknown) {
+  try {
+    return JSON.stringify(left) === JSON.stringify(right)
+  } catch {
+    return false
+  }
 }
 
 interface ActiveCanvasScope {
@@ -354,7 +408,7 @@ function mergeCanvasResourcePreparation(
   }
 }
 
-type CanvasResourcePort = Pick<CanvasResourceBusinessService, "addPreparedResources" | "addResources"> &
+type CanvasResourcePort = Pick<CanvasResourceBusinessService, "addResourcesCertified"> &
   Partial<Pick<CanvasResourceBusinessService, "createPendingResource" | "relinkPreparedResource">>
 type CanvasLocalFilePreparationPort = Pick<ProjectCanvasResourcePreparation, "withAdmittedLocalFiles"> &
   Partial<Pick<ProjectCanvasResourcePreparation, "prepare" | "prepareManagedTextEditableCopy">>
@@ -391,7 +445,7 @@ export interface CanvasResourceBusinessDiagnostic {
     | "canvas-submit"
     | "relink-prepare"
     | "relink-submit"
-    | "response-projection-invalidation"
+    | "response-projection-delivery"
 }
 
 export function registerCanvasResourceIpc(
@@ -512,17 +566,17 @@ export function registerCanvasResourceIpc(
             ? await preparation.withAdmittedLocalFiles(
                 { files: input.externalFiles, projectId: active.projectId },
                 async (localPrepared: CanvasResourcePreparationResult) => {
-                  if (!sourcePreparation) return resources.addPreparedResources(request, localPrepared)
+                  if (!sourcePreparation) return resources.addResourcesCertified(request, localPrepared)
                   const settled = await sourcePreparation
                   if (settled.status === "rejected") throw settled.reason
                   sourcePrepared = settled.prepared
-                  return resources.addPreparedResources(
+                  return resources.addResourcesCertified(
                     { ...request, sources: [] },
                     mergeCanvasResourcePreparation(localPrepared, sourcePrepared),
                   )
                 },
               )
-            : await trace("canvas-submit", sourceBytes, () => resources.addResources(request))
+            : await trace("canvas-submit", sourceBytes, () => resources.addResourcesCertified(request))
       } catch (caught) {
         let error = caught
         if (sourcePreparation && !sourcePrepared) {
@@ -547,7 +601,7 @@ export function registerCanvasResourceIpc(
         }
         throw error
       }
-      const delivery = await trace("response-projection-invalidation", 0, () =>
+      const delivery = await trace("response-projection-delivery", 0, () =>
         options.sessions.deliverApplicationCommit({
           ref: { canvasId: active.canvasId, scopeId: active.projectId },
           rendererActorId: `desktop:renderer:${event.sender.id}`,
@@ -621,7 +675,7 @@ export function registerCanvasResourceIpc(
           await recheckLiveRelinkScope(event, active, input.nodeId, live.reference, options)
           result = await trace("relink-submit", 0, () => relinkPreparedResource(request, prepared))
         }
-        const delivery = await trace("response-projection-invalidation", 0, () =>
+        const delivery = await trace("response-projection-delivery", 0, () =>
           options.sessions.deliverApplicationCommit({
             ref: { canvasId: active.canvasId, scopeId: active.projectId },
             rendererActorId: `desktop:renderer:${event.sender.id}`,
@@ -1167,6 +1221,55 @@ function requireNonEmptyString(value: unknown, label: string) {
   const string = requireString(value, label)
   if (!string.trim()) throw new Error(`${label} is required`)
   return string
+}
+
+function requireBoundedHydrationIdentifier(value: unknown, label: string) {
+  const identifier = requireNonEmptyString(value, label)
+  if (identifier.length > 1_024 || /[\u0000-\u001f\u007f]/u.test(identifier)) {
+    throw new Error(`${label} is invalid`)
+  }
+  return identifier
+}
+
+function requireExactDataRecord(value: unknown, keys: readonly string[], label: string): Record<string, unknown> {
+  if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error(`${label} is invalid`)
+  const prototype = Object.getPrototypeOf(value)
+  if (prototype !== Object.prototype && prototype !== null) throw new Error(`${label} is invalid`)
+  const record = value as Record<string, unknown>
+  const actualKeys = Reflect.ownKeys(record)
+  const expectedKeys = [...keys].sort()
+  if (
+    actualKeys.length !== expectedKeys.length ||
+    actualKeys.some((key) => typeof key !== "string") ||
+    actualKeys.map(String).sort().some((key, index) => key !== expectedKeys[index])
+  ) {
+    throw new Error(`${label} field set is invalid`)
+  }
+  for (const key of expectedKeys) {
+    const descriptor = Object.getOwnPropertyDescriptor(record, key)
+    if (!descriptor?.enumerable || !("value" in descriptor)) throw new Error(`${label} is invalid`)
+  }
+  return record
+}
+
+function requireDenseDataArray(
+  value: unknown,
+  minimum: number,
+  maximum: number,
+  label: string,
+): readonly unknown[] {
+  if (!Array.isArray(value) || value.length < minimum || value.length > maximum) {
+    throw new Error(`${label} are invalid`)
+  }
+  for (let index = 0; index < value.length; index += 1) {
+    const descriptor = Object.getOwnPropertyDescriptor(value, String(index))
+    if (!descriptor?.enumerable || !("value" in descriptor)) throw new Error(`${label} are invalid`)
+  }
+  const allowedKeys = new Set(["length", ...value.map((_, index) => String(index))])
+  if (Reflect.ownKeys(value).some((key) => typeof key !== "string" || !allowedKeys.has(key))) {
+    throw new Error(`${label} are invalid`)
+  }
+  return value
 }
 
 function requireString(value: unknown, label: string) {

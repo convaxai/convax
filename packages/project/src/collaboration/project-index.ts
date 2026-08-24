@@ -8,10 +8,15 @@ import {
   compareDecodedBase64url,
   comparePortableStamps,
   compareUtf8,
+  currentProtocolDescriptor,
   decodeRestrictedJcs,
   encodeRestrictedJcs,
   createSelectedDocumentOwnerArtifactFactory,
   ordinarySha256,
+  OWNER_STATE_CANONICAL_KEY_PATH_POLICY,
+  OWNER_STATE_COMMITMENT_CODEC,
+  OWNER_STATE_MAX_CANONICAL_KEY_UTF8_BYTES,
+  OWNER_STATE_MAX_CANONICAL_NAME_UTF8_BYTES,
   ownerCanonicalizerDescriptorDigest,
   parseActorId,
   parseCanvasId,
@@ -26,7 +31,6 @@ import {
   parseUint32,
   parseUint64,
   structuredDigest,
-  canonicalStateDigest,
   type ActualWriteEvidence,
   type ActorId,
   type CanvasId,
@@ -36,7 +40,6 @@ import {
   type DocumentOwnerRuntime,
   type DocumentScope,
   type CurrentProtocolAuthority,
-  type CanonicalJcsEvidence,
   type Id128,
   type OwnerApplyResult,
   type OwnerCanonicalizerDescriptor,
@@ -47,6 +50,10 @@ import {
   type OwnerIntentDependencies,
   type OwnerIntentValidationContext,
   type OwnerProcessValueFactory,
+  type OwnerStateCommitment,
+  type OwnerStateCommitmentDescriptor,
+  type OwnerStateCommitmentIssuer,
+  type OwnerStateCommitmentMutation,
   type OwnerValidatedState,
   type PortableStamp,
   type ProjectId,
@@ -76,6 +83,13 @@ import type {
   DocumentShardResetReason,
   DocumentShardResetRouteCasCore,
 } from "../collaboration-protocol/reset-contracts"
+import {
+  createProjectPersistentSortedCollection,
+  insertProjectPersistentSortedCollection,
+  projectPersistentSortedCollectionCounts,
+  projectPersistentSortedCollectionEntries,
+  type ProjectPersistentSortedCollection,
+} from "./persistent-sorted-collection"
 
 export const PROJECT_INDEX_ROOT_NAME = "convax.project-index.v2"
 export const PROJECT_INDEX_ROOT_KEYS = Object.freeze([
@@ -90,9 +104,43 @@ export const PROJECT_INDEX_ROOT_KEYS = Object.freeze([
   "operations",
 ] as const)
 
-export const PROJECT_INDEX_PROTOCOL_SCHEMA_ARTIFACT_DIGEST: Digest = parseDigest(
-  "99ebca8cc048f6cf919d55a9829091e2450e59a10b87b5410d9b0243459be37c",
-)
+const PROJECT_INDEX_STATE_COMMITMENT_SCALAR_NAMES = Object.freeze([
+  "format",
+  "identity",
+] as const)
+
+const PROJECT_INDEX_STATE_COMMITMENT_COLLECTION_NAMES = Object.freeze([
+  "canvasRoutes",
+  "contentConflictCopies",
+  "contentFamilies",
+  "entries",
+  "entryLocations",
+  "entryTombstones",
+  "operations",
+  "pathReservations",
+] as const)
+
+const PROJECT_INDEX_STATE_COMMITMENT_DESCRIPTOR: OwnerStateCommitmentDescriptor = Object.freeze({
+  format: "convax.owner-state-commitment-descriptor",
+  commitmentCodec: OWNER_STATE_COMMITMENT_CODEC,
+  canonicalKeyPathPolicy: OWNER_STATE_CANONICAL_KEY_PATH_POLICY,
+  maxCanonicalNameUtf8Bytes: OWNER_STATE_MAX_CANONICAL_NAME_UTF8_BYTES,
+  maxCanonicalKeyUtf8Bytes: OWNER_STATE_MAX_CANONICAL_KEY_UTF8_BYTES,
+  scalarNames: PROJECT_INDEX_STATE_COMMITMENT_SCALAR_NAMES,
+  collectionNames: PROJECT_INDEX_STATE_COMMITMENT_COLLECTION_NAMES,
+})
+
+function currentProjectIndexProtocolSchemaDigest(): Digest {
+  const artifact = currentProtocolDescriptor().artifacts.find(
+    (candidate) => candidate.name === "project-persistence",
+  )
+  if (artifact?.format !== "convax.project-persistence-protocol-schema") {
+    throw new TypeError("The current protocol descriptor does not name the ProjectIndex owner schema artifact")
+  }
+  return parseDigest(artifact.digest)
+}
+
+export const PROJECT_INDEX_PROTOCOL_SCHEMA_ARTIFACT_DIGEST: Digest = currentProjectIndexProtocolSchemaDigest()
 
 // The root and /canvas package entrypoints are compiled as independent bundles.
 // A schema-bound global symbol preserves this process-local validated-view marker
@@ -127,6 +175,8 @@ export interface ProjectIndexIdentityRecord {
   readonly protocolDigest: Digest
   readonly schemaDigest: Digest
   readonly uriProtocolDigest: Digest
+  /** Signed owner-state carrier for the sealed one-shot import; ordinary genesis is null. */
+  readonly migrationImportBaseProofDigest: Digest | null
 }
 
 export interface ProjectEntryRecord {
@@ -240,7 +290,10 @@ export interface CanvasRouteActivation {
   readonly shardEpoch: Id128
   readonly predecessorActivationDigest: null
   readonly stageRecordDigest: Digest
-  readonly projectIndexRouteDependencyFrameDigest: Digest
+  readonly projectIndexRouteDependency: Readonly<{
+    readonly kind: "frame" | "migration-import-base"
+    readonly digest: Digest
+  }>
   readonly canvasGenesisCheckpointObjectDigest: Digest
   readonly stagedProjectIndexFrontierDigest: Digest
   readonly stamp: PortableStamp
@@ -490,28 +543,186 @@ export interface ProjectIndexSnapshot {
   readonly operations: ReadonlyMap<string, ProjectOperationReceipt>
 }
 
-class ProjectIndexReadonlyMapView<K, V> implements ReadonlyMap<K, V> {
-  readonly #map: Map<K, V>
+interface ProjectIndexTrieEdge<V> {
+  readonly unit: number
+  readonly node: ProjectIndexTrieNode<V>
+}
 
-  constructor(source: ReadonlyMap<K, V>) {
-    this.#map = source instanceof Map ? source : new Map(source)
+interface ProjectIndexTrieNode<V> {
+  readonly terminal: Readonly<{ value: V }> | null
+  readonly edges: readonly ProjectIndexTrieEdge<V>[]
+}
+
+interface ProjectIndexMapAdditionLog<K extends string, V> {
+  readonly previous: ProjectIndexMapAdditionLog<K, V> | null
+  readonly entries: readonly (readonly [K, V])[]
+}
+
+let projectIndexTrieLookupCodeUnits = 0
+let projectIndexTrieInsertCodeUnits = 0
+let projectIndexTrieEdgeComparisons = 0
+let projectIndexTrieNodeCopies = 0
+let projectIndexTrieEdgeCopies = 0
+
+class ProjectIndexReadonlyMapView<K extends string, V> implements ReadonlyMap<K, V> {
+  readonly #base: ReadonlyMap<K, V>
+  readonly #overlay: ProjectIndexTrieNode<V> | null
+  readonly #additions: ProjectIndexMapAdditionLog<K, V> | null
+  readonly #overlaySize: number
+
+  constructor(
+    source: ReadonlyMap<K, V>,
+    overlay: ProjectIndexTrieNode<V> | null = null,
+    additions: ProjectIndexMapAdditionLog<K, V> | null = null,
+    overlaySize = 0,
+  ) {
+    this.#base = source instanceof Map ? source : new Map(source)
+    this.#overlay = overlay
+    this.#additions = additions
+    this.#overlaySize = overlaySize
     Object.freeze(this)
   }
 
-  get size(): number { return this.#map.size }
-  has(key: K): boolean { return this.#map.has(key) }
-  get(key: K): V | undefined { return this.#map.get(key) }
-  entries(): MapIterator<[K, V]> { return this.#map.entries() }
-  keys(): MapIterator<K> { return this.#map.keys() }
-  values(): MapIterator<V> { return this.#map.values() }
+  get size(): number { return this.#base.size + this.#overlaySize }
+  has(key: K): boolean { return projectIndexTrieGet(this.#overlay, key) !== null || this.#base.has(key) }
+  get(key: K): V | undefined { return projectIndexTrieGet(this.#overlay, key)?.value ?? this.#base.get(key) }
+  entries(): MapIterator<[K, V]> { return this.#iterateEntries() as MapIterator<[K, V]> }
+  keys(): MapIterator<K> { return this.#iterateKeys() as MapIterator<K> }
+  values(): MapIterator<V> { return this.#iterateValues() as MapIterator<V> }
   forEach(callbackfn: (value: V, key: K, map: ReadonlyMap<K, V>) => void, thisArg?: unknown): void {
-    this.#map.forEach((value, key) => callbackfn.call(thisArg, value, key, this))
+    for (const [key, value] of this.#iterateEntries()) callbackfn.call(thisArg, value, key, this)
   }
-  [Symbol.iterator](): MapIterator<[K, V]> { return this.#map[Symbol.iterator]() }
+  [Symbol.iterator](): MapIterator<[K, V]> { return this.entries() }
+
+  withInsertions(entries: readonly (readonly [K, V])[]): ProjectIndexReadonlyMapView<K, V> {
+    if (entries.length === 0) return this
+    let overlay = this.#overlay
+    const seen = new Set<K>()
+    const retained: Array<readonly [K, V]> = []
+    for (const [key, value] of entries) {
+      if (seen.has(key) || this.has(key)) throw new Error("ProjectIndex persistent map insertion is not append-only")
+      seen.add(key)
+      overlay = projectIndexTrieInsert(overlay, key, value, 0, false)
+      retained.push(Object.freeze([key, value] as const))
+    }
+    return new ProjectIndexReadonlyMapView(
+      this.#base,
+      overlay,
+      Object.freeze({ previous: this.#additions, entries: Object.freeze(retained) }),
+      this.#overlaySize + retained.length,
+    )
+  }
+
+  *#iterateEntries(): Generator<[K, V]> {
+    yield* this.#base.entries()
+    const logs: ProjectIndexMapAdditionLog<K, V>[] = []
+    for (let current = this.#additions; current !== null; current = current.previous) logs.push(current)
+    for (let index = logs.length - 1; index >= 0; index -= 1) {
+      for (const [key, value] of logs[index]!.entries) yield [key, value]
+    }
+  }
+
+  *#iterateKeys(): Generator<K> {
+    for (const [key] of this.#iterateEntries()) yield key
+  }
+
+  *#iterateValues(): Generator<V> {
+    for (const [, value] of this.#iterateEntries()) yield value
+  }
 }
 
-function readonlyProjectIndexMap<K, V>(source: ReadonlyMap<K, V>): ReadonlyMap<K, V> {
+class ProjectIndexPersistentLookup<K extends string, V> implements ProjectIndexLookup<K, V> {
+  readonly #base: ProjectIndexLookup<K, V>
+  readonly #overlay: ProjectIndexTrieNode<V> | null
+
+  constructor(base: ProjectIndexLookup<K, V>, overlay: ProjectIndexTrieNode<V> | null = null) {
+    this.#base = base instanceof ProjectIndexPersistentLookup ? base.#base : base
+    this.#overlay = base instanceof ProjectIndexPersistentLookup && overlay === null ? base.#overlay : overlay
+    Object.freeze(this)
+  }
+
+  get(key: K): V | undefined {
+    return projectIndexTrieGet(this.#overlay, key)?.value ?? this.#base.get(key)
+  }
+
+  withOverrides(entries: readonly (readonly [K, V])[]): ProjectIndexPersistentLookup<K, V> {
+    let overlay = this.#overlay
+    for (const [key, value] of entries) {
+      overlay = projectIndexTrieInsert(overlay, key, value, 0, true)
+    }
+    return new ProjectIndexPersistentLookup(this.#base, overlay)
+  }
+}
+
+function projectIndexTrieGet<V>(
+  root: ProjectIndexTrieNode<V> | null,
+  key: string,
+): Readonly<{ value: V }> | null {
+  let node = root
+  for (let offset = 0; offset < key.length; offset += 1) {
+    if (node === null) return null
+    projectIndexTrieLookupCodeUnits += 1
+    const unit = key.charCodeAt(offset)
+    let edge: ProjectIndexTrieEdge<V> | undefined
+    for (const candidate of node.edges) {
+      projectIndexTrieEdgeComparisons += 1
+      if (candidate.unit === unit) {
+        edge = candidate
+        break
+      }
+    }
+    if (edge === undefined) return null
+    node = edge.node
+  }
+  return node?.terminal ?? null
+}
+
+function projectIndexTrieInsert<V>(
+  node: ProjectIndexTrieNode<V> | null,
+  key: string,
+  value: V,
+  offset: number,
+  replaceExisting: boolean,
+): ProjectIndexTrieNode<V> {
+  const current = node ?? Object.freeze({ terminal: null, edges: Object.freeze([]) })
+  if (offset === key.length) {
+    if (current.terminal !== null && !replaceExisting) throw new Error("ProjectIndex persistent trie key already exists")
+    projectIndexTrieNodeCopies += 1
+    return Object.freeze({ terminal: Object.freeze({ value }), edges: current.edges })
+  }
+  projectIndexTrieInsertCodeUnits += 1
+  const unit = key.charCodeAt(offset)
+  let edgeIndex = -1
+  for (let index = 0; index < current.edges.length; index += 1) {
+    projectIndexTrieEdgeComparisons += 1
+    if (current.edges[index]!.unit === unit) {
+      edgeIndex = index
+      break
+    }
+  }
+  const child = edgeIndex < 0 ? null : current.edges[edgeIndex]!.node
+  const next = projectIndexTrieInsert(child, key, value, offset + 1, replaceExisting)
+  projectIndexTrieNodeCopies += 1
+  projectIndexTrieEdgeCopies += current.edges.length
+  const edges = [...current.edges]
+  const edge = Object.freeze({ unit, node: next })
+  if (edgeIndex < 0) edges.push(edge)
+  else edges[edgeIndex] = edge
+  return Object.freeze({ terminal: current.terminal, edges: Object.freeze(edges) })
+}
+
+function readonlyProjectIndexMap<K extends string, V>(source: ReadonlyMap<K, V>): ReadonlyMap<K, V> {
   return source instanceof ProjectIndexReadonlyMapView ? source : new ProjectIndexReadonlyMapView(source)
+}
+
+function readonlyProjectIndexMapInsertions<K extends string, V>(
+  base: ReadonlyMap<K, V>,
+  entries: readonly (readonly [K, V])[],
+): ReadonlyMap<K, V> {
+  if (!(base instanceof ProjectIndexReadonlyMapView)) {
+    throw new Error("ProjectIndex incremental base map is not persistent")
+  }
+  return base.withInsertions(entries)
 }
 
 interface ProjectIndexValidatedViewCacheEntry {
@@ -524,18 +735,35 @@ interface ProjectIndexValidatedViewCacheEntry {
 
 interface ProjectIndexCanonicalFragments {
   readonly values: ReadonlyMap<keyof ProjectCanonicalState, Uint8Array>
-  readonly collections: ReadonlyMap<ProjectCanonicalCollectionKey, readonly ProjectCanonicalPair[]>
+  readonly collections: ReadonlyMap<ProjectCanonicalCollectionKey, ProjectCanonicalPairCollection>
   readonly bytes: Uint8Array | null
-  readonly digest: Digest | null
-  readonly evidence: CanonicalJcsEvidence | null
-  readonly evidenceValues: ReadonlyMap<keyof ProjectCanonicalState, CanonicalJcsEvidence>
   readonly certifiedDurableHeadDigest: Digest | null
 }
 
 type ProjectCanonicalCollectionKey = Exclude<keyof ProjectCanonicalState, "format" | "identity">
-interface ProjectCanonicalPair { readonly key: string; readonly value: unknown; readonly bytes: Uint8Array; readonly evidence: CanonicalJcsEvidence | null }
+interface ProjectCanonicalPair { readonly key: string; readonly value: unknown; readonly bytes: Uint8Array }
+type ProjectCanonicalPairCollection = ProjectPersistentSortedCollection<ProjectCanonicalPair>
 
 const projectIndexCanonicalFragments = new WeakMap<ProjectIndexSnapshot, ProjectIndexCanonicalFragments>()
+
+interface ProjectIndexStateCommitmentRecord {
+  readonly issuer: OwnerStateCommitmentIssuer
+  readonly snapshot: ProjectIndexSnapshot
+  readonly commitment: OwnerStateCommitment
+  readonly digest: Digest
+}
+
+const projectIndexStateCommitmentsByIssuer = new WeakMap<
+  OwnerStateCommitmentIssuer,
+  WeakMap<ProjectIndexSnapshot, ProjectIndexStateCommitmentRecord>
+>()
+const projectIndexStateCommitmentsByState = new WeakMap<object, ProjectIndexStateCommitmentRecord>()
+let projectIndexCommitmentColdBuilds = 0
+let projectIndexCommitmentColdEntryVisits = 0
+let projectIndexCommitmentApplyCalls = 0
+let projectIndexCommitmentMutationCount = 0
+let projectIndexCommitmentHistoricalEntryVisits = 0
+let projectIndexCommitmentBoundStates = 0
 
 interface ProjectIndexValidatedViewTracker {
   transactionDepth: number
@@ -595,11 +823,15 @@ export function projectIndexOwnerCanonicalizerDescriptor(schemaDigest: Digest): 
     canonicalStateCodec: "restricted-jcs-utf8",
     exactBytePolicy: "parse-reencode-byte-equal",
     unknownStatePolicy: "reject",
+    stateCommitment: PROJECT_INDEX_STATE_COMMITMENT_DESCRIPTOR,
   })
 }
 
 export function createProjectIndexYDoc(identityInput: ProjectIndexIdentityRecord, rootEntryInput: ProjectEntryRecord): Y.Doc {
   const identity = parseIdentity(identityInput)
+  if (identity.migrationImportBaseProofDigest !== null) {
+    fail("invalid-genesis", "Ordinary ProjectIndex genesis cannot carry a migration import proof")
+  }
   const rootEntry = parseEntry(rootEntryInput)
   if (rootEntry.entryId !== identity.rootDirectoryId || rootEntry.provenance !== "project-root" || rootEntry.kind !== "directory") {
     fail("invalid-genesis", "ProjectIndex genesis root directory does not match identity")
@@ -695,6 +927,93 @@ function ensureProjectIndexValidatedViewTracker(
   return tracker
 }
 
+function projectIndexStateCommitmentIssuerRecords(
+  issuer: OwnerStateCommitmentIssuer,
+): WeakMap<ProjectIndexSnapshot, ProjectIndexStateCommitmentRecord> {
+  const existing = projectIndexStateCommitmentsByIssuer.get(issuer)
+  if (existing !== undefined) return existing
+  const created = new WeakMap<ProjectIndexSnapshot, ProjectIndexStateCommitmentRecord>()
+  projectIndexStateCommitmentsByIssuer.set(issuer, created)
+  return created
+}
+
+function buildProjectIndexStateCommitment(
+  snapshot: ProjectIndexSnapshot,
+  issuer: OwnerStateCommitmentIssuer,
+): ProjectIndexStateCommitmentRecord {
+  const records = projectIndexStateCommitmentIssuerRecords(issuer)
+  const cached = records.get(snapshot)
+  if (cached !== undefined) return cached
+  const collections = PROJECT_INDEX_STATE_COMMITMENT_COLLECTION_NAMES.map((name) => {
+    const entries: { readonly key: string; readonly value: unknown }[] = []
+    for (const [key, value] of projectCanonicalCollection(snapshot, name)) {
+      projectIndexCommitmentColdEntryVisits += 1
+      entries.push(Object.freeze({ key, value }))
+    }
+    return Object.freeze({ name, entries: Object.freeze(entries) })
+  })
+  const commitment = issuer.build(Object.freeze({
+    descriptor: PROJECT_INDEX_STATE_COMMITMENT_DESCRIPTOR,
+    scalars: Object.freeze([
+      Object.freeze({ name: "format", value: "convax.project-index-canonical-state" }),
+      Object.freeze({ name: "identity", value: Object.freeze([["project", snapshot.identity] as const]) }),
+    ]),
+    collections: Object.freeze(collections),
+  }))
+  projectIndexCommitmentColdBuilds += 1
+  const record = Object.freeze({ issuer, snapshot, commitment, digest: issuer.digest(commitment) })
+  records.set(snapshot, record)
+  return record
+}
+
+function applyProjectIndexStateCommitment(
+  baseState: OwnerValidatedState<"project-index">,
+  snapshot: ProjectIndexSnapshot,
+  inserted: ProjectIndexApplyResult["inserted"],
+  issuer: OwnerStateCommitmentIssuer,
+): ProjectIndexStateCommitmentRecord {
+  const base = projectIndexStateCommitmentsByState.get(baseState as object)
+  if (base === undefined || base.issuer !== issuer) {
+    throw new TypeError("ProjectIndex incremental commitment requires the exact validated base")
+  }
+  const mutations: OwnerStateCommitmentMutation[] = inserted.map((item) => Object.freeze({
+    kind: "set" as const,
+    collection: item.root,
+    key: item.key,
+    value: item.record,
+  }))
+  const commitment = issuer.apply(base.commitment, Object.freeze(mutations))
+  projectIndexCommitmentApplyCalls += 1
+  projectIndexCommitmentMutationCount += mutations.length
+  const record = Object.freeze({ issuer, snapshot, commitment, digest: issuer.digest(commitment) })
+  projectIndexStateCommitmentIssuerRecords(issuer).set(snapshot, record)
+  return record
+}
+
+function bindProjectIndexValidatedState(
+  document: Y.Doc,
+  snapshot: ProjectIndexSnapshot,
+  record: ProjectIndexStateCommitmentRecord,
+  processValues: OwnerProcessValueFactory<"project-index">,
+): OwnerValidatedState<"project-index"> {
+  const state = processValues.wrapValidatedState(snapshot)
+  const bound = processValues.bindStateCommitment(document, state, record.commitment)
+  projectIndexStateCommitmentsByState.set(state as object, record)
+  projectIndexStateCommitmentsByState.set(bound as object, record)
+  projectIndexCommitmentBoundStates += 1
+  const cached = cachedProjectIndexValidatedView(document)
+  if (cached?.snapshot === snapshot) {
+    cacheProjectIndexValidatedView(
+      document,
+      snapshot,
+      cached.canonicalStateBytes?.slice() ?? null,
+      record.digest,
+      cached.certifiedDurableHeadDigest,
+    )
+  }
+  return bound
+}
+
 function armProjectIndexCreateTransactionCapture(input: Readonly<{
   readonly base: OwnerValidatedState<"project-index">
   readonly candidate: Y.Doc
@@ -711,11 +1030,17 @@ function armProjectIndexCreateTransactionCapture(input: Readonly<{
   const childMaps = new Map<string, Y.Map<unknown>>()
   for (const key of PROJECT_INDEX_ROOT_KEYS) childMaps.set(key, childMap(root, key))
   const fragments = projectIndexCanonicalFragments.get(base) ?? null
+  const commitment = projectIndexStateCommitmentsByState.get(input.base as object)
   const baseCanonicalFragments = fragments !== null
-    && input.baseCanonicalProof !== undefined
-    && fragments.digest === input.baseCanonicalProof.canonicalStateDigest
-    && fragments.certifiedDurableHeadDigest === input.baseCanonicalProof.durableHeadDigest
-    && (fragments.evidence !== null || fragments.bytes !== null)
+    && fragments.collections.size === PROJECT_INDEX_STATE_COMMITMENT_COLLECTION_NAMES.length
+    && commitment?.snapshot === base
+    && (input.baseCanonicalProof === undefined || (
+      commitment.digest === input.baseCanonicalProof.canonicalStateDigest
+      && (
+        fragments.certifiedDurableHeadDigest === null
+        || fragments.certifiedDurableHeadDigest === input.baseCanonicalProof.durableHeadDigest
+      )
+    ))
     ? fragments
     : null
   tracker.capture = {
@@ -766,14 +1091,18 @@ function cacheProjectIndexValidatedView(
   tracker.cache = Object.freeze({ root, snapshot, canonicalStateBytes, canonicalStateDigest: canonicalDigest, certifiedDurableHeadDigest })
 }
 
-function cacheProjectIndexValidatedPostView(document: Y.Doc, snapshot: ProjectIndexSnapshot): void {
+function cacheProjectIndexValidatedPostView(
+  document: Y.Doc,
+  snapshot: ProjectIndexSnapshot,
+  commitmentDigest: Digest,
+): void {
   const tracker = projectIndexValidatedViewTrackers.get(document)
   // applyProjectIndexCandidateIntent installs the tracker before its transaction.
   // If it was first called from an already-open outer transaction, no public
   // before/after pair was observed and this post-state must not cross phases.
   if (!tracker || tracker.completedTransactions === 0) return
   const fragments = projectIndexCanonicalFragments.get(snapshot)
-  cacheProjectIndexValidatedView(document, snapshot, fragments?.bytes?.slice() ?? null, fragments?.digest ?? null)
+  cacheProjectIndexValidatedView(document, snapshot, fragments?.bytes?.slice() ?? null, commitmentDigest)
 }
 
 function sameBytes(left: Uint8Array, right: Uint8Array): boolean {
@@ -793,6 +1122,13 @@ function installProjectIndexValidatedPostCache(input: Readonly<{
   if (input.scope.docKind !== "project-index" || input.scope.docId !== "project-index") return
   const source = cachedProjectIndexValidatedView(input.source)
   if (source === null || source.snapshot !== input.state.value) return
+  const commitment = projectIndexStateCommitmentsByState.get(input.state as object)
+  if (
+    commitment === undefined
+    || commitment.snapshot !== source.snapshot
+    || commitment.digest !== input.canonicalStateDigest
+    || source.canonicalStateDigest !== commitment.digest
+  ) return
   if (
     source.snapshot.identity.projectId !== input.scope.projectId
     || source.snapshot.identity.projectEpoch !== input.scope.projectEpoch
@@ -810,23 +1146,17 @@ function installProjectIndexValidatedPostCache(input: Readonly<{
     || PROJECT_INDEX_ROOT_KEYS.some((key, index) => sourceKeys[index] !== key || targetKeys[index] !== key)
   ) return
   const fragments = projectIndexCanonicalFragments.get(source.snapshot)
-  if (fragments === undefined) return
-  if (fragments.evidence !== null) {
-    const certified = Object.freeze({ ...fragments, digest: input.canonicalStateDigest, certifiedDurableHeadDigest: input.durableHeadDigest })
+  if (fragments !== undefined) {
+    const certified = Object.freeze({ ...fragments, certifiedDurableHeadDigest: input.durableHeadDigest })
     projectIndexCanonicalFragments.set(source.snapshot, certified)
-    cacheProjectIndexValidatedView(input.target, source.snapshot, null, input.canonicalStateDigest, input.durableHeadDigest)
-    return
   }
-  if (source.canonicalStateBytes === null || fragments.bytes === null || fragments.digest === null) return
-  const bytesDigest = canonicalStateDigest(PROJECT_INDEX_PROTOCOL_SCHEMA_ARTIFACT_DIGEST, source.canonicalStateBytes)
-  if (
-    bytesDigest !== input.canonicalStateDigest
-    || source.canonicalStateDigest !== bytesDigest
-    || fragments.digest !== bytesDigest
-    || !sameBytes(fragments.bytes, source.canonicalStateBytes)
-  ) return
-  projectIndexCanonicalFragments.set(source.snapshot, Object.freeze({ ...fragments, certifiedDurableHeadDigest: input.durableHeadDigest }))
-  cacheProjectIndexValidatedView(input.target, source.snapshot, source.canonicalStateBytes.slice(), bytesDigest, input.durableHeadDigest)
+  cacheProjectIndexValidatedView(
+    input.target,
+    source.snapshot,
+    source.canonicalStateBytes?.slice() ?? null,
+    commitment.digest,
+    input.durableHeadDigest,
+  )
 }
 
 function readProjectIndexCertifiedCanonicalDigest(input: Readonly<{
@@ -840,13 +1170,9 @@ function readProjectIndexCertifiedCanonicalDigest(input: Readonly<{
   if (input.scope.docKind !== "project-index" || input.scope.docId !== "project-index") return null
   const identity = cached.snapshot.identity
   if (identity.projectId !== input.scope.projectId || identity.projectEpoch !== input.scope.projectEpoch || identity.shardEpoch !== input.scope.shardEpoch) return null
-  const fragments = projectIndexCanonicalFragments.get(cached.snapshot)
-  if (!fragments || fragments.certifiedDurableHeadDigest !== input.durableHeadDigest) return null
-  if (fragments.evidence === null && cached.canonicalStateBytes === null) return null
-  return fragments.digest !== null
-    && fragments.digest === cached.canonicalStateDigest
-    && fragments.digest === input.expectedCanonicalStateDigest
-    ? fragments.digest
+  return cached.canonicalStateDigest !== null
+    && cached.canonicalStateDigest === input.expectedCanonicalStateDigest
+    ? cached.canonicalStateDigest
     : null
 }
 
@@ -864,20 +1190,25 @@ function encodeProjectCanonicalOwnerView(document: Y.Doc): Uint8Array {
     return cached.canonicalStateBytes.slice()
   }
   const snapshot = cached?.snapshot ?? validateProjectIndexYDoc(document)
-  const fragments = projectIndexCanonicalFragments.get(snapshot) ?? createProjectIndexCanonicalFragments(snapshot)
-  const complete = fragments.bytes === null || fragments.digest === null
-    ? createProjectIndexCanonicalFragments(snapshot)
+  const fragments = projectIndexCanonicalFragments.get(snapshot)
+  const complete = fragments === undefined || fragments.bytes === null
+    ? createProjectIndexCanonicalFragments(
+        snapshot,
+        fragments,
+        fragments === undefined ? undefined : new Set<string>(),
+        undefined,
+        true,
+      )
     : fragments
-  const retainedEvidence = fragments.evidence === null ? complete : Object.freeze({
-    ...complete,
-    evidence: fragments.evidence,
-    evidenceValues: fragments.evidenceValues,
-    collections: fragments.collections,
-  })
-  const bytes = retainedEvidence.bytes!
-  const digest = retainedEvidence.digest!
-  projectIndexCanonicalFragments.set(snapshot, retainedEvidence)
-  cacheProjectIndexValidatedView(document, snapshot, bytes.slice(), digest)
+  const bytes = complete.bytes!
+  projectIndexCanonicalFragments.set(snapshot, complete)
+  cacheProjectIndexValidatedView(
+    document,
+    snapshot,
+    bytes.slice(),
+    cached?.canonicalStateDigest ?? null,
+    cached?.certifiedDurableHeadDigest ?? null,
+  )
   return bytes
 }
 
@@ -900,14 +1231,33 @@ export function validateProjectIndexYDoc(document: Y.Doc, scope?: ProjectIndexSc
   const contentConflictCopies = readFactMap(root, "contentConflictCopies", parseConflictCopy, (key, value) => key === `p:${value.primaryFileId}:${value.conflictCopyId}`)
   const pathReservations = readFactMap(root, "pathReservations", parseReservation, (key, value) => key === `x:${value.reservationId}`)
   const canvasRoutes = readFactMap(root, "canvasRoutes", parseCanvasRoute, (key, value) => key === `r:${value.canvasId}:${value.transitionId}`)
+  for (const fact of canvasRoutes.values()) {
+    if (
+      fact.format === "convax.canvas-route-activation" &&
+      fact.projectIndexRouteDependency.kind === "migration-import-base" &&
+      fact.projectIndexRouteDependency.digest !== identity.migrationImportBaseProofDigest
+    ) {
+      fail("invalid-route", "Imported Canvas route proof differs from signed ProjectIndex identity")
+    }
+  }
   const operations = readFactMap(root, "operations", parseReceipt, (key, value) => key === `o:${value.actorId}:${value.operationId}`)
   const rootEntry = entries.get(identity.rootDirectoryId)
   if (!rootEntry || rootEntry.kind !== "directory" || rootEntry.provenance !== "project-root") fail("invalid-root-entry", "Project root entry is absent or invalid")
   if ([...entryLocations.values()].some((claim) => claim.entryId === identity.rootDirectoryId) || [...entryTombstones.values()].some((fact) => fact.entryId === identity.rootDirectoryId)) {
     fail("invalid-root-entry", "Project root cannot have location or tombstone facts")
   }
-  validateRelations({ identity, entries, entryLocations, entryTombstones, contentFamilies, contentConflictCopies, pathReservations, canvasRoutes, operations })
-  return Object.freeze({
+  const resourceFamilyIndex = validateRelations({
+    identity,
+    entries,
+    entryLocations,
+    entryTombstones,
+    contentFamilies,
+    contentConflictCopies,
+    pathReservations,
+    canvasRoutes,
+    operations,
+  })
+  const snapshot: ProjectIndexSnapshot = Object.freeze({
     [PROJECT_INDEX_VALIDATED_SNAPSHOT_BRAND]: true,
     identity,
     entries: readonlyProjectIndexMap(entries),
@@ -919,6 +1269,8 @@ export function validateProjectIndexYDoc(document: Y.Doc, scope?: ProjectIndexSc
     canvasRoutes: readonlyProjectIndexMap(canvasRoutes),
     operations: readonlyProjectIndexMap(operations),
   })
+  currentResourceFamilyIndexes.set(snapshot, resourceFamilyIndex)
+  return snapshot
 }
 
 export function extractProjectCanonicalState(document: Y.Doc): ProjectCanonicalState {
@@ -969,55 +1321,38 @@ function createProjectIndexCanonicalFragments(
   base?: ProjectIndexCanonicalFragments,
   changedRoots?: ReadonlySet<string>,
   insertedByRoot?: ReadonlyMap<string, ReadonlyMap<string, object>>,
-  issuer?: OwnerProcessValueFactory<"project-index">["canonicalJcs"],
   flatten = true,
 ): ProjectIndexCanonicalFragments {
   const values = new Map<keyof ProjectCanonicalState, Uint8Array>()
-  const collections = new Map<ProjectCanonicalCollectionKey, readonly ProjectCanonicalPair[]>()
-  const evidenceValues = new Map<keyof ProjectCanonicalState, CanonicalJcsEvidence>()
+  const collections = new Map<ProjectCanonicalCollectionKey, ProjectCanonicalPairCollection>()
   for (const key of PROJECT_CANONICAL_STATE_KEYS) {
     const unchanged = base !== undefined && changedRoots !== undefined && !changedRoots.has(key)
-    if (unchanged) {
-      const retained = base.values.get(key)
-      if (flatten && retained !== undefined) values.set(key, retained.slice())
-      const retainedEvidence = base?.evidenceValues.get(key)
-      if (retainedEvidence !== undefined) evidenceValues.set(key, retainedEvidence)
-      if (isProjectCanonicalCollectionKey(key)) {
-        const retainedCollection = base?.collections.get(key)
-        if (retainedCollection === undefined) throw new TypeError(`Missing ProjectIndex canonical collection index: ${key}`)
-        collections.set(key, retainedCollection)
-      }
-      continue
-    }
     if (isProjectCanonicalCollectionKey(key)) {
       const basePairs = base?.collections.get(key)
       const inserted = insertedByRoot?.get(key)
-      const pairs = basePairs !== undefined && inserted !== undefined
-        ? insertProjectCanonicalPairs(basePairs, inserted, issuer)
-        : createProjectCanonicalPairs(projectCanonicalCollection(snapshot, key), issuer)
+      const pairs = unchanged
+        ? basePairs
+        : basePairs !== undefined && inserted !== undefined
+          ? insertProjectCanonicalPairs(basePairs, inserted)
+          : createProjectCanonicalPairs(projectCanonicalCollection(snapshot, key))
+      if (pairs === undefined) throw new TypeError(`Missing ProjectIndex canonical collection index: ${key}`)
       collections.set(key, pairs)
       if (flatten) values.set(key, encodeProjectCanonicalPairs(pairs))
-      if (issuer) evidenceValues.set(key, issuer.composeArray(pairs.map((pair) => pair.evidence ?? issuer.encodeEvidence([pair.key, pair.value]))))
     } else {
-      const value = projectCanonicalFragmentValue(snapshot, key)
-      if (flatten) values.set(key, encodeRestrictedJcs(value))
-      if (issuer) evidenceValues.set(key, issuer.encodeEvidence(value))
+      if (!flatten) continue
+      const retained = unchanged ? base?.values.get(key) : undefined
+      values.set(key, retained?.slice() ?? encodeRestrictedJcs(projectCanonicalFragmentValue(snapshot, key)))
     }
   }
   const readonlyValues = readonlyProjectIndexMap(values)
   const bytes = flatten ? assembleProjectCanonicalFragments(readonlyValues) : null
-  let evidence: CanonicalJcsEvidence | null = null
-  if (issuer && evidenceValues.size === PROJECT_CANONICAL_STATE_KEYS.length) {
-    try { evidence = issuer.composeObject(PROJECT_CANONICAL_STATE_KEYS.map((key) => [key, evidenceValues.get(key)!] as const)) } catch {}
-  }
   return Object.freeze({
     values: readonlyValues,
     collections: readonlyProjectIndexMap(collections),
     bytes,
-    digest: bytes === null ? null : canonicalStateDigest(PROJECT_INDEX_PROTOCOL_SCHEMA_ARTIFACT_DIGEST, bytes),
-    evidence,
-    evidenceValues: readonlyProjectIndexMap(evidenceValues),
-    certifiedDurableHeadDigest: null,
+    certifiedDurableHeadDigest: base !== undefined && changedRoots?.size === 0
+      ? base.certifiedDurableHeadDigest
+      : null,
   })
 }
 
@@ -1029,52 +1364,69 @@ function projectCanonicalCollection(snapshot: ProjectIndexSnapshot, key: Project
   return snapshot[key] as ReadonlyMap<string, unknown>
 }
 
-function createProjectCanonicalPairs(
-  collection: ReadonlyMap<string, unknown>,
-  issuer?: OwnerProcessValueFactory<"project-index">["canonicalJcs"],
-): readonly ProjectCanonicalPair[] {
-  return Object.freeze([...collection.entries()]
-    .sort(([left], [right]) => compareUtf8(left, right))
-    .map(([key, value]) => {
-      const pair = Object.freeze([key, value])
-      return Object.freeze({ key, value, bytes: encodeRestrictedJcs(pair), evidence: issuer?.encodeEvidence(pair) ?? null })
-    }))
+function createProjectCanonicalPairs(collection: ReadonlyMap<string, unknown>): ProjectCanonicalPairCollection {
+  return createProjectPersistentSortedCollection(function* () {
+    for (const [key, value] of collection) {
+      const tuple = Object.freeze([key, value] as const)
+      const pair = Object.freeze({
+        key,
+        value,
+        bytes: encodeRestrictedJcs(tuple),
+      })
+      yield Object.freeze([key, pair] as const)
+    }
+  }())
 }
 
 function insertProjectCanonicalPairs(
-  base: readonly ProjectCanonicalPair[],
+  base: ProjectCanonicalPairCollection,
   inserted: ReadonlyMap<string, object>,
-  issuer?: OwnerProcessValueFactory<"project-index">["canonicalJcs"],
-): readonly ProjectCanonicalPair[] {
-  const pairs = [...base]
-  for (const [key, value] of inserted) {
-    let low = 0
-    let high = pairs.length
-    while (low < high) {
-      const middle = (low + high) >>> 1
-      const order = compareUtf8(pairs[middle]!.key, key)
-      if (order < 0) low = middle + 1
-      else high = middle
+): ProjectCanonicalPairCollection {
+  return insertProjectPersistentSortedCollection(base, function* () {
+    for (const [key, value] of inserted) {
+      const tuple = Object.freeze([key, value] as const)
+      const pair = Object.freeze({
+        key,
+        value,
+        bytes: encodeRestrictedJcs(tuple),
+      })
+      yield Object.freeze([key, pair] as const)
     }
-    if (pairs[low]?.key === key) throw new TypeError(`Duplicate ProjectIndex canonical pair: ${key}`)
-    const pair = Object.freeze([key, value])
-    pairs.splice(low, 0, Object.freeze({ key, value, bytes: encodeRestrictedJcs(pair), evidence: issuer?.encodeEvidence(pair) ?? null }))
-  }
-  return Object.freeze(pairs)
+  }())
 }
 
-function encodeProjectCanonicalPairs(pairs: readonly ProjectCanonicalPair[]): Uint8Array {
+function encodeProjectCanonicalPairs(pairs: ProjectCanonicalPairCollection): Uint8Array {
   const parts: Uint8Array[] = [encoder.encode("[")]
-  pairs.forEach((pair, index) => {
+  let index = 0
+  for (const [, pair] of projectPersistentSortedCollectionEntries(pairs, "flatten")) {
     if (index !== 0) parts.push(encoder.encode(","))
     parts.push(pair.bytes)
-  })
+    index += 1
+  }
   parts.push(encoder.encode("]"))
   const length = parts.reduce((total, part) => total + part.byteLength, 0)
   const bytes = new Uint8Array(length)
   let offset = 0
   for (const part of parts) { bytes.set(part, offset); offset += part.byteLength }
   return bytes
+}
+
+/** Package-private structural benchmark evidence; never enters owner state. */
+export function projectIndexCanonicalStructuralCounts() {
+  return Object.freeze({
+    ...projectPersistentSortedCollectionCounts(),
+    trieLookupCodeUnits: projectIndexTrieLookupCodeUnits,
+    trieInsertCodeUnits: projectIndexTrieInsertCodeUnits,
+    trieEdgeComparisons: projectIndexTrieEdgeComparisons,
+    trieNodeCopies: projectIndexTrieNodeCopies,
+    trieEdgeCopies: projectIndexTrieEdgeCopies,
+    commitmentColdBuilds: projectIndexCommitmentColdBuilds,
+    commitmentColdEntryVisits: projectIndexCommitmentColdEntryVisits,
+    commitmentApplyCalls: projectIndexCommitmentApplyCalls,
+    commitmentMutationCount: projectIndexCommitmentMutationCount,
+    commitmentHistoricalEntryVisits: projectIndexCommitmentHistoricalEntryVisits,
+    commitmentBoundStates: projectIndexCommitmentBoundStates,
+  })
 }
 
 function projectCanonicalFragmentValue(snapshot: ProjectIndexSnapshot, key: keyof ProjectCanonicalState): ProjectCanonicalState[keyof ProjectCanonicalState] {
@@ -1122,9 +1474,173 @@ export function projectIndexCurrentBlobReferencesFromValidatedOwnerState(
   return projectIndexCurrentBlobReferencesFromSnapshot(snapshot)
 }
 
+/**
+ * Projects current references only for exact resource families. The immutable
+ * family index is prepared with owner validation, so this path neither builds
+ * nor sorts the complete current-resource projection.
+ */
+export function projectIndexCurrentBlobReferencesForFamiliesFromValidatedOwnerState(
+  state: OwnerValidatedState<"project-index">,
+  primaryFileIds: readonly ProjectFileId[],
+): readonly ProjectIndexResourceReference[] {
+  const snapshot = projectIndexSnapshotFromValidatedOwnerState(state)
+  if (snapshot === null) fail("invalid-owner-state", "ProjectIndex owner returned an invalid validated state")
+  const index = currentResourceFamilyIndex(snapshot)
+  const selected = new Set<ProjectFileId>()
+  const references: ProjectIndexResourceReference[] = []
+  for (const value of primaryFileIds) {
+    const primaryFileId = parseProjectFileId(value)
+    if (selected.has(primaryFileId)) continue
+    selected.add(primaryFileId)
+    const versions = index.versionsByFamily.get(primaryFileId) ?? []
+    if (versions.length === 0) continue
+    const entry = snapshot.entries.get(primaryFileId)
+    let current: ProjectContentVersionRecord | null = null
+    if (entry?.kind === "file" && !index.tombstonedEntryIds.has(primaryFileId)) {
+      const superseded = new Set(versions.flatMap((version) => [...version.supersedesVersionIds]))
+      const live = versions.filter((version) => !superseded.has(version.versionId))
+      if (entry.contentPolicy === "overwritable-binary") current = maxBinary(versions)
+      else if (entry.contentPolicy === "immutable") current = versions[0] ?? null
+      else current = maxStamp(live)
+    }
+    if (current !== null) references.push(resourceReference(snapshot.identity, current, primaryFileId))
+    const conflicts = index.conflictsByFamily.get(primaryFileId) ?? []
+    for (const conflictFileId of activeConflictCopies(snapshot, versions, conflicts)) {
+      const conflictEntry = snapshot.entries.get(conflictFileId)
+      const sourceVersionId = conflictEntry?.conflictSource?.sourceVersionId
+      const source = sourceVersionId === undefined
+        ? undefined
+        : snapshot.contentFamilies.get(`v:${primaryFileId}:${sourceVersionId}`)
+      if (!conflictEntry || !source) fail("invalid-conflict-copy", "Active conflict copy lacks its source version")
+      references.push(resourceReference(snapshot.identity, source, conflictFileId))
+    }
+  }
+  return Object.freeze(references)
+}
+
+/** Resolves one canonical portable path through the validated head's exact slot index. */
+export function projectIndexEntryAtPortablePathFromValidatedOwnerState(
+  state: OwnerValidatedState<"project-index">,
+  portablePath: string,
+): Readonly<{ entryId: ProjectEntryId; kind: "file" | "directory" }> | null {
+  const snapshot = projectIndexSnapshotFromValidatedOwnerState(state)
+  if (snapshot === null) fail("invalid-owner-state", "ProjectIndex owner returned an invalid validated state")
+  return projectIndexEntryAtPortablePathFromSnapshot(snapshot, portablePath)
+}
+
+export function projectIndexEntryAtPortablePathFromSnapshot(
+  snapshot: ProjectIndexSnapshot,
+  portablePath: string,
+): Readonly<{ entryId: ProjectEntryId; kind: "file" | "directory" }> | null {
+  if (portablePath === "") {
+    return Object.freeze({ entryId: snapshot.identity.rootDirectoryId, kind: "directory" as const })
+  }
+  const segments = portablePath.split("/")
+  if (segments.some((segment) => segment === "" || segment === "." || segment === "..")) {
+    fail("invalid-location", "Exact Project path is not canonical")
+  }
+  const index = currentResourceFamilyIndex(snapshot)
+  let parentDirectoryId = snapshot.identity.rootDirectoryId
+  for (let offset = 0; offset < segments.length; offset += 1) {
+    const entryId = index.pathWinnerBySlot.get(projectPathClaimSlot(parentDirectoryId, segments[offset]!))
+    if (entryId === undefined) return null
+    const entry = snapshot.entries.get(entryId)
+    if (!entry || index.tombstonedEntryIds.has(entryId)) return null
+    if (offset === segments.length - 1) {
+      return Object.freeze({ entryId: parseProjectEntryId(entryId), kind: entry.kind })
+    }
+    if (entry.kind !== "directory") return null
+    parentDirectoryId = entry.entryId as ProjectDirectoryId
+  }
+  return null
+}
+
+/**
+ * Resolves native materialization only from the exact validated head's indexed
+ * location claims. It deliberately omits counterfactual projection evidence.
+ */
+export function projectIndexMaterializedPathForCurrentResourceFromValidatedOwnerState(
+  state: OwnerValidatedState<"project-index">,
+  referenceInput: ProjectIndexResourceReference,
+): string | null {
+  const snapshot = projectIndexSnapshotFromValidatedOwnerState(state)
+  if (snapshot === null) fail("invalid-owner-state", "ProjectIndex owner returned an invalid validated state")
+  const reference = parseProjectIndexResourceReference(referenceInput)
+  if (
+    reference.projectId !== snapshot.identity.projectId ||
+    reference.projectEpoch !== snapshot.identity.projectEpoch
+  ) {
+    fail("invalid-resource-reference", "Project resource reference crossed its validated owner")
+  }
+  const entry = snapshot.entries.get(reference.entryFileId)
+  if (!entry || entry.kind !== "file" || entry.storageClass === null) {
+    fail("invalid-resource-reference", "Current Project resource has no file owner")
+  }
+  if (entry.storageClass === "managed-blob") return null
+  const index = currentResourceFamilyIndex(snapshot)
+  if (index.tombstonedEntryIds.has(entry.entryId)) return null
+  const selected = index.selectedLocationByEntryId.get(entry.entryId)
+  if (entry.provenance === "content-conflict-copy") {
+    if (!index.activeConflictEntryIds.has(entry.entryId as ProjectFileId)) return null
+    const reservation = snapshot.pathReservations.get(`x:${entry.conflictSource!.reservationId}`)
+    if (!reservation) fail("invalid-location", "Active conflict resource lacks its reservation")
+    if (selected === undefined || selected.state === "declared-missing") return reservation.canonicalPath
+  }
+  if (selected === undefined) fail("invalid-location", "Live Project file lacks a selected location")
+  if (selected.state === "declared-missing") return null
+  return currentIndexedLinkedPath(snapshot, entry, selected, index)
+}
+
+function currentIndexedLinkedPath(
+  snapshot: ProjectIndexSnapshot,
+  entry: ProjectEntryRecord,
+  selected: ProjectEntryLocationClaim,
+  index: ProjectIndexCurrentResourceFamilyIndex,
+): string {
+  const chain: Array<Readonly<{ entry: ProjectEntryRecord; claim: ProjectEntryLocationClaim }>> = []
+  const seen = new Set<ProjectEntryId>([entry.entryId])
+  let currentEntry = entry
+  let currentClaim = selected
+  while (true) {
+    chain.push(Object.freeze({ entry: currentEntry, claim: currentClaim }))
+    const parentId = currentClaim.parentDirectoryId
+    if (parentId === snapshot.identity.rootDirectoryId) break
+    const parent = snapshot.entries.get(parentId)
+    if (!parent || parent.kind !== "directory" || index.tombstonedEntryIds.has(parentId)) {
+      return `.convax-conflicts/orphans/${entry.entryId}/content`
+    }
+    if (seen.has(parent.entryId)) {
+      return `.convax-conflicts/directory-cycles/${entry.entryId}/content`
+    }
+    seen.add(parent.entryId)
+    const parentClaim = index.selectedLocationByEntryId.get(parent.entryId)
+    if (!parentClaim || parentClaim.state !== "linked") {
+      return `.convax-conflicts/orphans/${entry.entryId}/content`
+    }
+    currentEntry = parent
+    currentClaim = parentClaim
+  }
+  const rootToEntry = [...chain].reverse()
+  const pathSegments = rootToEntry.map((item) => item.claim.basename)
+  for (let offset = 0; offset < rootToEntry.length; offset += 1) {
+    const segment = rootToEntry[offset]!
+    const winner = index.pathWinnerBySlot.get(
+      projectPathClaimSlot(segment.claim.parentDirectoryId, segment.claim.basename),
+    )
+    if (winner !== segment.entry.entryId) {
+      const suffix = pathSegments.slice(offset + 1)
+      const conflictRoot = `.convax-conflicts/path-claims/${segment.entry.entryId}/content`
+      return suffix.length === 0 ? conflictRoot : `${conflictRoot}/${suffix.join("/")}`
+    }
+  }
+  return pathSegments.join("/")
+}
+
 function projectIndexCurrentBlobReferencesFromSnapshot(
   snapshot: ProjectIndexSnapshot,
 ): readonly ProjectIndexResourceReference[] {
+  const cached = currentBlobReferencesBySnapshot.get(snapshot)
+  if (cached !== undefined) return cached
   const projection = projectProjectIndexSnapshot(snapshot)
   const references: ProjectIndexResourceReference[] = []
   for (const family of projection.contentFamilies) {
@@ -1138,10 +1654,139 @@ function projectIndexCurrentBlobReferencesFromSnapshot(
       references.push(resourceReference(snapshot.identity, version, conflictFileId))
     }
   }
-  return Object.freeze(references.sort((left, right) => {
+  const result = Object.freeze(references.sort((left, right) => {
     const entry = compareUtf8(left.entryFileId, right.entryFileId)
     return entry === 0 ? compareUtf8(left.versionId, right.versionId) : entry
   }))
+  currentBlobReferencesBySnapshot.set(snapshot, result)
+  return result
+}
+
+// Owner snapshots are immutable and identity-bound. Current-resource
+// projection is shared by materialization and Canvas proof validation, so cache
+// it once per exact accepted head instead of rebuilding the whole Project view.
+const currentBlobReferencesBySnapshot = new WeakMap<
+  ProjectIndexSnapshot,
+  readonly ProjectIndexResourceReference[]
+>()
+
+interface ProjectIndexCurrentResourceFamilyIndex {
+  readonly versionsByFamily: ProjectIndexLookup<ProjectFileId, readonly ProjectContentVersionRecord[]>
+  readonly conflictsByFamily: ProjectIndexLookup<ProjectFileId, readonly ProjectContentConflictCopyRecord[]>
+  readonly tombstonedEntryIds: ProjectIndexMembership<string>
+  readonly selectedLocationByEntryId: ProjectIndexLookup<ProjectEntryId, ProjectEntryLocationClaim>
+  readonly pathWinnerBySlot: ProjectIndexLookup<string, ProjectEntryId>
+  readonly activeConflictEntryIds: ProjectIndexMembership<ProjectFileId>
+}
+
+interface ProjectIndexLookup<K, V> {
+  get(key: K): V | undefined
+}
+
+interface ProjectIndexMembership<K> {
+  has(key: K): boolean
+}
+
+const currentResourceFamilyIndexes = new WeakMap<ProjectIndexSnapshot, ProjectIndexCurrentResourceFamilyIndex>()
+
+function currentResourceFamilyIndex(snapshot: ProjectIndexSnapshot): ProjectIndexCurrentResourceFamilyIndex {
+  const existing = currentResourceFamilyIndexes.get(snapshot)
+  if (existing !== undefined) return existing
+  const versionsByFamily = new Map<ProjectFileId, ProjectContentVersionRecord[]>()
+  for (const version of snapshot.contentFamilies.values()) {
+    const family = versionsByFamily.get(version.primaryFileId) ?? []
+    family.push(version)
+    versionsByFamily.set(version.primaryFileId, family)
+  }
+  const conflictsByFamily = new Map<ProjectFileId, ProjectContentConflictCopyRecord[]>()
+  for (const conflict of snapshot.contentConflictCopies.values()) {
+    const family = conflictsByFamily.get(conflict.primaryFileId) ?? []
+    family.push(conflict)
+    conflictsByFamily.set(conflict.primaryFileId, family)
+  }
+  const tombstonedEntryIds = new Set([...snapshot.entryTombstones.values()].map((fact) => fact.entryId))
+  const selectedLocationByEntryId = currentSelectedLocationClaims(snapshot)
+  const activeConflictEntryIds = currentActiveConflictEntryIds(snapshot, versionsByFamily, conflictsByFamily)
+  const value = Object.freeze({
+    versionsByFamily: new ProjectIndexPersistentLookup(versionsByFamily),
+    conflictsByFamily: new ProjectIndexPersistentLookup(conflictsByFamily),
+    tombstonedEntryIds,
+    selectedLocationByEntryId: new ProjectIndexPersistentLookup(selectedLocationByEntryId),
+    pathWinnerBySlot: new ProjectIndexPersistentLookup(currentPathClaimWinners(
+      snapshot,
+      selectedLocationByEntryId,
+      tombstonedEntryIds,
+      activeConflictEntryIds,
+    )),
+    activeConflictEntryIds,
+  })
+  currentResourceFamilyIndexes.set(snapshot, value)
+  return value
+}
+
+function currentSelectedLocationClaims(
+  snapshot: ProjectIndexSnapshot,
+): ReadonlyMap<ProjectEntryId, ProjectEntryLocationClaim> {
+  const selected = new Map<ProjectEntryId, ProjectEntryLocationClaim>()
+  for (const claim of snapshot.entryLocations.values()) {
+    const current = selected.get(claim.entryId)
+    if (current === undefined || comparePortableStamps(current.stamp, claim.stamp) <= 0) {
+      selected.set(claim.entryId, claim)
+    }
+  }
+  return selected
+}
+
+function currentActiveConflictEntryIds(
+  snapshot: ProjectIndexSnapshot,
+  versionsByFamily: ReadonlyMap<ProjectFileId, readonly ProjectContentVersionRecord[]>,
+  conflictsByFamily: ReadonlyMap<ProjectFileId, readonly ProjectContentConflictCopyRecord[]>,
+): ReadonlySet<ProjectFileId> {
+  const active = new Set<ProjectFileId>()
+  for (const [primaryFileId, versions] of versionsByFamily) {
+    for (const entryId of activeConflictCopies(
+      snapshot,
+      versions,
+      conflictsByFamily.get(primaryFileId) ?? [],
+    )) {
+      active.add(entryId)
+    }
+  }
+  return active
+}
+
+function currentPathClaimWinners(
+  snapshot: ProjectIndexSnapshot,
+  selectedLocationByEntryId: ReadonlyMap<ProjectEntryId, ProjectEntryLocationClaim>,
+  tombstonedEntryIds: ReadonlySet<string>,
+  activeConflictEntryIds: ReadonlySet<ProjectFileId>,
+): ReadonlyMap<string, ProjectEntryId> {
+  const winners = new Map<string, ProjectEntryId>()
+  for (const [entryId, claim] of selectedLocationByEntryId) {
+    const entry = snapshot.entries.get(entryId)
+    if (
+      !entry ||
+      tombstonedEntryIds.has(entryId) ||
+      claim.state !== "linked" ||
+      (entry.provenance === "content-conflict-copy" && !activeConflictEntryIds.has(entryId as ProjectFileId))
+    ) {
+      continue
+    }
+    const slot = projectPathClaimSlot(claim.parentDirectoryId, claim.basename)
+    const selectedEntryId = winners.get(slot)
+    const selectedClaim = selectedEntryId === undefined
+      ? undefined
+      : selectedLocationByEntryId.get(selectedEntryId)
+    const byStamp = selectedClaim === undefined ? 1 : comparePortableStamps(claim.stamp, selectedClaim.stamp)
+    if (byStamp > 0 || (byStamp === 0 && selectedEntryId !== undefined && compareUtf8(entryId, selectedEntryId) > 0)) {
+      winners.set(slot, entryId)
+    }
+  }
+  return winners
+}
+
+function projectPathClaimSlot(parentDirectoryId: ProjectDirectoryId, basename: string): string {
+  return `${parentDirectoryId}\u0000${basename}`
 }
 
 export function projectProjectIndexSnapshot(snapshot: ProjectIndexSnapshot): ProjectIndexProjection {
@@ -1928,7 +2573,10 @@ export function constructProjectCanvasRouteActivationIntent(input: {
       shardEpoch: stage.shardEpoch,
       predecessorActivationDigest: null,
       stageRecordDigest: projectIndexRecordDigest(stage),
-      projectIndexRouteDependencyFrameDigest: parseDigest(input.projectIndexRouteDependencyFrameDigest),
+      projectIndexRouteDependency: Object.freeze({
+        kind: "frame",
+        digest: parseDigest(input.projectIndexRouteDependencyFrameDigest),
+      }),
       canvasGenesisCheckpointObjectDigest: parseDigest(input.canvasGenesisCheckpointObjectDigest),
       stagedProjectIndexFrontierDigest: parseDigest(input.stagedProjectIndexFrontierDigest),
       stamp: stampForConstruction(input.context, "0"),
@@ -2229,7 +2877,6 @@ function tryValidateProjectIndexCreatePost(
   document: Y.Doc,
   baseState: OwnerValidatedState<"project-index">,
   applyResult: ProjectIndexApplyResult,
-  processValues?: OwnerProcessValueFactory<"project-index">,
 ): ProjectIndexSnapshot | null {
   try {
     if (applyResult.inserted.length === 0) return null
@@ -2274,18 +2921,14 @@ function tryValidateProjectIndexCreatePost(
       }
     }
 
-    const entries = new Map(base.entries)
-    const entryLocations = new Map(base.entryLocations)
-    const contentFamilies = new Map(base.contentFamilies)
-    const operationMap = new Map(base.operations)
     const entryItems = byRoot.get("entries")
     const locationItems = byRoot.get("entryLocations")
     const versionItems = byRoot.get("contentFamilies")
+    let createdVersion: ProjectContentVersionRecord | null = null
     if (entryItems?.size !== 1) return null
     const [entryKey] = [...entryItems][0]!
     const entry = parseEntry(childMap(root, "entries").get(entryKey))
     if (entry.entryId !== entryKey || !recordMatchesContext(entry, capture.context, entry.kind, "0")) return null
-    entries.set(entryKey as ProjectEntryId, entry)
 
     let location: ProjectEntryLocationClaim | null = null
     if (locationItems !== undefined) {
@@ -2293,7 +2936,6 @@ function tryValidateProjectIndexCreatePost(
       const [locationKey] = [...locationItems][0]!
       location = parseLocation(childMap(root, "entryLocations").get(locationKey))
       if (locationKey !== `l:${location.entryId}:${location.claimId}` || !recordMatchesContext(location, capture.context, "location", "1")) return null
-      entryLocations.set(locationKey, location)
     }
     const parent = location === null ? null : base.entries.get(location.parentDirectoryId)
     if (location !== null && (location.entryId !== entry.entryId || !parent || parent.kind !== "directory" || !isLiveEntry(base, location.parentDirectoryId))) return null
@@ -2312,7 +2954,7 @@ function tryValidateProjectIndexCreatePost(
         || ((entry.provenance === "generated" || entry.provenance === "managed-admission") && entry.contentPolicy !== "immutable")
       ) return null
       validateVersionDag(version.primaryFileId, [version])
-      contentFamilies.set(versionKey, version)
+      createdVersion = version
     }
 
     const nonReceipt = applyResult.inserted.filter((item) => item.root !== "operations")
@@ -2330,22 +2972,33 @@ function tryValidateProjectIndexCreatePost(
       stampLamport: capture.context.lamport,
     }
     if (operationKey !== `o:${receipt.actorId}:${receipt.operationId}` || !encodeEqual(receipt, expectedReceipt)) return null
-    operationMap.set(operationKey, receipt)
+    const resourceIndex = projectIndexCreatePostCurrentResourceIndex(base, entry, location, createdVersion)
+    const entries = readonlyProjectIndexMapInsertions(base.entries, [[entryKey, entry]])
+    const entryLocations = location === null
+      ? base.entryLocations
+      : readonlyProjectIndexMapInsertions(base.entryLocations, [[`l:${location.entryId}:${location.claimId}`, location]])
+    const contentFamilies = createdVersion === null
+      ? base.contentFamilies
+      : readonlyProjectIndexMapInsertions(
+          base.contentFamilies,
+          [[`v:${createdVersion.primaryFileId}:${createdVersion.versionId}`, createdVersion]],
+        )
+    const operationMap = readonlyProjectIndexMapInsertions(base.operations, [[operationKey, receipt]])
     const snapshot = Object.freeze({
       ...base,
-      entries: readonlyProjectIndexMap(entries),
-      entryLocations: readonlyProjectIndexMap(entryLocations),
-      contentFamilies: readonlyProjectIndexMap(contentFamilies),
-      operations: readonlyProjectIndexMap(operationMap),
+      entries,
+      entryLocations,
+      contentFamilies,
+      operations: operationMap,
     })
+    currentResourceFamilyIndexes.set(snapshot, resourceIndex)
     if (capture.baseCanonicalFragments !== null) {
       const fragments = createProjectIndexCanonicalFragments(
         snapshot,
         capture.baseCanonicalFragments,
         new Set(byRoot.keys()),
         byRoot,
-        processValues?.canonicalJcs,
-        processValues?.canonicalJcs ? false : true,
+        false,
       )
       projectIndexCanonicalFragments.set(snapshot, fragments)
     }
@@ -2353,6 +3006,59 @@ function tryValidateProjectIndexCreatePost(
   } catch {
     return null
   }
+}
+
+function projectIndexCreatePostCurrentResourceIndex(
+  base: ProjectIndexSnapshot,
+  entry: ProjectEntryRecord,
+  location: ProjectEntryLocationClaim | null,
+  version: ProjectContentVersionRecord | null,
+): ProjectIndexCurrentResourceFamilyIndex {
+  const baseIndex = currentResourceFamilyIndex(base)
+  const versions = new Map<ProjectFileId, readonly ProjectContentVersionRecord[]>()
+  if (version !== null) versions.set(version.primaryFileId, Object.freeze([version]))
+  const selectedLocations = new Map<ProjectEntryId, ProjectEntryLocationClaim>()
+  const pathWinners = new Map<string, ProjectEntryId>()
+  if (location !== null) {
+    selectedLocations.set(entry.entryId, location)
+    const slot = projectPathClaimSlot(location.parentDirectoryId, location.basename)
+    const currentWinner = baseIndex.pathWinnerBySlot.get(slot)
+    const currentClaim = currentWinner === undefined
+      ? undefined
+      : baseIndex.selectedLocationByEntryId.get(currentWinner)
+    const byStamp = currentClaim === undefined ? 1 : comparePortableStamps(location.stamp, currentClaim.stamp)
+    if (byStamp > 0 || (byStamp === 0 && currentWinner !== undefined && compareUtf8(entry.entryId, currentWinner) > 0)) {
+      pathWinners.set(slot, entry.entryId)
+    }
+  }
+  return Object.freeze({
+    versionsByFamily: projectIndexLookupOverlay(
+      baseIndex.versionsByFamily,
+      [...versions.entries()],
+    ),
+    conflictsByFamily: baseIndex.conflictsByFamily,
+    tombstonedEntryIds: baseIndex.tombstonedEntryIds,
+    selectedLocationByEntryId: projectIndexLookupOverlay(
+      baseIndex.selectedLocationByEntryId,
+      [...selectedLocations.entries()],
+    ),
+    pathWinnerBySlot: projectIndexLookupOverlay(
+      baseIndex.pathWinnerBySlot,
+      [...pathWinners.entries()],
+    ),
+    activeConflictEntryIds: baseIndex.activeConflictEntryIds,
+  })
+}
+
+function projectIndexLookupOverlay<K extends string, V>(
+  base: ProjectIndexLookup<K, V>,
+  entries: readonly (readonly [K, V])[],
+): ProjectIndexLookup<K, V> {
+  if (entries.length === 0) return base
+  if (!(base instanceof ProjectIndexPersistentLookup)) {
+    throw new Error("ProjectIndex incremental authority index is not persistent")
+  }
+  return base.withOverrides(entries)
 }
 
 function mapOfStringArraysEqual(left: ReadonlyMap<string, readonly string[]>, right: ReadonlyMap<string, readonly string[]>): boolean {
@@ -2383,6 +3089,27 @@ export function createProjectIndexDocumentOwnerRuntime(
   return selected
 }
 
+/**
+ * Cold/bootstrap-only bridge from the ProjectIndex owner to its exact current
+ * issuer-bound state commitment. Native genesis must bind the same root that
+ * CollaborationKernel will consume when it opens the installed base; canonical
+ * audit bytes are deliberately not a substitute for that root.
+ *
+ * Native bootstrap and benchmark adapters may call this cold helper. Hot edits
+ * obtain the root from the selected owner runtime's validateBase/validatePost.
+ */
+export function projectIndexCanonicalStateCommitmentDigest(
+  document: Y.Doc,
+  authority: CurrentProtocolAuthority,
+): Digest {
+  const runtime = createProjectIndexDocumentOwnerRuntime(authority)
+  const state = runtime.protocolPort.validateBase(document)
+  if (typeof state === "string") throw new TypeError("ProjectIndex genesis state commitment is rejected")
+  const commitment = projectIndexStateCommitmentsByState.get(state as object)
+  if (commitment === undefined) throw new TypeError("ProjectIndex genesis state commitment is missing")
+  return commitment.digest
+}
+
 function projectIndexProtocolDefinition(processValues: OwnerProcessValueFactory<"project-index">): DocumentOwnerProtocolDefinition<"project-index"> {
   const schemaDigest = PROJECT_INDEX_PROTOCOL_SCHEMA_ARTIFACT_DIGEST
   const canonicalizerDescriptor = projectIndexOwnerCanonicalizerDescriptor(schemaDigest)
@@ -2398,19 +3125,14 @@ function projectIndexProtocolDefinition(processValues: OwnerProcessValueFactory<
     validateBase(document: Y.Doc) {
       try {
         const snapshot = validateProjectIndexOwnerView(document)
-        const fragments = projectIndexCanonicalFragments.get(snapshot)
-        if (processValues.canonicalJcs && !fragments?.evidence) {
-          try {
-            projectIndexCanonicalFragments.set(
-              snapshot,
-              createProjectIndexCanonicalFragments(snapshot, undefined, undefined, undefined, processValues.canonicalJcs, false),
-            )
-          } catch {
-            // Evidence limits are acceleration-only. The validated snapshot and
-            // authoritative canonical encoder remain admissible.
-          }
+        if (!projectIndexCanonicalFragments.has(snapshot)) {
+          projectIndexCanonicalFragments.set(
+            snapshot,
+            createProjectIndexCanonicalFragments(snapshot, undefined, undefined, undefined, false),
+          )
         }
-        return processValues.wrapValidatedState(snapshot)
+        const commitment = buildProjectIndexStateCommitment(snapshot, processValues.stateCommitment)
+        return bindProjectIndexValidatedState(document, snapshot, commitment, processValues)
       } catch { return "rejected" }
     },
     applyIntent(base: OwnerValidatedState<"project-index">, candidate: Y.Doc, context: OwnerIntentValidationContext, intent: unknown, externalFacts: OwnerExternalFactPort<"project-index">) {
@@ -2429,24 +3151,19 @@ function projectIndexProtocolDefinition(processValues: OwnerProcessValueFactory<
       // an outer transaction, and deletion-only mutations can preserve a state vector.
       const value = ownerResult(result)
       if (value === null) return "rejected"
-      const incremental = tryValidateProjectIndexCreatePost(candidate, base, value.result, processValues)
+      const incremental = tryValidateProjectIndexCreatePost(candidate, base, value.result)
       const snapshot = incremental ?? validateProjectIndexYDoc(candidate)
-      const fastEvidence = incremental !== null && projectIndexCanonicalFragments.get(snapshot)?.evidence !== null
-        && projectIndexCanonicalFragments.get(snapshot)?.evidence !== undefined
-      if (!fastEvidence && processValues.canonicalJcs) {
-        try {
-          projectIndexCanonicalFragments.set(
-            snapshot,
-            createProjectIndexCanonicalFragments(snapshot, undefined, undefined, undefined, processValues.canonicalJcs, false),
-          )
-        } catch {
-          // Acceleration limits do not change owner admission.
-        }
+      if (!projectIndexCanonicalFragments.has(snapshot)) {
+        projectIndexCanonicalFragments.set(
+          snapshot,
+          createProjectIndexCanonicalFragments(snapshot, undefined, undefined, undefined, false),
+        )
       }
-      cacheProjectIndexValidatedPostView(candidate, snapshot)
-      const state = processValues.wrapValidatedState(snapshot)
-      const evidence = projectIndexCanonicalFragments.get(snapshot)?.evidence
-      return fastEvidence && evidence ? processValues.bindCanonicalJcsEvidence(candidate, state, evidence) : state
+      const commitment = incremental === null
+        ? buildProjectIndexStateCommitment(snapshot, processValues.stateCommitment)
+        : applyProjectIndexStateCommitment(base, snapshot, value.result.inserted, processValues.stateCommitment)
+      cacheProjectIndexValidatedPostView(candidate, snapshot, commitment.digest)
+      return bindProjectIndexValidatedState(candidate, snapshot, commitment, processValues)
     },
     canonicalStateBytes(document: Y.Doc) {
       try { return encodeProjectCanonicalOwnerView(document) } catch { return "rejected" }
@@ -2549,7 +3266,10 @@ export interface ProjectIndexCanvasGenesisCurrentnessRequest {
   readonly intentDigest: Digest
   readonly canvasScope: CanvasDocumentScope
   readonly stageRecordDigest: Digest
-  readonly routeDependencyFrameDigest: Digest
+  readonly routeDependency: Readonly<{
+    readonly kind: "frame" | "migration-import-base"
+    readonly digest: Digest
+  }>
   readonly genesisCheckpointObjectDigest: Digest
   readonly stagedProjectIndexFrontierDigest: Digest
 }
@@ -2598,7 +3318,7 @@ export function decodeProjectIndexCanvasGenesisCurrentnessRequest(
     if (compareBytes(encodeRestrictedJcs(decoded), exactJcs) !== 0) return "rejected"
     assertExactKeys(decoded, [
       "format", "kind", "projectIndexScope", "operationId", "intentDigest", "canvasScope",
-      "stageRecordDigest", "routeDependencyFrameDigest", "genesisCheckpointObjectDigest",
+      "stageRecordDigest", "routeDependency", "genesisCheckpointObjectDigest",
       "stagedProjectIndexFrontierDigest",
     ], "ProjectIndex Canvas genesis currentness request")
     if (
@@ -2619,7 +3339,7 @@ export function decodeProjectIndexCanvasGenesisCurrentnessRequest(
       intentDigest: parseDigest(decoded.intentDigest),
       canvasScope,
       stageRecordDigest: parseDigest(decoded.stageRecordDigest),
-      routeDependencyFrameDigest: parseDigest(decoded.routeDependencyFrameDigest),
+      routeDependency: parseRouteDependency(decoded.routeDependency),
       genesisCheckpointObjectDigest: parseDigest(decoded.genesisCheckpointObjectDigest),
       stagedProjectIndexFrontierDigest: parseDigest(decoded.stagedProjectIndexFrontierDigest),
     })
@@ -2645,7 +3365,7 @@ function externalFactRequest(context: OwnerIntentValidationContext, intent: Proj
   }
   if (intent.kind === "project.canvas.route.activate") {
     const activation = intent.body.activation
-    return { ...base, kind: "canvas-genesis-currentness", canvasScope: { ...projectIndexScope, docKind: "canvas", docId: activation.canvasId, shardEpoch: activation.shardEpoch }, stageRecordDigest: activation.stageRecordDigest, routeDependencyFrameDigest: activation.projectIndexRouteDependencyFrameDigest, genesisCheckpointObjectDigest: activation.canvasGenesisCheckpointObjectDigest, stagedProjectIndexFrontierDigest: activation.stagedProjectIndexFrontierDigest }
+    return { ...base, kind: "canvas-genesis-currentness", canvasScope: { ...projectIndexScope, docKind: "canvas", docId: activation.canvasId, shardEpoch: activation.shardEpoch }, stageRecordDigest: activation.stageRecordDigest, routeDependency: activation.projectIndexRouteDependency, genesisCheckpointObjectDigest: activation.canvasGenesisCheckpointObjectDigest, stagedProjectIndexFrontierDigest: activation.stagedProjectIndexFrontierDigest }
   }
   if (intent.kind === "project.canvas.route.reset") {
     const { routeCasCore, resetClaim, confirmation, approval } = intent.body
@@ -2773,6 +3493,7 @@ function recordsForIntent(snapshot: ProjectIndexSnapshot, context: OwnerIntentVa
   }
   if (intent.kind === "project.canvas.route.activate") {
     const activation = intent.body.activation
+    if (activation.projectIndexRouteDependency.kind !== "frame") return "rejected"
     const key = `r:${activation.canvasId}:${activation.transitionId}`
     const route = projectCanvasRouteProjection(snapshot, activation.canvasId)
     const stages = routeFacts(snapshot, activation.canvasId).filter((fact): fact is CanvasRouteStage => fact.format === "convax.canvas-route-stage")
@@ -3342,13 +4063,17 @@ function resourceReference(
   })
 }
 
-function activeConflictCopies(snapshot: ProjectIndexSnapshot, versions: readonly ProjectContentVersionRecord[]): ProjectFileId[] {
+function activeConflictCopies(
+  snapshot: ProjectIndexSnapshot,
+  versions: readonly ProjectContentVersionRecord[],
+  conflictCopies: Iterable<ProjectContentConflictCopyRecord> = snapshot.contentConflictCopies.values(),
+): ProjectFileId[] {
   const result = new Set<ProjectFileId>()
   for (const source of versions) {
     if (source.writeClass !== "text-write") continue
     const activated = versions.some((other) => comparePortableStamps(other.stamp, source.stamp) > 0 && !reaches(versions, other.versionId, source.versionId) && !reaches(versions, source.versionId, other.versionId))
     if (!activated) continue
-    for (const conflictCopy of snapshot.contentConflictCopies.values()) if (conflictCopy.primaryFileId === source.primaryFileId && conflictCopy.versionId === source.versionId) result.add(conflictCopy.reservedConflictFileId)
+    for (const conflictCopy of conflictCopies) if (conflictCopy.primaryFileId === source.primaryFileId && conflictCopy.versionId === source.versionId) result.add(conflictCopy.reservedConflictFileId)
   }
   return [...result].sort(compareUtf8)
 }
@@ -3524,17 +4249,24 @@ function tombstonedEntries(snapshot: ProjectIndexSnapshot): Set<string> {
   return new Set([...snapshot.entryTombstones.values()].map((fact) => fact.entryId))
 }
 
-function validateRelations(snapshot: ProjectIndexSnapshot): void {
+function validateRelations(snapshot: ProjectIndexSnapshot): ProjectIndexCurrentResourceFamilyIndex {
+  const selectedLocationByEntryId = new Map<ProjectEntryId, ProjectEntryLocationClaim>()
   for (const claim of snapshot.entryLocations.values()) {
     if (!snapshot.entries.has(claim.entryId)) fail("dangling-location", "Location names an absent entry")
     const parent = snapshot.entries.get(claim.parentDirectoryId)
     if (!parent || parent.kind !== "directory") fail("invalid-location-parent", "Location parent is not a directory")
+    const selected = selectedLocationByEntryId.get(claim.entryId)
+    if (selected === undefined || comparePortableStamps(selected.stamp, claim.stamp) <= 0) {
+      selectedLocationByEntryId.set(claim.entryId, claim)
+    }
   }
+  const tombstonedEntryIds = new Set<string>()
   for (const tombstone of snapshot.entryTombstones.values()) {
     const entry = snapshot.entries.get(tombstone.entryId)
     if (!entry || projectIndexRecordDigest(entry) !== tombstone.observedEntryDigest) fail("invalid-tombstone", "Entry tombstone does not bind the accepted entry")
+    tombstonedEntryIds.add(tombstone.entryId)
   }
-  const byFamily = new Map<string, ProjectContentVersionRecord[]>()
+  const byFamily = new Map<ProjectFileId, ProjectContentVersionRecord[]>()
   for (const version of snapshot.contentFamilies.values()) {
     const entry = snapshot.entries.get(version.primaryFileId)
     if (!entry || entry.kind !== "file" || entry.provenance === "content-conflict-copy") fail("invalid-family", "Content family has no primary file")
@@ -3543,15 +4275,33 @@ function validateRelations(snapshot: ProjectIndexSnapshot): void {
     list.push(version); byFamily.set(version.primaryFileId, list)
   }
   for (const [family, versions] of byFamily) validateVersionDag(family, versions)
+  const conflictsByFamily = new Map<ProjectFileId, ProjectContentConflictCopyRecord[]>()
   for (const conflictCopy of snapshot.contentConflictCopies.values()) {
     const version = snapshot.contentFamilies.get(`v:${conflictCopy.primaryFileId}:${conflictCopy.versionId}`)
     const reservation = snapshot.pathReservations.get(`x:${conflictCopy.reservationId}`)
     const conflict = snapshot.entries.get(conflictCopy.reservedConflictFileId)
     if (!version || !reservation || !conflict || conflict.provenance !== "content-conflict-copy" || reservation.reservedEntryId !== conflictCopy.reservedConflictFileId) fail("invalid-conflict-copy", "Conflict-copy records do not cross-bind")
+    const list = conflictsByFamily.get(conflictCopy.primaryFileId) ?? []
+    list.push(conflictCopy)
+    conflictsByFamily.set(conflictCopy.primaryFileId, list)
   }
   for (const canvasId of new Set([...snapshot.canvasRoutes.values()].map((fact) => fact.canvasId))) {
     projectCanvasRouteProjection(snapshot, canvasId)
   }
+  const activeConflictEntryIds = currentActiveConflictEntryIds(snapshot, byFamily, conflictsByFamily)
+  return Object.freeze({
+    versionsByFamily: new ProjectIndexPersistentLookup(byFamily),
+    conflictsByFamily: new ProjectIndexPersistentLookup(conflictsByFamily),
+    tombstonedEntryIds,
+    selectedLocationByEntryId: new ProjectIndexPersistentLookup(selectedLocationByEntryId),
+    pathWinnerBySlot: new ProjectIndexPersistentLookup(currentPathClaimWinners(
+      snapshot,
+      selectedLocationByEntryId,
+      tombstonedEntryIds,
+      activeConflictEntryIds,
+    )),
+    activeConflictEntryIds,
+  })
 }
 
 function validateVersionDag(family: string, versions: readonly ProjectContentVersionRecord[]): void {
@@ -3588,7 +4338,16 @@ function parseIntent(value: unknown): ProjectIndexIntent {
   else if (intent.kind === "project.file.write-text") { assertExactKeys(body, ["version", "conflictEntry", "conflictCopy", "reservation"], "text body"); parseContentVersionWithoutIdentity(body.version); parseEntry(body.conflictEntry); parseConflictCopy(body.conflictCopy); parseReservation(body.reservation) }
   else if (intent.kind === "project.file.overwrite-binary") { assertExactKeys(body, ["version"], "binary body"); parseContentVersionWithoutIdentity(body.version) }
   else if (intent.kind === "project.canvas.route.stage") { assertExactKeys(body, ["stage"], "stage body"); parseCanvasRoute(body.stage) }
-  else if (intent.kind === "project.canvas.route.activate") { assertExactKeys(body, ["activation"], "activation body"); parseCanvasRoute(body.activation) }
+  else if (intent.kind === "project.canvas.route.activate") {
+    assertExactKeys(body, ["activation"], "activation body")
+    const activation = parseCanvasRoute(body.activation)
+    if (
+      activation.format !== "convax.canvas-route-activation" ||
+      activation.projectIndexRouteDependency.kind !== "frame"
+    ) {
+      fail("invalid-intent", "A route activation intent must depend on an accepted frame")
+    }
+  }
   else if (intent.kind === "project.canvas.route.rename") { assertExactKeys(body, ["metadata"], "rename body"); parseCanvasRoute(body.metadata) }
   else if (intent.kind === "project.canvas.route.tombstone") { assertExactKeys(body, ["tombstone"], "route tombstone body"); parseCanvasRoute(body.tombstone) }
   else {
@@ -3611,10 +4370,11 @@ const INTENT_KINDS = new Set<ProjectIndexIntentKind>([
 ])
 
 function parseIdentity(value: unknown): ProjectIndexIdentityRecord {
-  assertExactKeys(value, ["format", "schema", "projectId", "projectEpoch", "shardEpoch", "rootDirectoryId", "protocolDigest", "schemaDigest", "uriProtocolDigest"], "ProjectIndex identity")
+  assertExactKeys(value, ["format", "schema", "projectId", "projectEpoch", "shardEpoch", "rootDirectoryId", "protocolDigest", "schemaDigest", "uriProtocolDigest", "migrationImportBaseProofDigest"], "ProjectIndex identity")
   if (value.format !== "convax.project-index-identity" || value.schema !== "convax.project-index.v2") fail("invalid-identity", "ProjectIndex identity is not v2")
   const identity = value as unknown as ProjectIndexIdentityRecord
   parseProjectId(identity.projectId); parseId128(identity.projectEpoch); parseId128(identity.shardEpoch); parseProjectDirectoryId(identity.rootDirectoryId); parseDigest(identity.protocolDigest); parseDigest(identity.schemaDigest); parseDigest(identity.uriProtocolDigest)
+  if (identity.migrationImportBaseProofDigest !== null) parseDigest(identity.migrationImportBaseProofDigest)
   if (identity.schemaDigest !== PROJECT_INDEX_PROTOCOL_SCHEMA_ARTIFACT_DIGEST) fail("schema-mismatch", "ProjectIndex identity does not bind the current protocol artifact")
   return freezeJcs(identity)
 }
@@ -3710,8 +4470,8 @@ function parseCanvasRoute(value: unknown): CanvasRouteFact {
     const record = value as unknown as CanvasRouteStage; parseFactId(record.transitionId, "cr"); parseCanvasId(record.canvasId); parseId128(record.shardEpoch); assertBoundedNfcString(record.title, 1, 512, "Canvas title"); parsePortableStamp(record.stamp); if (record.reason !== "create") fail("invalid-route", "Stage reason is invalid"); return freezeJcs(record)
   }
   if (format === "convax.canvas-route-activation") {
-    assertExactKeys(value, ["format", "transitionId", "canvasId", "shardEpoch", "predecessorActivationDigest", "stageRecordDigest", "projectIndexRouteDependencyFrameDigest", "canvasGenesisCheckpointObjectDigest", "stagedProjectIndexFrontierDigest", "stamp"], "Canvas route activation")
-    const record = value as unknown as CanvasRouteActivation; parseFactId(record.transitionId, "cr"); parseCanvasId(record.canvasId); parseId128(record.shardEpoch); if (record.predecessorActivationDigest !== null) fail("invalid-route", "Initial activation predecessor is not null"); parseDigest(record.stageRecordDigest); parseDigest(record.projectIndexRouteDependencyFrameDigest); parseDigest(record.canvasGenesisCheckpointObjectDigest); parseDigest(record.stagedProjectIndexFrontierDigest); parsePortableStamp(record.stamp); return freezeJcs(record)
+    assertExactKeys(value, ["format", "transitionId", "canvasId", "shardEpoch", "predecessorActivationDigest", "stageRecordDigest", "projectIndexRouteDependency", "canvasGenesisCheckpointObjectDigest", "stagedProjectIndexFrontierDigest", "stamp"], "Canvas route activation")
+    const record = value as unknown as CanvasRouteActivation; parseFactId(record.transitionId, "cr"); parseCanvasId(record.canvasId); parseId128(record.shardEpoch); if (record.predecessorActivationDigest !== null) fail("invalid-route", "Initial activation predecessor is not null"); parseDigest(record.stageRecordDigest); parseRouteDependency(record.projectIndexRouteDependency); parseDigest(record.canvasGenesisCheckpointObjectDigest); parseDigest(record.stagedProjectIndexFrontierDigest); parsePortableStamp(record.stamp); return freezeJcs(record)
   }
   if (format === "convax.canvas-route-metadata") {
     assertExactKeys(value, ["format", "transitionId", "canvasId", "title", "observedActivationDigest", "stamp"], "Canvas route metadata")
@@ -3746,6 +4506,15 @@ function parseCanvasRoute(value: unknown): CanvasRouteFact {
   const record = value as unknown as CanvasRouteTombstone
   if (record.format !== "convax.canvas-route-tombstone" || record.reason !== "explicit-delete") fail("invalid-route", "Route tombstone is invalid")
   parseFactId(record.transitionId, "cr"); parseCanvasId(record.canvasId); if (record.observedActivationDigest !== null) parseDigest(record.observedActivationDigest); parsePortableStamp(record.stamp); return freezeJcs(record)
+}
+
+function parseRouteDependency(value: unknown): Readonly<{ kind: "frame" | "migration-import-base"; digest: Digest }> {
+  assertExactKeys(value, ["kind", "digest"], "Canvas route dependency")
+  const record = value as { readonly kind: unknown; readonly digest: unknown }
+  if (record.kind !== "frame" && record.kind !== "migration-import-base") {
+    fail("invalid-route", "Canvas route dependency kind is invalid")
+  }
+  return Object.freeze({ kind: record.kind, digest: parseDigest(record.digest) })
 }
 
 function parseReceipt(value: unknown): ProjectOperationReceipt {

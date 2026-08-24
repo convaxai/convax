@@ -260,7 +260,7 @@ export class MainProjectCanvasRouteRuntimeRegistry {
 /** Production opener: exact scope is supplied only by the route registry above. */
 export function createProductionCanvasRouteRuntimeOpener(input: {
   readonly authority: CurrentProtocolAuthority
-  readonly localAuthority: CurrentLocalReplicaAuthoritySource
+  readonly localAuthority: (project: ProjectCollaborationRuntimeLease) => CurrentLocalReplicaAuthoritySource
   readonly incomingAuthority: IncomingReplicaAuthoritySource
   readonly materializers: ProjectCollaborationMaterializerRegistry
   readonly signatureVerifier: CollaborationKernelOptions["signatureVerifier"]
@@ -278,7 +278,7 @@ export function createProductionCanvasRouteRuntimeOpener(input: {
         scope,
         owner: descriptor.owner,
         actorId: project.localActorId,
-        localAuthority: input.localAuthority,
+        localAuthority: input.localAuthority(project),
         incomingAuthority: input.incomingAuthority,
         incomingFacts: descriptor.incomingFacts,
         createDocument: descriptor.createDocument,

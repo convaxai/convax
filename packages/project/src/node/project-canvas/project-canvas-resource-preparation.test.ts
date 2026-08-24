@@ -8,6 +8,7 @@ import { CanvasResourcePartialFailureError } from "@convax/canvas/application"
 import type { ProjectIndexResourceReference } from "../../collaboration/project-index"
 import type {
   ProjectIndexFileApplicationPort,
+  ProjectIndexFileMaterializationEntry,
   ProjectIndexFileMaterializationProjectionPort,
 } from "../../canvas/project-index-file-application"
 import {
@@ -216,12 +217,43 @@ describe("project canvas resource preparation", () => {
       name: "brief.md",
       state: {
         contentRevision: "stable-byte-revision",
+        editableText: true,
         status: "ready",
         text: "# Brief",
       },
     })
     expect(result.items[0]).not.toHaveProperty("format")
     expect(result.items[0]).not.toHaveProperty("text")
+  })
+
+  test("keeps non-v1 Project text formats read-only in prepared runtime state", async () => {
+    const preparation = new ProjectCanvasResourcePreparation(
+      host({
+        async readFileInfo(input) {
+          return { mimeType: "text/markdown", name: "brief.markdown", path: input.path, size: 7 }
+        },
+        async readTextFile(input) {
+          return { content: "# Brief", contentRevision: "stable-byte-revision", exists: true, path: input.path }
+        },
+      }),
+      unusedPublisher(),
+      unusedAssets(),
+    )
+
+    const result = await preparation.prepare({
+      ...requestRef,
+      sources: [{ kind: "host-file", path: "docs/brief.markdown", sourceId: "brief" }],
+    })
+
+    expect(result.items[0]).toMatchObject({
+      kind: "text",
+      state: {
+        contentRevision: "stable-byte-revision",
+        editableText: false,
+        status: "ready",
+        text: "# Brief",
+      },
+    })
   })
 
   test("inspects the exact Project image bytes while keeping decoder URLs transient", async () => {
@@ -352,7 +384,7 @@ describe("project canvas resource preparation", () => {
     let publishedBytes: Readonly<Uint8Array> | undefined
     let publishedDigest: Digest | undefined
     const indexFiles = {
-      async queryFileMaterializationPlan() {
+      async queryFileMaterializationEntries() {
         events.push("proof:plan")
         await planGate
         return { projectId: parseProjectId("project_one"), entries: [] }
@@ -437,7 +469,7 @@ describe("project canvas resource preparation", () => {
       })
       let proofCommitted = false
       const indexFiles = {
-        async queryFileMaterializationPlan() {
+        async queryFileMaterializationEntries() {
           return { projectId: parseProjectId("project_one"), entries: [] }
         },
         async createDirectory() {
@@ -581,33 +613,48 @@ describe("project canvas resource preparation", () => {
     expect(result.retainedOnFailure).toEqual([{ label: "Notes/Brief-a1.md" }])
   })
 
-  test("overlaps new-text publication with Notes owner preparation and reuses the verified plan", async () => {
+  test("publishes new text before exact Notes projection and never requests the full plan", async () => {
     const content = "# Brief"
     const bytes = new TextEncoder().encode(content)
     const reference = projectIndexReference(bytes, "text/markdown")
-    let planQueries = 0
+    const directoryId = `pd_${"c".repeat(64)}` as never
+    const liveDirectories = new Set<string>()
+    const exactQueries: string[][] = []
+    let fullPlanQueries = 0
     let planQueryStarted = false
     let publicationObservedPlanQuery = false
     const directories: string[] = []
     const diagnostics: Array<{ byteLength: number; callCount: number; stage: string }> = []
     const indexFiles = {
       async queryFileMaterializationPlan() {
-        planQueries += 1
-        planQueryStarted = true
+        fullPlanQueries += 1
         return { projectId: parseProjectId("project_one"), entries: [] }
       },
-      async createDirectory(input: { path: string }) {
+      async queryFileMaterializationEntries(input: { paths: readonly string[] }) {
+        exactQueries.push([...input.paths])
+        planQueryStarted = true
+        return {
+          projectId: parseProjectId("project_one"),
+          entries: input.paths
+            .filter((requestedPath) => liveDirectories.has(requestedPath))
+            .map((requestedPath) => ({ entryId: directoryId, kind: "directory" as const, path: requestedPath, reference: null })),
+        }
+      },
+      async createDirectory(input: { nativeMaterialization?: string; path: string }) {
+        expect(input.nativeMaterialization).toBe("already-current")
         directories.push(input.path)
+        liveDirectories.add(input.path)
         return {
           status: "committed" as const,
-          entryId: `pd_${"c".repeat(64)}` as never,
+          entryId: directoryId,
           versionId: null,
           reference: null,
         }
       },
-      async publishFile(input: { exactBytes: Readonly<Uint8Array>; path: string }) {
+      async publishFile(input: { exactBytes: Readonly<Uint8Array>; nativeMaterialization?: string; path: string }) {
         expect(input.path).toBe("Notes/Brief-a1.md")
         expect([...input.exactBytes]).toEqual([...bytes])
+        expect(input.nativeMaterialization).toBe("already-current")
         return {
           status: "committed" as const,
           entryId: reference.entryFileId as never,
@@ -649,8 +696,12 @@ describe("project canvas resource preparation", () => {
       sources: [{ kind: "new-text", sourceId: "new", text: content }],
     })
 
-    expect(publicationObservedPlanQuery).toBeTrue()
-    expect(planQueries).toBe(1)
+    expect(publicationObservedPlanQuery).toBeFalse()
+    expect(exactQueries).toEqual([
+      ["Notes"],
+      ["Notes", "Notes/Brief-a1.md"],
+    ])
+    expect(fullPlanQueries).toBe(0)
     expect(directories).toEqual(["Notes"])
     expect(
       diagnostics
@@ -667,8 +718,144 @@ describe("project canvas resource preparation", () => {
     })
   })
 
+  test("uses live exact-path projection for warm new text without a full plan or ProjectIndex write", async () => {
+    const content = "# Existing"
+    const bytes = new TextEncoder().encode(content)
+    const reference = projectIndexReference(bytes, "text/markdown")
+    const directoryId = `pd_${"d".repeat(64)}` as never
+    const exactQueries: string[][] = []
+    let fullPlanQueries = 0
+    let directoryCreates = 0
+    let filePublishes = 0
+    const indexFiles = {
+      async queryFileMaterializationPlan() {
+        fullPlanQueries += 1
+        return { projectId: parseProjectId("project_one"), entries: [] }
+      },
+      async queryFileMaterializationEntries(input: { paths: readonly string[] }) {
+        exactQueries.push([...input.paths])
+        const entries: ProjectIndexFileMaterializationEntry[] = []
+        for (const requestedPath of input.paths) {
+          if (requestedPath === "Notes") {
+            entries.push({ entryId: directoryId, kind: "directory", path: requestedPath, reference: null })
+          } else if (requestedPath === "Notes/Existing-a1.md") {
+            entries.push({ entryId: reference.entryFileId, kind: "file", path: requestedPath, reference })
+          }
+        }
+        return {
+          projectId: parseProjectId("project_one"),
+          entries,
+        }
+      },
+      async createDirectory() {
+        directoryCreates += 1
+        throw new Error("warm Notes must not be recreated")
+      },
+      async publishFile() {
+        filePublishes += 1
+        throw new Error("matching current file must not be republished")
+      },
+      async admitManagedBlob() { throw new Error("not used") },
+      async relocateEntry() { throw new Error("not used") },
+      async tombstoneEntry() { throw new Error("not used") },
+    } as unknown as ProjectIndexFileApplicationPort & ProjectIndexFileMaterializationProjectionPort
+    const preparation = new ProjectCanvasResourcePreparation(
+      host(),
+      {
+        async publishText() {
+          return { contentRevision: ordinarySha256(bytes), path: "Notes/Existing-a1.md" }
+        },
+      },
+      unusedAssets(),
+      undefined,
+      indexFiles,
+    )
+
+    const result = await preparation.prepare({
+      ...requestRef,
+      sources: [{ kind: "new-text", sourceId: "new", text: content }],
+    })
+
+    expect(exactQueries).toEqual([
+      ["Notes"],
+      ["Notes", "Notes/Existing-a1.md"],
+    ])
+    expect(fullPlanQueries).toBe(0)
+    expect(directoryCreates).toBe(0)
+    expect(filePublishes).toBe(0)
+    expect(result.items[0]?.metadata).toMatchObject({
+      convaxCanvasResourceProof: {
+        mode: "current-owner-state",
+        resource: { contentDigest: reference.blob.digest },
+      },
+    })
+  })
+
+  test("rechecks only the exact directory after a partial create before publishing new text", async () => {
+    const content = "# Recovered"
+    const bytes = new TextEncoder().encode(content)
+    const reference = projectIndexReference(bytes, "text/markdown")
+    const directoryId = `pd_${"e".repeat(64)}` as never
+    const exactQueries: string[][] = []
+    let directoryVisible = false
+    let fullPlanQueries = 0
+    const indexFiles = {
+      async queryFileMaterializationPlan() {
+        fullPlanQueries += 1
+        return { projectId: parseProjectId("project_one"), entries: [] }
+      },
+      async queryFileMaterializationEntries(input: { paths: readonly string[] }) {
+        exactQueries.push([...input.paths])
+        return {
+          projectId: parseProjectId("project_one"),
+          entries: directoryVisible && input.paths.includes("Notes")
+            ? [{ entryId: directoryId, kind: "directory" as const, path: "Notes", reference: null }]
+            : [],
+        }
+      },
+      async createDirectory() {
+        directoryVisible = true
+        return { status: "partial-success" as const, code: "index-commit-failed" as const }
+      },
+      async publishFile() {
+        return {
+          status: "committed" as const,
+          entryId: reference.entryFileId as never,
+          versionId: reference.versionId,
+          reference,
+        }
+      },
+      async admitManagedBlob() { throw new Error("not used") },
+      async relocateEntry() { throw new Error("not used") },
+      async tombstoneEntry() { throw new Error("not used") },
+    } as unknown as ProjectIndexFileApplicationPort & ProjectIndexFileMaterializationProjectionPort
+    const preparation = new ProjectCanvasResourcePreparation(
+      host(),
+      { async publishText() { return { contentRevision: ordinarySha256(bytes), path: "Notes/Recovered-a1.md" } } },
+      unusedAssets(),
+      undefined,
+      indexFiles,
+    )
+
+    const result = await preparation.prepare({
+      ...requestRef,
+      sources: [{ kind: "new-text", sourceId: "new", text: content }],
+    })
+
+    expect(exactQueries).toEqual([
+      ["Notes"],
+      ["Notes"],
+      ["Notes", "Notes/Recovered-a1.md"],
+    ])
+    expect(fullPlanQueries).toBe(0)
+    expect(result.items[0]?.metadata).toMatchObject({
+      convaxCanvasResourceProof: { mode: "current-owner-state" },
+    })
+  })
+
   test("reports a published Notes file when concurrent owner preparation fails", async () => {
     const ownerFailure = new Error("ProjectIndex Notes preparation failed")
+    let exactQueries = 0
     const preparation = new ProjectCanvasResourcePreparation(
       host(),
       {
@@ -679,7 +866,8 @@ describe("project canvas resource preparation", () => {
       unusedAssets(),
       undefined,
       {
-        async queryFileMaterializationPlan() {
+        async queryFileMaterializationEntries() {
+          exactQueries += 1
           return { projectId: parseProjectId("project_one"), entries: [] }
         },
         async createDirectory() {
@@ -701,6 +889,7 @@ describe("project canvas resource preparation", () => {
     expect(error).toBeInstanceOf(CanvasResourcePartialFailureError)
     expect((error as CanvasResourcePartialFailureError).cause).toBe(ownerFailure)
     expect((error as CanvasResourcePartialFailureError).retainedOnFailure).toEqual([{ label: "Notes/retained-a1.md" }])
+    expect(exactQueries).toBe(1)
   })
 
   test("reports only successfully published new text when later preparation fails", async () => {
@@ -904,7 +1093,7 @@ describe("project canvas resource preparation", () => {
     const directories: string[] = []
     const publications: unknown[] = []
     const indexFiles = {
-      async queryFileMaterializationPlan() {
+      async queryFileMaterializationEntries() {
         return { projectId: parseProjectId("project_one"), entries: [] }
       },
       async createDirectory(input: { path: string }) {
@@ -1006,7 +1195,7 @@ describe("project canvas resource preparation", () => {
     const directoryRequests: string[] = []
     const publications: string[] = []
     const indexFiles = {
-      async queryFileMaterializationPlan() {
+      async queryFileMaterializationEntries() {
         return { projectId: parseProjectId("project_one"), entries: [] }
       },
       async createDirectory(input: { path: string }) {

@@ -74,7 +74,11 @@ const baseRequest = {
 describe("Canvas resource collaboration orchestration", () => {
   test("prepares host bytes before one collaboration submit and preserves warnings", async () => {
     const prepare = mock(async () => ({ items: [image], warnings: ["prepared"] }))
-    const execute = mock(async () => result(["committed"]))
+    const execute = mock(async () => ({
+      ...result(["committed"]),
+      createdNodeIds: ["authoritative-node"],
+      createdResourceNodeIds: ["authoritative-node"],
+    }))
     const diagnostics: Array<{ stage: string; resources?: number }> = []
     const service = new CanvasResourceBusinessService(
       { prepare },
@@ -82,7 +86,8 @@ describe("Canvas resource collaboration orchestration", () => {
       { record: (diagnostic) => diagnostics.push({ stage: diagnostic.stage, resources: diagnostic.sizes?.resources }) },
     )
 
-    await expect(service.addResources(baseRequest)).resolves.toMatchObject({ warnings: ["prepared", "committed"] })
+    const added = await service.addResources(baseRequest)
+    expect(added).toMatchObject({ warnings: ["prepared", "committed"] })
     expect(prepare).toHaveBeenCalledTimes(1)
     expect(execute).toHaveBeenCalledTimes(1)
     expect(diagnostics).toEqual([{ stage: "business-prepare", resources: 1 }])
@@ -91,9 +96,64 @@ describe("Canvas resource collaboration orchestration", () => {
       envelope: { command: { type: "resources.add" }, commandId: "add-one" },
       scopeId: "project",
     })
+    const command = execute.mock.calls[0]?.[0].envelope.command
+    expect(command?.type).toBe("resources.add")
+    if (command?.type !== "resources.add") throw new Error("expected resources.add command")
+    expect(added.preparedResources).toEqual([{ nodeId: "authoritative-node", state: image.state }])
+    expect(added.preparedResources[0]!.nodeId).not.toBe(command.items[0]!.nodeId)
+    expect(added.preparedResources[0]!.state).not.toBe(image.state)
   })
 
-  test("retains the validated prepared runtime state in the first authoritative projection", async () => {
+  test("returns an explicit bounded certified result without touching a full document", async () => {
+    const execute = mock(async () => {
+      throw new Error("full projection path must not run")
+    })
+    const executeCertifiedResourceAppend = mock(async () => ({
+      affectedNodeIds: ["authoritative-node"],
+      changed: true,
+      createdNodeIds: ["authoritative-node"],
+      createdResourceNodeIds: ["authoritative-node"],
+      operationReceipt: receipt,
+      projectionDelivery: { status: "unavailable" as const },
+      warnings: ["committed"],
+    }))
+    const service = new CanvasResourceBusinessService(
+      { prepare: async () => ({ items: [image], warnings: ["prepared"] }) },
+      { execute, executeCertifiedResourceAppend, query: mock() },
+    )
+
+    const added = await service.addResourcesCertified({ ...baseRequest, commandId: "certified-add" })
+
+    expect(execute).not.toHaveBeenCalled()
+    expect(executeCertifiedResourceAppend).toHaveBeenCalledTimes(1)
+    expect(executeCertifiedResourceAppend.mock.calls[0]?.[0]).toMatchObject({
+      envelope: { command: { type: "resources.add" } },
+      resultProjection: "certified-resource-append-patch",
+    })
+    expect(added).not.toHaveProperty("document")
+    expect(added.projectionDelivery).toEqual({ status: "unavailable" })
+    expect(added.preparedResources).toEqual([{ nodeId: "authoritative-node", state: image.state }])
+    expect(added.warnings).toEqual(["prepared", "committed"])
+    expect(Object.isFrozen(added)).toBeTrue()
+  })
+
+  test("keeps the durable result but omits prepared runtime state without a verified ordinal mapping", async () => {
+    const execute = mock(async () => ({
+      ...result(),
+      createdNodeIds: ["receipt-node"],
+    }))
+    const service = new CanvasResourceBusinessService(
+      { prepare: async () => ({ items: [image] }) },
+      { execute, query: mock() },
+    )
+
+    const added = await service.addResources({ ...baseRequest, commandId: "add-without-ordinal-proof" })
+
+    expect(added.createdNodeIds).toEqual(["receipt-node"])
+    expect(added.preparedResources).toEqual([])
+  })
+
+  test("returns the validated prepared runtime state beside the unchanged authoritative projection", async () => {
     const committedDocument = createCanvasDocument({
       id: "canvas",
       nodes: [
@@ -114,6 +174,7 @@ describe("Canvas resource collaboration orchestration", () => {
       ...result(),
       affectedNodeIds: ["image-node"],
       createdNodeIds: ["image-node"],
+      createdResourceNodeIds: ["image-node"],
       document: committedDocument,
     }))
     const service = new CanvasResourceBusinessService(
@@ -123,14 +184,12 @@ describe("Canvas resource collaboration orchestration", () => {
 
     const applied = await service.addResources(baseRequest)
 
-    expect(applied.document.nodes[0]?.data.resourceState).toEqual({
-      status: "ready",
-      url: "canvas-resource://prepared-image",
-    })
+    expect(applied.document.nodes[0]?.data.resourceState).toEqual({ status: "stale" })
+    expect(applied.preparedResources).toEqual([{ nodeId: "image-node", state: image.state }])
     expect(committedDocument.nodes[0]?.data.resourceState).toEqual({ status: "stale" })
   })
 
-  test("binds prepared runtime state by persisted resource identity when receipt node ids reverse item order", async () => {
+  test("binds prepared runtime state by owner-provided resource ordinal when receipt entity order differs", async () => {
     const firstResource = resourceIdentity("first", "image")
     const secondResource = resourceIdentity("second", "image")
     const first: CanvasUploadItem = {
@@ -182,6 +241,8 @@ describe("Canvas resource collaboration orchestration", () => {
           affectedNodeIds: ["a-node", "z-node"],
           // Operation receipts sort entity ids, which is the opposite of item order here.
           createdNodeIds: ["a-node", "z-node"],
+          // The owner separately preserves command item ordinal for presentation binding.
+          createdResourceNodeIds: ["z-node", "a-node"],
           document: committedDocument,
         }),
         query: mock(),
@@ -196,8 +257,14 @@ describe("Canvas resource collaboration orchestration", () => {
       ],
     })
 
-    expect(applied.document.nodes.find((node) => node.id === "z-node")?.data.resourceState).toEqual(first.state)
-    expect(applied.document.nodes.find((node) => node.id === "a-node")?.data.resourceState).toEqual(second.state)
+    expect(applied.document.nodes.map((node) => node.data.resourceState)).toEqual([
+      { status: "stale" },
+      { status: "stale" },
+    ])
+    expect(applied.preparedResources).toEqual([
+      { nodeId: "z-node", state: first.state },
+      { nodeId: "a-node", state: second.state },
+    ])
   })
 
   test("does not cross differing runtime states between indistinguishable duplicate resources", async () => {

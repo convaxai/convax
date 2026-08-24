@@ -26,7 +26,7 @@ describe("current protocol descriptor", () => {
       "control-plane",
       "project-persistence",
     ])
-    expect(descriptor.digestDomains).toHaveLength(129)
+    expect(descriptor.digestDomains).toHaveLength(137)
     expect(Object.isFrozen(descriptor)).toBe(true)
     expect(currentProtocolDescriptor()).toBe(descriptor)
     expect(encodeCurrentProtocolDescriptor()).toEqual(encodeCurrentProtocolDescriptor())

@@ -110,6 +110,7 @@ function createCandidate() {
     fullUpdate: new Uint8Array([1, 2, 3]),
     stateVector: new Uint8Array([4, 5]) as StateVector,
     canonicalStateDigest: digest("canonical"),
+    materializationDigest: digest("materialization"),
   })
   return Object.freeze({
     scope: canvasScope,

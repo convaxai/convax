@@ -1,18 +1,30 @@
 import { describe, expect, mock, test } from "bun:test"
 import {
-  CANVAS_PROTOCOL_SCHEMA_ARTIFACT_DIGEST,
+  adaptCanvasApplicationCommand,
   applyCanvasCandidateIntent,
+  CANVAS_PROTOCOL_SCHEMA_ARTIFACT_DIGEST,
   canvasOperationReceipt,
+  canvasSnapshotFromValidatedOwnerState,
+  constructCanvasAuthoritativeIntent,
+  createCanvasDocumentOwnerRuntime,
   createCanvasYDoc,
+  deriveCanvasCommandOperationId,
   derivedNodeRef,
-  obstacleProjectionDigest,
-  validateCanvasYDoc,
+  parseCanvasCertifiedProjectionPatch,
+  projectCanvas,
+  readCanvasCertifiedProjectionIdentity,
   type BoundedOperationReceipt,
   type CanvasExternalFactContext,
+  type CanvasResourceProofRef,
   type CanvasResourceRef,
   type CanvasSnapshot,
+  type CanvasTypedIntentUnion,
 } from "@convax/canvas/collaboration"
-import type { CanvasApplicationCommandResult } from "@convax/canvas/application"
+import type { CanvasCertifiedAddResourcesResult } from "@convax/canvas/application"
+import {
+  CanvasApplicationService,
+  CanvasResourceBusinessService,
+} from "@convax/canvas/application"
 import {
   encodeBase64url,
   parseActorId,
@@ -23,15 +35,95 @@ import {
   parseReplicaId,
   parseUint32,
   parseUint64,
+  type OwnerExternalFactPort,
   type OwnerIntentValidationContext,
   type OwnerValidatedState,
 } from "@convax/collaboration"
 import type { MainCollaborationDocumentSession } from "./collaboration-document-session"
+import { loadHistoricalTestAuthority } from "./collaboration-authority.test-support"
 import { createCanvasCollaborationSessionOwner } from "./canvas-collaboration-session-owner"
 
-const ref = { scopeId: "project-a", canvasId: "canvas-a" }
+const canvasId = parseCanvasId(`cv_${"1".repeat(64)}`)
+const ref = { scopeId: "project-a", canvasId }
+const testAuthority = await loadHistoricalTestAuthority()
+const testCanvasRuntime = createCanvasDocumentOwnerRuntime(testAuthority)
 
 describe("CanvasCollaborationSessionOwner Project quiescence", () => {
+  test("keeps prepared resource runtime aligned to typed-intent ordinals when the receipt sorts node ids", async () => {
+    const actor = { kind: "renderer" as const, id: "renderer-resource-ordinal" }
+    const session = resourceCommandSession()
+    const commandId = resourceCommandIdWithReceiptOrderDifferentFromOrdinal(session.scope, actor)
+    const owner = createCanvasCollaborationSessionOwner({
+      ...inertOptions(),
+      applicationCommands: { construct: adaptCanvasApplicationCommand },
+      openDocumentSession: async () => session.value,
+      resolveFacts: async () => ({
+        status: "resolved" as const,
+        port: validCanvasExternalFacts() as unknown as OwnerExternalFactPort<"canvas">,
+      }),
+    })
+    const resources = new CanvasResourceBusinessService(
+      {
+        prepare: async () => ({
+          items: [
+            resourceItem("first", currentResourceProof(30), "first"),
+            resourceItem("second", currentResourceProof(40), "second"),
+          ],
+        }),
+      },
+      new CanvasApplicationService(owner),
+    )
+
+    const added = await resources.addResources({
+      actor,
+      anchor: { x: 0, y: 0 },
+      canvasId: ref.canvasId,
+      commandId,
+      scopeId: ref.scopeId,
+      sources: [
+        { kind: "host-file", path: "Notes/first.md", sourceId: "first" },
+        { kind: "host-file", path: "Notes/second.md", sourceId: "second" },
+      ],
+    })
+    const receiptNodeIds = added.operationReceipt.resultEntities
+      .filter((entity) => entity.kind === "node")
+      .map((entity) => entity.id)
+
+    expect(added.createdResourceNodeIds).toBeDefined()
+    const ordinalNodeIds = added.createdResourceNodeIds!
+    expect(ordinalNodeIds).toEqual(added.createdNodeIds)
+    expect(ordinalNodeIds).not.toEqual(receiptNodeIds)
+    expect(added.preparedResources.map(({ nodeId }) => nodeId)).toEqual([...ordinalNodeIds])
+    expect(added.preparedResources.map(({ state }) => state.text)).toEqual(["first", "second"])
+    owner.dispose()
+  })
+
+  test("clones only exact live resource targets and rejects stale incarnations", async () => {
+    const session = targetedNodeSession()
+    const owner = createCanvasCollaborationSessionOwner({
+      ...inertOptions(),
+      openDocumentSession: async () => session.value,
+    })
+    const opened = await owner.open({ ref, actor: { kind: "renderer", id: "renderer-one" } })
+    expect(opened.document.nodes).toHaveLength(2)
+    const target = opened.nodeEntities[0]!
+    const other = opened.nodeEntities[1]!
+
+    const bounded = await owner.queryRendererResourceTargets(ref, opened.sessionId, [target])
+
+    expect(bounded.edges).toEqual([])
+    expect(bounded.nodes.map((node) => node.id)).toEqual([target.nodeId])
+    expect(bounded.nodes[0]).not.toBe(opened.document.nodes.find((node) => node.id === target.nodeId))
+    const repeated = await owner.queryRendererResourceTargets(ref, opened.sessionId, [target])
+    expect(repeated.nodes[0]).not.toBe(bounded.nodes[0])
+    await expect(
+      owner.queryRendererResourceTargets(ref, opened.sessionId, [
+        { entity: { ...target.entity, incarnation: other.entity.incarnation }, nodeId: target.nodeId },
+      ]),
+    ).rejects.toThrow("target is stale")
+    owner.dispose()
+  })
+
   test("keeps Plugin semantic roots out of every mounted renderer undo chain", async () => {
     const session = semanticRootSession()
     const owner = createCanvasCollaborationSessionOwner({
@@ -153,7 +245,7 @@ describe("CanvasCollaborationSessionOwner Project quiescence", () => {
     owner.dispose()
   })
 
-  test("delivers prepared editable text and media URLs in the first authoritative projection", async () => {
+  test("delivers the owner-certified patch with an exact transient runtime sidecar", async () => {
     const session = preparedResourceSession()
     const owner = createCanvasCollaborationSessionOwner({
       ...inertOptions(),
@@ -161,13 +253,9 @@ describe("CanvasCollaborationSessionOwner Project quiescence", () => {
     })
     const actor = { kind: "renderer", id: "renderer-prepared-resources" }
     const opened = await owner.open({ ref, actor })
-    const textBefore = opened.document.nodes.find((node) => node.id === session.textNode.id)!
-    const imageBefore = opened.document.nodes.find((node) => node.id === session.imageNode.id)!
-    expect(textBefore.data.resourceState).toMatchObject({ status: "stale" })
-    expect(imageBefore.data.resourceState).toMatchObject({ status: "stale" })
-
-    const result = preparedApplicationResult(
-      opened.document,
+    const queryCountAfterOpen = session.queryCount()
+    const result = preparedCertifiedResult(
+      session.patch,
       session.receipt,
       session.textNode.id,
       session.imageNode.id,
@@ -178,26 +266,17 @@ describe("CanvasCollaborationSessionOwner Project quiescence", () => {
       sessionId: opened.sessionId,
       result,
     })
-    expect(delivered.status).toBe("accepted")
-    if (delivered.status !== "accepted") throw new Error("Prepared resource delivery was unavailable")
-
-    const text = delivered.projection.document.nodes.find((node) => node.id === session.textNode.id)!
-    const image = delivered.projection.document.nodes.find((node) => node.id === session.imageNode.id)!
-    expect(text.data.resourceState).toEqual({
-      contentRevision: "text-r1",
-      editableText: true,
-      status: "ready",
-      text: "# Immediately editable",
-    })
-    expect(image.data.resourceState).toEqual({ status: "ready", url: "blob:prepared-image" })
-    expect(text.position).toEqual(textBefore.position)
-    expect(text.style).toEqual(textBefore.style)
-    expect(image.position).toEqual(imageBefore.position)
-    expect(image.style).toEqual(imageBefore.style)
+    expect(delivered.status).toBe("certified")
+    if (delivered.status !== "certified") throw new Error("Prepared resource delivery was unavailable")
+    expect(delivered.patch).toBe(session.patch)
+    expect(delivered.runtimePatches).toEqual(result.preparedResources)
+    expect(delivered.ref).toEqual(ref)
+    expect(delivered.sessionId).toBe(opened.sessionId)
+    expect(session.queryCount()).toBe(queryCountAfterOpen)
     owner.dispose()
   })
 
-  test("rejects prepared runtime state when the durable resource binding does not match", async () => {
+  test("drops an invalid runtime sidecar without discarding the certified durable patch", async () => {
     const session = preparedResourceSession()
     const owner = createCanvasCollaborationSessionOwner({
       ...inertOptions(),
@@ -205,38 +284,28 @@ describe("CanvasCollaborationSessionOwner Project quiescence", () => {
     })
     const actor = { kind: "renderer", id: "renderer-mismatched-resource" }
     const opened = await owner.open({ ref, actor })
-    const result = preparedApplicationResult(
-      opened.document,
+    const result = preparedCertifiedResult(
+      session.patch,
       session.receipt,
       session.textNode.id,
       session.imageNode.id,
-    )
-    const textIndex = result.document.nodes.findIndex((node) => node.id === session.textNode.id)
-    const forgedNodes = result.document.nodes.map((node, index) =>
-      index === textIndex
-        ? {
-            ...node,
-            data: {
-              ...node.data,
-              metadata: { forgedResourceBinding: true },
-            },
-          }
-        : node,
     )
     const delivered = await owner.deliverApplicationCommit({
       ref,
       rendererActorId: actor.id,
       sessionId: opened.sessionId,
-      result: { ...result, document: { ...result.document, nodes: forgedNodes } },
+      result: {
+        ...result,
+        preparedResources: [
+          ...result.preparedResources.slice(0, 1),
+          { ...result.preparedResources[1]!, nodeId: "forged-node" },
+        ],
+      },
     })
-    expect(delivered.status).toBe("accepted")
-    if (delivered.status !== "accepted") throw new Error("Prepared resource delivery was unavailable")
-
-    const text = delivered.projection.document.nodes.find((node) => node.id === session.textNode.id)!
-    const image = delivered.projection.document.nodes.find((node) => node.id === session.imageNode.id)!
-    expect(text.data.resourceState).toMatchObject({ status: "stale" })
-    expect(text.data.metadata).not.toHaveProperty("forgedResourceBinding")
-    expect(image.data.resourceState).toEqual({ status: "ready", url: "blob:prepared-image" })
+    expect(delivered.status).toBe("certified")
+    if (delivered.status !== "certified") throw new Error("Prepared resource delivery was unavailable")
+    expect(delivered.patch).toBe(session.patch)
+    expect(delivered.runtimePatches).toEqual([])
     owner.dispose()
   })
 })
@@ -248,6 +317,16 @@ function inertOptions() {
     resolveFacts: async () => ({ status: "rejected" as const }),
     applicationCommands: { construct: () => "rejected" as const },
   }
+}
+
+function validatedCanvasSnapshot(
+  document: Parameters<typeof applyCanvasCandidateIntent>[0],
+): CanvasSnapshot {
+  const state = testCanvasRuntime.protocolPort.validateBase(document)
+  if (typeof state === "string") throw new Error(`Canvas fixture base was ${state}`)
+  const snapshot = canvasSnapshotFromValidatedOwnerState(state)
+  if (!snapshot) throw new Error("Canvas fixture snapshot is unavailable")
+  return snapshot
 }
 
 function fakeSession() {
@@ -284,15 +363,16 @@ function semanticRootSession() {
     docId: parseCanvasId(`cv_${"1".repeat(64)}`),
     shardEpoch,
   })
+  const protocolDigest = testAuthority.protocolDigest
   const document = createCanvasYDoc(
     scope,
     CANVAS_PROTOCOL_SCHEMA_ARTIFACT_DIGEST,
-    parseDigest("2".repeat(64)),
+    protocolDigest,
     parseDigest("3".repeat(64)),
     parseReplicaId("replica_00000001"),
   )
-  let snapshot: CanvasSnapshot = validateCanvasYDoc(document)
-  document.destroy()
+  let snapshot: CanvasSnapshot = validatedCanvasSnapshot(document)
+  let sequence = 1
   const value: MainCollaborationDocumentSession<"canvas"> = {
     scope,
     query: async <T>(project: (state: OwnerValidatedState<"canvas">) => T): Promise<T> =>
@@ -300,22 +380,209 @@ function semanticRootSession() {
     submit: async (input) => {
       const operationId = input.operationId!
       const actorId = parseActorId(encodeBase64url(new Uint8Array(32).fill(5)))
-      const receipt: BoundedOperationReceipt = Object.freeze({
-        format: "convax.canvas-operation-receipt",
+      const context: OwnerIntentValidationContext = Object.freeze({
+        scope,
         actorId,
+        actorSequence: parseUint64(String(sequence)),
         operationId,
-        intentKind: "canvas.agent.create",
-        intentDigest: parseDigest("4".repeat(64)),
+        lamport: parseUint64(String(sequence)),
+        intentDigest: parseDigest((32 + sequence).toString(16).padStart(2, "0").repeat(32)),
         baseFrontierDigest: parseDigest("5".repeat(64)),
-        resultEntities: Object.freeze([]),
-        semanticRoot: true,
-        historyMaterialDigest: parseDigest("6".repeat(64)),
+        protocolDigest,
+        ownerSchemaDigest: CANVAS_PROTOCOL_SCHEMA_ARTIFACT_DIGEST,
+        validationArtifactSetDigest: parseDigest("6".repeat(64)),
       })
-      snapshot = Object.freeze({ ...snapshot, operations: new Map([[`operation/${actorId}/${operationId}`, receipt]]) })
+      const constructed = constructCanvasAuthoritativeIntent({
+        snapshot,
+        context,
+        command: {
+          kind: "agent-node-create",
+          title: `Semantic root ${sequence}`,
+          instructions: null,
+          position: { x: sequence * 24, y: sequence * 24 },
+          size: { width: 240, height: 120 },
+        },
+      })
+      if (constructed === "rejected") throw new Error("Semantic-root fixture command was rejected")
+      const result = applyCanvasCandidateIntent(document, context, constructed.intent, validCanvasExternalFacts())
+      if (result === "pending" || result === "rejected") {
+        throw new Error(`Semantic-root fixture commit ${result}`)
+      }
+      snapshot = validatedCanvasSnapshot(document)
+      sequence += 1
       return {
         status: "saved-locally",
         frame: { frameDigest: parseDigest("7".repeat(64)), header: { core: { actorId, operationId } } },
       } as never
+    },
+    flush: async () => undefined,
+    subscribe: () => () => undefined,
+    dispose: () => document.destroy(),
+  }
+  return { value }
+}
+
+function resourceCommandSession() {
+  const projectEpoch = parseId128(encodeBase64url(new Uint8Array(16).fill(21)))
+  const shardEpoch = parseId128(encodeBase64url(new Uint8Array(16).fill(22)))
+  const protocolDigest = testAuthority.protocolDigest
+  const scope = Object.freeze({
+    projectId: parseProjectId("project-a"),
+    projectEpoch,
+    docKind: "canvas" as const,
+    docId: canvasId,
+    shardEpoch,
+  })
+  const document = createCanvasYDoc(
+    scope,
+    CANVAS_PROTOCOL_SCHEMA_ARTIFACT_DIGEST,
+    protocolDigest,
+    parseDigest("e".repeat(64)),
+    parseReplicaId("replica_00000001"),
+  )
+  let snapshot = validatedCanvasSnapshot(document)
+  const value: MainCollaborationDocumentSession<"canvas"> = {
+    scope,
+    query: async <T>(project: (state: OwnerValidatedState<"canvas">) => T): Promise<T> =>
+      project({ value: snapshot } as OwnerValidatedState<"canvas">),
+    submit: async (input) => {
+      const operationId = input.operationId!
+      const context = resourceCommandContext(scope, protocolDigest, operationId)
+      const prepared = await input.prepare({
+        base: { value: snapshot } as OwnerValidatedState<"canvas">,
+        context,
+        signal: input.signal,
+      })
+      const result = applyCanvasCandidateIntent(
+        document,
+        context,
+        prepared.typedIntent as CanvasTypedIntentUnion,
+        validCanvasExternalFacts(),
+      )
+      if (result === "pending" || result === "rejected") throw new Error(`Resource fixture commit ${result}`)
+      snapshot = validatedCanvasSnapshot(document)
+      return {
+        status: "saved-locally",
+        frame: {
+          frameDigest: parseDigest("f".repeat(64)),
+          header: { core: { actorId: context.actorId, operationId } },
+        },
+      } as never
+    },
+    flush: async () => undefined,
+    subscribe: () => () => undefined,
+    dispose: () => document.destroy(),
+  }
+  return { scope, value }
+}
+
+function resourceCommandContext(
+  scope: ReturnType<typeof resourceCommandSession>["scope"],
+  protocolDigest: ReturnType<typeof parseDigest>,
+  operationId: ReturnType<typeof parseId128>,
+): OwnerIntentValidationContext {
+  return Object.freeze({
+    scope,
+    actorId: parseActorId(encodeBase64url(new Uint8Array(32).fill(23))),
+    actorSequence: parseUint64("1"),
+    operationId,
+    lamport: parseUint64("1"),
+    intentDigest: parseDigest("1".repeat(64)),
+    baseFrontierDigest: parseDigest("2".repeat(64)),
+    protocolDigest,
+    ownerSchemaDigest: CANVAS_PROTOCOL_SCHEMA_ARTIFACT_DIGEST,
+    validationArtifactSetDigest: parseDigest("3".repeat(64)),
+  })
+}
+
+function resourceCommandIdWithReceiptOrderDifferentFromOrdinal(
+  scope: ReturnType<typeof resourceCommandSession>["scope"],
+  actor: { readonly id: string; readonly kind: "renderer" },
+): string {
+  for (let index = 0; index < 100; index += 1) {
+    const commandId = `resource-ordinal-${index}`
+    const operationId = deriveCanvasCommandOperationId({ actor, commandId, ref })
+    const context = resourceCommandContext(scope, testAuthority.protocolDigest, operationId)
+    const ordinalNodeIds = ["0", "1"].map((ordinal) => derivedNodeRef(context, parseUint32(ordinal)).id)
+    if (ordinalNodeIds[0]! > ordinalNodeIds[1]!) return commandId
+  }
+  throw new Error("Could not construct a resource operation whose receipt order differs from ordinal order")
+}
+
+function validCanvasExternalFacts() {
+  return Object.freeze({
+    validateCurrentResource: () => "valid" as const,
+    validatePluginArtifact: () => "valid" as const,
+    validatePluginState: () => "valid" as const,
+    validateGenerationBegin: () => "valid" as const,
+    validateGenerationRecovery: () => "valid" as const,
+  })
+}
+
+function currentResourceProof(seed: number): Extract<CanvasResourceProofRef, { mode: "current-owner-state" }> {
+  const ownerProofDigest = parseDigest(seed.toString(16).padStart(2, "0").repeat(32))
+  return {
+    format: "convax.canvas-resource-proof-ref",
+    mode: "current-owner-state",
+    resource: {
+      format: "convax.canvas-resource-ref",
+      uri:
+        `convax-project://project_0123456789abcdef0123456789abcdef/epochs/` +
+        `AQEBAQEBAQEBAQEBAQEBAQ/entries/pf_${String(seed % 10).repeat(64)}` +
+        `?blob=sha256%3A${String((seed + 1) % 10).repeat(64)}&path=Notes%2Fresource.md`,
+      mediaClass: "text",
+      mime: "text/markdown",
+      byteLength: parseUint64("12"),
+      contentDigest: parseDigest(((seed + 1) % 256).toString(16).padStart(2, "0").repeat(32)),
+      ownerProofDigest,
+    },
+    ownerProofDigest,
+    requireCurrentLiveVersion: true,
+  }
+}
+
+function resourceItem(
+  id: string,
+  proof: Extract<CanvasResourceProofRef, { mode: "current-owner-state" }>,
+  text: string,
+) {
+  return {
+    id,
+    kind: "text" as const,
+    metadata: { convaxCanvasResourceProof: proof },
+    name: `${id}.md`,
+    state: { status: "ready" as const, text },
+  }
+}
+
+function targetedNodeSession() {
+  const projectEpoch = parseId128(encodeBase64url(new Uint8Array(16).fill(13)))
+  const shardEpoch = parseId128(encodeBase64url(new Uint8Array(16).fill(14)))
+  const protocolDigest = testAuthority.protocolDigest
+  const scope = Object.freeze({
+    projectId: parseProjectId("project-a"),
+    projectEpoch,
+    docKind: "canvas" as const,
+    docId: canvasId,
+    shardEpoch,
+  })
+  const document = createCanvasYDoc(
+    scope,
+    CANVAS_PROTOCOL_SCHEMA_ARTIFACT_DIGEST,
+    protocolDigest,
+    parseDigest("a".repeat(64)),
+    parseReplicaId("replica_00000001"),
+  )
+  addAgentNode(document, scope, protocolDigest, 15, "First")
+  addAgentNode(document, scope, protocolDigest, 16, "Second")
+  const snapshot = validatedCanvasSnapshot(document)
+  document.destroy()
+  const value: MainCollaborationDocumentSession<"canvas"> = {
+    scope,
+    query: async <T>(project: (state: OwnerValidatedState<"canvas">) => T): Promise<T> =>
+      project({ value: snapshot } as OwnerValidatedState<"canvas">),
+    submit: async () => {
+      throw new Error("unused")
     },
     flush: async () => undefined,
     subscribe: () => () => undefined,
@@ -327,13 +594,13 @@ function semanticRootSession() {
 function preparedResourceSession() {
   const projectEpoch = parseId128(encodeBase64url(new Uint8Array(16).fill(11)))
   const shardEpoch = parseId128(encodeBase64url(new Uint8Array(16).fill(12)))
-  const protocolDigest = parseDigest("a".repeat(64))
+  const protocolDigest = testAuthority.protocolDigest
   const routeDigest = parseDigest("b".repeat(64))
   const scope = Object.freeze({
     projectId: parseProjectId("project-a"),
     projectEpoch,
     docKind: "canvas" as const,
-    docId: parseCanvasId(`cv_${"c".repeat(64)}`),
+    docId: canvasId,
     shardEpoch,
   })
   const document = createCanvasYDoc(
@@ -366,7 +633,6 @@ function preparedResourceSession() {
     validateGenerationBegin: () => "valid",
     validateGenerationRecovery: () => "valid",
   })
-  const base = validateCanvasYDoc(document)
   const outcome = applyCanvasCandidateIntent(
     document,
     operationContext,
@@ -381,15 +647,14 @@ function preparedResourceSession() {
         ],
         derivedEdges: [],
         resourceProofs: [
-          { createdNodeOrdinal: parseUint32("0"), proof: currentResourceProof(textResource) },
-          { createdNodeOrdinal: parseUint32("1"), proof: currentResourceProof(imageResource) },
+          { createdNodeOrdinal: parseUint32("0"), proof: preparedCurrentResourceProof(textResource) },
+          { createdNodeOrdinal: parseUint32("1"), proof: preparedCurrentResourceProof(imageResource) },
         ],
       },
       body: {
         placement: {
           anchor: { x: 80, y: 120 },
           gap: 24,
-          obstacleProjectionDigest: obstacleProjectionDigest(base),
         },
         nodes: [
           {
@@ -415,14 +680,32 @@ function preparedResourceSession() {
     facts,
   )
   if (outcome === "pending" || outcome === "rejected") throw new Error(`Resource fixture was ${outcome}`)
-  const snapshot = validateCanvasYDoc(document)
+  const snapshot = validatedCanvasSnapshot(document)
   document.destroy()
   const receipt = canvasOperationReceipt(snapshot, operationContext.actorId, operationContext.operationId)
   if (!receipt) throw new Error("Resource fixture receipt is missing")
+  const identity = readCanvasCertifiedProjectionIdentity(snapshot)
+  if (!identity) throw new Error("Resource fixture projection identity is missing")
+  const projected = projectCanvas(snapshot)
+  const patch = parseCanvasCertifiedProjectionPatch({
+    format: "convax.canvas-certified-projection-patch",
+    kind: "resource-append",
+    canvasId: identity.canvasId,
+    ownerSchemaDigest: identity.ownerSchemaDigest,
+    baseStateCommitmentDigest: parseDigest("8".repeat(64)),
+    resultStateCommitmentDigest: identity.stateCommitmentDigest,
+    receipt,
+    nodes: projected.nodes,
+    edges: projected.edges,
+  })
+  let queries = 0
+  const query = async <T>(project: (state: OwnerValidatedState<"canvas">) => T): Promise<T> => {
+    queries += 1
+    return project({ value: snapshot } as OwnerValidatedState<"canvas">)
+  }
   const value: MainCollaborationDocumentSession<"canvas"> = {
     scope,
-    query: async <T>(project: (state: OwnerValidatedState<"canvas">) => T): Promise<T> =>
-      project({ value: snapshot } as OwnerValidatedState<"canvas">),
+    query,
     submit: async () => {
       throw new Error("unused")
     },
@@ -430,7 +713,7 @@ function preparedResourceSession() {
     subscribe: () => () => undefined,
     dispose: () => undefined,
   }
-  return { imageNode, receipt, textNode, value }
+  return { imageNode, patch, queryCount: () => queries, receipt, textNode, value }
 }
 
 function preparedResource(kind: "text" | "image", seed: "1" | "2"): CanvasResourceRef {
@@ -448,7 +731,7 @@ function preparedResource(kind: "text" | "image", seed: "1" | "2"): CanvasResour
   }
 }
 
-function currentResourceProof(resource: CanvasResourceRef) {
+function preparedCurrentResourceProof(resource: CanvasResourceRef) {
   return {
     format: "convax.canvas-resource-proof-ref" as const,
     mode: "current-owner-state" as const,
@@ -458,48 +741,84 @@ function currentResourceProof(resource: CanvasResourceRef) {
   }
 }
 
-function preparedApplicationResult(
-  authoritative: CanvasApplicationCommandResult["document"],
+function preparedCertifiedResult(
+  patch: ReturnType<typeof parseCanvasCertifiedProjectionPatch>,
   receipt: BoundedOperationReceipt,
   textNodeId: string,
   imageNodeId: string,
-): CanvasApplicationCommandResult {
+): CanvasCertifiedAddResourcesResult {
   return {
     affectedNodeIds: [textNodeId, imageNodeId],
     changed: true,
     createdNodeIds: [textNodeId, imageNodeId],
-    document: {
-      ...authoritative,
-      nodes: authoritative.nodes.map((node) => {
-        if (node.id === textNodeId) {
-          return {
-            ...node,
-            position: { x: 9_999, y: 9_999 },
-            style: { width: 1, height: 1 },
-            data: {
-              ...node.data,
-              resourceState: {
-                contentRevision: "text-r1",
-                editableText: true,
-                status: "ready" as const,
-                text: "# Immediately editable",
-              },
-            },
-          }
-        }
-        if (node.id === imageNodeId) {
-          return {
-            ...node,
-            position: { x: -9_999, y: -9_999 },
-            style: { width: 2, height: 2 },
-            data: { ...node.data, resourceState: { status: "ready" as const, url: "blob:prepared-image" } },
-          }
-        }
-        return node
-      }),
-    },
+    createdResourceNodeIds: [textNodeId, imageNodeId],
     operationReceipt: receipt,
     acceptedFrameDigest: parseDigest("9".repeat(64)),
+    projectionDelivery: { status: "certified", patch },
+    preparedResources: [
+      {
+        nodeId: textNodeId,
+        state: {
+          contentRevision: "text-r1",
+          editableText: true,
+          status: "ready",
+          text: "# Immediately editable",
+        },
+      },
+      { nodeId: imageNodeId, state: { status: "ready", url: "blob:prepared-image" } },
+    ],
     warnings: [],
   }
+}
+
+function addAgentNode(
+  document: Parameters<typeof applyCanvasCandidateIntent>[0],
+  scope: Parameters<typeof createCanvasYDoc>[0],
+  protocolDigest: ReturnType<typeof parseDigest>,
+  seed: number,
+  title: string,
+) {
+  const context: OwnerIntentValidationContext = Object.freeze({
+    scope,
+    actorId: parseActorId(encodeBase64url(new Uint8Array(32).fill(seed))),
+    actorSequence: parseUint64(String(seed)),
+    operationId: parseId128(encodeBase64url(new Uint8Array(16).fill(seed))),
+    lamport: parseUint64(String(seed)),
+    intentDigest: parseDigest(seed.toString(16).padStart(2, "0").repeat(32)),
+    baseFrontierDigest: parseDigest((seed + 32).toString(16).padStart(2, "0").repeat(32)),
+    protocolDigest,
+    ownerSchemaDigest: CANVAS_PROTOCOL_SCHEMA_ARTIFACT_DIGEST,
+    validationArtifactSetDigest: parseDigest("b".repeat(64)),
+  })
+  const ordinal = parseUint32("0")
+  const node = derivedNodeRef(context, ordinal)
+  const result = applyCanvasCandidateIntent(
+    document,
+    context,
+    {
+      format: "convax.typed-intent",
+      kind: "canvas.agent.create",
+      guard: { ordinal, node, expectedAbsent: true },
+      body: {
+        node: {
+          ordinal,
+          nodeId: node.id,
+          incarnation: node.incarnation,
+          role: "agent",
+          position: { x: seed, y: seed },
+          size: { width: 240, height: 120 },
+          data: { format: "convax.canvas-node-data", kind: "agent", title, instructions: null },
+          plugin: null,
+        },
+      },
+    },
+    {
+      validateCurrentResource: () => "valid",
+      validatePluginArtifact: () => "valid",
+      validatePluginState: () => "valid",
+      validateGenerationBegin: () => "valid",
+      validateGenerationRecovery: () => "valid",
+    },
+  )
+  if (result === "pending" || result === "rejected") throw new Error(`Fixture node creation ${result}`)
 }

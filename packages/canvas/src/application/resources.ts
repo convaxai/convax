@@ -1,7 +1,12 @@
 import { getCanvasResourcePresentationSize } from "../media-sizing"
-import { canvasResourceProofMetadataKey } from "../collaboration/application-command-adapter"
-import { canvasProjectionResourceMetadataKey } from "../collaboration/projection"
-import type { CanvasPendingResourceKind, CanvasPoint, CanvasSize, CanvasUploadItem } from "../types"
+import {
+  parseCanvasResourceRuntimeState,
+  type CanvasPendingResourceKind,
+  type CanvasPoint,
+  type CanvasResourceRuntimeState,
+  type CanvasSize,
+  type CanvasUploadItem,
+} from "../types"
 import {
   CanvasCommandValidationError,
   createAddCanvasResourcesCommand,
@@ -19,9 +24,10 @@ import {
 } from "./commands"
 import type { CanvasDocumentRef } from "./persistence"
 import type {
-  CanvasApplicationCommandRequest,
   CanvasApplicationCommandResult,
   CanvasApplicationService,
+  CanvasCertifiedResourceAppendRequest,
+  CanvasCertifiedResourceAppendResult,
   CanvasSubmitDiagnosticsPort,
 } from "./service"
 
@@ -72,6 +78,24 @@ export interface CanvasResourcePreparationResult {
   retainedOnFailure?: readonly { label: string }[]
   warnings?: readonly string[]
 }
+
+/** Runtime-only presentation prepared for one exact Canvas-owned resource node. */
+export interface CanvasPreparedResourceRuntime {
+  nodeId: string
+  state: CanvasResourceRuntimeState
+}
+
+/** Dedicated add result; prepared runtime state must never enter Canvas persistence. */
+export interface CanvasAddResourcesResult extends CanvasApplicationCommandResult {
+  preparedResources: readonly CanvasPreparedResourceRuntime[]
+}
+
+/** Patch-only resource result for a mounted view; it never carries a full document. */
+export type CanvasCertifiedAddResourcesResult = Readonly<
+  CanvasCertifiedResourceAppendResult & {
+    readonly preparedResources: readonly CanvasPreparedResourceRuntime[]
+  }
+>
 
 export class CanvasResourcePartialFailureError extends Error {
   readonly retainedOnFailure: readonly { label: string }[]
@@ -165,11 +189,14 @@ export interface CanvasReplaceGeneratedResourceSourceRequest extends CanvasDocum
   targetNodeId: string
 }
 
-type CanvasCommandExecutor = Pick<CanvasApplicationService, "execute" | "query">
+type CanvasCommandExecutor = Pick<CanvasApplicationService, "execute" | "query"> &
+  Partial<Pick<CanvasApplicationService, "executeCertifiedResourceAppend">>
+
+type CanvasResourceExecutionResult = CanvasApplicationCommandResult | CanvasCertifiedAddResourcesResult
 
 interface CanvasResourceExecution {
   fingerprint: string
-  result: Promise<CanvasApplicationCommandResult>
+  result: Promise<CanvasResourceExecutionResult>
 }
 
 /**
@@ -201,7 +228,7 @@ export class CanvasResourceBusinessService {
       if (existing.fingerprint !== fingerprint) {
         return Promise.reject(new CanvasResourceRequestConflictError(request.commandId))
       }
-      return existing.result
+      return existing.result as Promise<CanvasApplicationCommandResult>
     }
 
     const result = this.createPendingResourceOnce(request)
@@ -230,7 +257,7 @@ export class CanvasResourceBusinessService {
       if (existing.fingerprint !== fingerprint) {
         return Promise.reject(new CanvasResourceRequestConflictError(request.commandId))
       }
-      return existing.result
+      return existing.result as Promise<CanvasApplicationCommandResult>
     }
 
     const result = this.createPendingGenerationResourceOnce(request)
@@ -251,7 +278,7 @@ export class CanvasResourceBusinessService {
       if (existing.fingerprint !== fingerprint) {
         return Promise.reject(new CanvasResourceRequestConflictError(request.commandId))
       }
-      return existing.result
+      return existing.result as Promise<CanvasApplicationCommandResult>
     }
 
     const result = this.failPendingResourceOnce(request)
@@ -259,15 +286,26 @@ export class CanvasResourceBusinessService {
     return result
   }
 
-  addResources(request: CanvasAddResourceSourcesRequest): Promise<CanvasApplicationCommandResult> {
-    return this.addResourcesShared(request)
+  addResources(request: CanvasAddResourceSourcesRequest): Promise<CanvasAddResourcesResult> {
+    return this.addResourcesShared(request, undefined, "full") as Promise<CanvasAddResourcesResult>
   }
 
   addPreparedResources(
     request: CanvasAddResourceSourcesRequest,
     prepared: CanvasResourcePreparationResult,
-  ): Promise<CanvasApplicationCommandResult> {
-    return this.addResourcesShared(request, prepared)
+  ): Promise<CanvasAddResourcesResult> {
+    return this.addResourcesShared(request, prepared, "full") as Promise<CanvasAddResourcesResult>
+  }
+
+  /**
+   * Explicit mounted-view path. Agent and Plugin callers keep using the
+   * full-document methods above; cache loss is represented as unavailable.
+   */
+  addResourcesCertified(
+    request: CanvasAddResourceSourcesRequest,
+    prepared?: CanvasResourcePreparationResult,
+  ): Promise<CanvasCertifiedAddResourcesResult> {
+    return this.addResourcesShared(request, prepared, "certified") as Promise<CanvasCertifiedAddResourcesResult>
   }
 
   async relinkPreparedResource(
@@ -302,8 +340,9 @@ export class CanvasResourceBusinessService {
 
   private addResourcesShared(
     request: CanvasAddResourceSourcesRequest,
-    hostPrepared?: CanvasResourcePreparationResult,
-  ): Promise<CanvasApplicationCommandResult> {
+    hostPrepared: CanvasResourcePreparationResult | undefined,
+    resultProjection: "certified" | "full",
+  ): Promise<CanvasAddResourcesResult | CanvasCertifiedAddResourcesResult> {
     const key = JSON.stringify([
       request.scopeId,
       request.canvasId,
@@ -313,6 +352,7 @@ export class CanvasResourceBusinessService {
     ])
     const fingerprint = stableJson({
       operation: "add",
+      resultProjection,
       anchor: request.anchor,
       anchorOrigin: request.anchorOrigin ?? "top-left",
       ...(request.parentId === undefined ? {} : { parentId: request.parentId }),
@@ -325,10 +365,10 @@ export class CanvasResourceBusinessService {
       if (existing.fingerprint !== fingerprint) {
         return Promise.reject(new CanvasResourceRequestConflictError(request.commandId))
       }
-      return existing.result
+      return existing.result as Promise<CanvasAddResourcesResult | CanvasCertifiedAddResourcesResult>
     }
 
-    const result = this.addResourcesOnce(request, hostPrepared)
+    const result = this.addResourcesOnce(request, hostPrepared, resultProjection)
     const execution = { fingerprint, result }
     this.executions.set(key, execution)
     if (this.executions.size > 1_000) this.executions.delete(this.executions.keys().next().value ?? "")
@@ -358,7 +398,7 @@ export class CanvasResourceBusinessService {
       if (existing.fingerprint !== fingerprint) {
         return Promise.reject(new CanvasResourceRequestConflictError(request.commandId))
       }
-      return existing.result
+      return existing.result as Promise<CanvasApplicationCommandResult>
     }
 
     const result = this.replaceResourceOnce(request)
@@ -394,7 +434,7 @@ export class CanvasResourceBusinessService {
       if (existing.fingerprint !== fingerprint) {
         return Promise.reject(new CanvasResourceRequestConflictError(request.commandId))
       }
-      return existing.result
+      return existing.result as Promise<CanvasApplicationCommandResult>
     }
 
     const result = this.replaceGeneratedResourceOnce(request)
@@ -479,7 +519,8 @@ export class CanvasResourceBusinessService {
   private async addResourcesOnce(
     request: CanvasAddResourceSourcesRequest,
     hostPrepared?: CanvasResourcePreparationResult,
-  ): Promise<CanvasApplicationCommandResult> {
+    resultProjection: "certified" | "full" = "full",
+  ): Promise<CanvasAddResourcesResult | CanvasCertifiedAddResourcesResult> {
     const businessStartedAt = this.diagnostics ? performance.now() : undefined
     throwIfAborted(request.signal)
     validateCanvasResourceCommandIdentity(request)
@@ -527,15 +568,11 @@ export class CanvasResourceBusinessService {
     } catch (error) {
       throwPartialFailureIfRetained(error, retainedOnFailure)
     }
-    const applicationRequest: CanvasApplicationCommandRequest = {
+    const applicationRequest = {
       canvasId: request.canvasId,
       envelope: { actor: request.actor, command, commandId: request.commandId },
       scopeId: request.scopeId,
     }
-    const preparedRuntimeStates = command.items.map(({ item }) => ({
-      bindingKey: preparedResourceRuntimeBindingKey(item),
-      state: structuredClone(item.state),
-    }))
     if (businessStartedAt !== undefined) {
       try {
         this.diagnostics?.record({
@@ -548,13 +585,62 @@ export class CanvasResourceBusinessService {
     }
     try {
       throwIfAborted(request.signal)
-      const result = await this.application.execute({
+      const executionRequest = {
         ...applicationRequest,
         ...(request.beforeCommit ? { beforeCommit: request.beforeCommit } : {}),
         ...(request.signal ? { signal: request.signal } : {}),
-      })
+      }
+      const result = resultProjection === "certified"
+        ? await (() => {
+            const executeCertified = this.application.executeCertifiedResourceAppend
+            if (!executeCertified) throw new TypeError("Canvas certified resource append application is unavailable")
+            return executeCertified.call(this.application, {
+              ...executionRequest,
+              resultProjection: "certified-resource-append-patch",
+            } satisfies CanvasCertifiedResourceAppendRequest)
+          })()
+        : await this.application.execute(executionRequest)
+      const preparedResources =
+        result.createdResourceNodeIds?.length === prepared.items.length
+          ? result.createdResourceNodeIds.map((nodeId, index) => ({
+              nodeId,
+              state: requireParsedResourceRuntimeState(prepared.items[index]?.state),
+            }))
+          : []
+      if (resultProjection === "certified") {
+        if ("document" in result) {
+          throw new TypeError("Canvas certified resource result unexpectedly contains a full document")
+        }
+        const certifiedPatch = result.projectionDelivery.status === "certified"
+          ? result.projectionDelivery.patch
+          : null
+        const certifiedNodeIds = certifiedPatch === null
+          ? null
+          : new Set(certifiedPatch.nodes.map((node) => node.ref.id))
+        const exactPreparedResources = certifiedPatch === null || (
+          stableJson(certifiedPatch.receipt) === stableJson(result.operationReceipt) &&
+          certifiedNodeIds!.size === preparedResources.length &&
+          preparedResources.every((preparedResource) => certifiedNodeIds!.has(preparedResource.nodeId))
+        ) ? preparedResources : []
+        return Object.freeze({
+          ...(result.acceptedFrameDigest === undefined
+            ? {}
+            : { acceptedFrameDigest: result.acceptedFrameDigest }),
+          affectedNodeIds: Object.freeze([...result.affectedNodeIds]),
+          changed: result.changed,
+          createdNodeIds: Object.freeze([...result.createdNodeIds]),
+          ...(result.createdResourceNodeIds === undefined
+            ? {}
+            : { createdResourceNodeIds: Object.freeze([...result.createdResourceNodeIds]) }),
+          operationReceipt: result.operationReceipt,
+          preparedResources: Object.freeze(exactPreparedResources),
+          projectionDelivery: result.projectionDelivery,
+          warnings: Object.freeze([...(prepared.warnings ?? []), ...result.warnings]),
+        })
+      }
       return {
-        ...projectPreparedResourceRuntimeStates(result, preparedRuntimeStates),
+        ...result,
+        preparedResources,
         warnings: [...(prepared.warnings ?? []), ...result.warnings],
       }
     } catch (error) {
@@ -825,23 +911,13 @@ function validateRetainedOnFailure(value: unknown): readonly { label: string }[]
 }
 
 function requireResourceRuntimeState(value: unknown) {
-  if (
-    !isRecord(value) ||
-    typeof value.status !== "string" ||
-    !["stale", "ready", "missing", "corrupt", "unsupported", "conflict"].includes(value.status)
-  ) {
-    throw new CanvasCommandValidationError("Prepared resource runtime state is invalid")
-  }
-  for (const key of ["contentRevision", "error", "posterUrl", "text", "url"]) {
-    if (value[key] !== undefined && typeof value[key] !== "string") {
-      throw new CanvasCommandValidationError(`Prepared resource runtime ${key} must be a string`)
-    }
-  }
-  for (const key of ["canSaveEditableCopy", "editableText"]) {
-    if (value[key] !== undefined && typeof value[key] !== "boolean") {
-      throw new CanvasCommandValidationError(`Prepared resource runtime ${key} must be a boolean`)
-    }
-  }
+  requireParsedResourceRuntimeState(value)
+}
+
+function requireParsedResourceRuntimeState(value: unknown): CanvasResourceRuntimeState {
+  const parsed = parseCanvasResourceRuntimeState(value)
+  if (!parsed) throw new CanvasCommandValidationError("Prepared resource runtime state is invalid")
+  return parsed
 }
 
 function requireNonEmptyString(value: unknown, label: string): asserts value is string {
@@ -896,87 +972,6 @@ function validatePositiveSize(size: CanvasSize, label: string) {
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value) && typeof value === "object" && !Array.isArray(value)
-}
-
-/**
- * Resource runtime state is deliberately absent from the durable Canvas
- * snapshot. Once the authoritative commit has succeeded, retain the exact
- * validated preparation result in the returned view instead of immediately
- * reading the same host resource again. Operation receipts sort result entities
- * by canonical entity key, so their order cannot bind prepared items to created
- * nodes. Match the exact persisted resource identity and title instead. An
- * ambiguous duplicate set is attached only when every runtime state is equal;
- * otherwise hydration remains the safe authority and no state crosses nodes.
- * Main separately binds this view to the session's authoritative metadata
- * before renderer delivery.
- */
-function projectPreparedResourceRuntimeStates(
-  result: CanvasApplicationCommandResult,
-  prepared: readonly {
-    bindingKey: string | null
-    state: CanvasUploadItem["state"]
-  }[],
-): CanvasApplicationCommandResult {
-  if (!result.changed || prepared.length === 0 || prepared.length !== result.createdNodeIds.length) return result
-  const createdNodeIds = new Set(result.createdNodeIds)
-  if (createdNodeIds.size !== prepared.length) return result
-
-  const preparedByBinding = new Map<string, (typeof prepared)[number][]>()
-  for (const item of prepared) {
-    if (item.bindingKey === null) continue
-    const matches = preparedByBinding.get(item.bindingKey) ?? []
-    matches.push(item)
-    preparedByBinding.set(item.bindingKey, matches)
-  }
-  const nodesByBinding = new Map<string, (typeof result.document.nodes)[number][]>()
-  for (const node of result.document.nodes) {
-    if (!createdNodeIds.has(node.id)) continue
-    const bindingKey = projectedResourceRuntimeBindingKey(node)
-    if (bindingKey === null) continue
-    const matches = nodesByBinding.get(bindingKey) ?? []
-    matches.push(node)
-    nodesByBinding.set(bindingKey, matches)
-  }
-
-  const runtimeStateByNodeId = new Map<string, CanvasUploadItem["state"]>()
-  for (const [bindingKey, preparedMatches] of preparedByBinding) {
-    const nodeMatches = nodesByBinding.get(bindingKey)
-    if (!nodeMatches || nodeMatches.length !== preparedMatches.length) continue
-    const state = preparedMatches[0]!.state
-    const stateFingerprint = stableJson(state)
-    if (preparedMatches.some((candidate) => stableJson(candidate.state) !== stateFingerprint)) continue
-    for (const node of nodeMatches) runtimeStateByNodeId.set(node.id, state)
-  }
-
-  let changed = false
-  const nodes = result.document.nodes.map((node) => {
-    const state = runtimeStateByNodeId.get(node.id)
-    if (state === undefined || stableJson(node.data.resourceState) === stableJson(state)) return node
-    changed = true
-    return { ...node, data: { ...node.data, resourceState: structuredClone(state) } }
-  })
-  return changed ? { ...result, document: { ...result.document, nodes } } : result
-}
-
-function preparedResourceRuntimeBindingKey(item: CanvasUploadItem): string | null {
-  const proof = item.metadata[canvasResourceProofMetadataKey]
-  if (!isRecord(proof) || !isRecord(proof.resource)) return null
-  return resourceRuntimeBindingKey(item.kind, item.name ?? defaultPreparedResourceTitle(item.kind), proof.resource)
-}
-
-function projectedResourceRuntimeBindingKey(node: CanvasApplicationCommandResult["document"]["nodes"][number]) {
-  const metadata = isRecord(node.data.metadata) ? node.data.metadata : undefined
-  const resource = metadata?.[canvasProjectionResourceMetadataKey]
-  if (!isRecord(resource)) return null
-  return resourceRuntimeBindingKey(node.data.kind, node.data.label, resource)
-}
-
-function resourceRuntimeBindingKey(kind: string, title: string, resource: Record<string, unknown>) {
-  return stableJson({ kind, resource, title })
-}
-
-function defaultPreparedResourceTitle(kind: CanvasUploadItem["kind"]) {
-  return kind === "text" ? "Text" : kind === "folder" ? "Folder" : "Resource"
 }
 
 function stableJson(value: unknown): string {

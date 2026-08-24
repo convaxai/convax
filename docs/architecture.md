@@ -47,6 +47,18 @@ schemas in source, recomputed in CI, and packaged with the application; its exac
 reducer, Project owns one ProjectIndex schema and reducer, and Desktop composes one
 runtime around them.
 
+The same descriptor closes the owner-state commitment algorithm and canonical-key
+policy. Canvas and ProjectIndex commit their validated scalar and keyed collection
+state through the Collaboration-issued, owner/schema-bound
+`sha256-merkle-patricia-v1` commitment. A cold validation builds the tree from the
+complete owner state, while a sealed fixed-size mutation replaces only its exact
+changed leaves and path-copies the bounded UTF-8 key paths. The root is independent
+of insertion history, and `digest` reads that already authenticated root without
+flattening or hashing the complete document. Restricted-JCS full-state bytes remain
+the exact cold rebuild and audit representation; they are not a hidden flat-hash
+fallback on an accepted-frame hot path. Missing or mismatched issuer, owner, schema,
+descriptor, document generation, or changed-key evidence fails closed.
+
 There is no authority selector, no active/pinned release pair, no dual-version
 dispatch, no promotion bridge, no successor runtime, and no predecessor decoder.
 Runtime, build, and packaging never derive protocol behavior from a pointer file, a
@@ -111,6 +123,15 @@ historical inputs to the same current decoder; sharing never rewrites or re-sign
 them. A Team handoff must close the local head set before remote admission, and no
 Team enrollment record may be used as a fallback for an absent local owner.
 
+Static local-owner material may be reused only inside one opaque, process-local
+identity of an already-open Project collaboration runtime. Every signing prepare
+still proves that runtime lease is live, rereads the durable Team authority state,
+and checks the exact Project/root/actor binding. A Team transition or rejected Team
+state, local-owner rotation or reset, Project quiesce, final lease release, or
+runtime disposal permanently revokes the old runtime identity and its cached
+material. The cache is never Project-global or TTL-based, cannot reseed a revoked
+identity, and is not a fallback for missing or contradictory authority.
+
 When a registry-bound unshared local Project still has its canonical root but no
 collaboration authority bytes, Project/node may restore a missing `project.json`
 and replay the exact durable local-owner genesis into a new current private store.
@@ -128,15 +149,24 @@ then observed by the same process-local causal index before a dependent local fr
 may commit. Registration failure, publication failure, or an incomplete causal
 closure fails the command without publishing a live route.
 
-Existing experimental collaboration trees written by the retired multi-release model
-are unsupported. They may be archived unchanged, exported as user-visible resources,
-or replaced by a new current genesis after an explicit user confirmation that retains
-a recoverable backup of the old bytes. A completed local reset moves the exact prior
-`.convax` tree to the inert sibling `.convax-archive-<reset-token-suffix>`; runtime
-resolution ignores that archive, and only an explicit later user action may delete
-it. Open, checkpoint, and GC never reset, delete,
-re-sign, renumber, or reinterpret them, and no migration helper keeps an old decoder
-inside the production bundle.
+Project/node owns one sealed pre-open migration boundary for the code-pinned exact
+immediate predecessor. Discovery, explicit open, touch, and first registration call
+the same idempotent gate before current-only metadata is interpreted. The gate
+reconstructs and verifies the complete predecessor signed causal closure, imports
+ProjectIndex and Canvas semantic state into fresh documents under the one current
+protocol, stages a complete current native store on the same filesystem, and proves
+that store by reopening it before publication. It switches the private
+`.convax/collaboration` subtree atomically through a transient sibling rollback
+name; after successful verification the rollback tree is removed rather than
+retained as an archive. The ordinary Project files and the rest of `.convax` are
+never renamed or copied by this cutover.
+
+This is not a second runtime protocol or a general legacy decoder. Unknown protocol
+identities, legacy JSON, retired experimental layouts, corruption, missing signing
+authority, and ambiguous crash recovery leave the original bytes unchanged and keep
+the Project in recovery. A predecessor Team Project migrates only with exact Team
+authority; it never falls back to local-owner signing. Checkpoint and GC never invoke
+the migrator or reinterpret unsupported bytes.
 
 Project/node retains each Project's canonical-root/local-actor binding even after
 the last runtime lease closes. A changed root or actor can be admitted only after a
@@ -608,7 +638,7 @@ the Desktop-owned managed-stdio profile.
 | `@convax/collaboration`     | One current protocol descriptor/digest, one primitives/JCS and frame codec, causal frames/frontiers, replica/candidate kernel, checkpoint/floor primitives, journal ports, and session undo coordination |
 | `@convax/project`           | Project lifecycle/registry/private storage and ProjectIndex catalog/entry/route/`shardEpoch` authority                                                                                                   |
 | `@convax/project/canvas`    | ProjectIndex catalog/relationship projection and typed-intent adapter, controller, drag and resource references                                                                                          |
-| `@convax/project/node`      | Native Project, Project Files and private storage; sole collaboration object/journal/head/outbox/reset persistence writer                                                                                |
+| `@convax/project/node`      | Native Project, Project Files and private storage; sole atomic accepted-frame WAL plus checkpoint/ACK/prune/reset persistence writer                                                                      |
 | `@convax/workbench`         | Headless window Input/Selection/Surface and layout state machines                                                                                                                                        |
 | `@convax/agent-runtime`     | Host-agnostic OpenCode integration and protected execution boundary                                                                                                                                      |
 | `@convax/marketplace`       | Marketplace refs, schemas, source identity, validation and Catalog aggregation                                                                                                                           |
@@ -757,6 +787,7 @@ boundary checker fails closed until those admissions are complete.
 | Collaboration membership and control proofs                           | Signed service records plus collaboration kernel         | Service stores proofs, not Project/Canvas payload bytes or edit order                                              |
 | Project sharing activation                                            | Explicit Project sharing capability and durable binding  | Optional and lazy; opening a local Project never implies Team/control-plane startup                                |
 | React Flow graph and gesture state                                    | Transient `@convax/canvas` projection                    | React Flow never owns or persists a competing document                                                             |
+| Prepared and hydrated Canvas resource presentation                    | Transient Canvas-owned runtime overlay                   | Bound to exact node incarnation, canonical resource identity and renderer; never Canvas/Y.Doc persistence          |
 | Focused Project-directory listing                                     | Transient Canvas view plus Project Files port            | Read-only bounded projection; never Canvas document state                                                          |
 | Node generation preference and latest run                             | Owning Canvas `file` node                                | Separate bounded Canvas-owned namespaces; Main coordinates live work                                               |
 | Plugin surface node, Plugin requirement and initial state             | Canvas plugin-surface creation intent                    | Main derives every Plugin-bound fact from one exact ActiveSet lease; Renderer sends only ids                       |
@@ -788,8 +819,58 @@ not alternate authorities. Main is the sole local durable writer through injecte
 `@convax/project/node` ports; every renderer, Agent, and Plugin view is a projection
 of `replicaDoc`. A command may affect that authority only by validating one closed
 typed intent in an isolated `candidateDoc`, signing the final frame once, and
-committing those exact bytes through the object/outbox/journal/head barrier before
-applying the accepted delta to `replicaDoc`.
+passing those exact bytes and the owner-certified head transition through the one
+atomic `commitAcceptedFrame` persistence port before applying the accepted delta to
+`replicaDoc`. The current native layout represents a local accepted frame as one
+checksummed, digest-chained WAL record containing the exact signed frame and its
+logical replication-outbox, operation, journal, and resulting-head metadata. A
+normal append becomes durable and visible with one sync of the already-published
+WAL file; it never exposes a partially advanced object/outbox/journal/head sequence.
+Checkpoint, ACK, prune, quarantine, and explicit recovery remain separate
+maintenance boundaries and may perform work proportional to the state they manage.
+
+Owner-validated Canvas and ProjectIndex snapshots are immutable values. Their
+process-local path, projection and digest indexes may therefore be weakly
+cached only against the exact snapshot object identity. A newly accepted Y.Doc state
+must produce a new snapshot identity, and cache loss must only repeat deterministic
+derivation. These caches are never serialized, never authorize mutation or recovery,
+and never change reducer output, frame bytes, protocol digest or wire semantics.
+
+The four current protocol schema artifacts are generated review records, not opaque
+digest literals. Each exact restricted-JCS artifact records its owner, semantic
+contract and sorted exact-file SHA-256 source closure; its domain-separated digest is
+the corresponding entry in the one current descriptor. Repository checks regenerate
+and compare those bytes and anchors before packaging. The generator may read current
+owner sources, but runtime and packaging never read an archived authority release or
+select behavior from an artifact directory. A changed owner/kernel semantic rotates
+the current artifact and protocol digest. Migration-only source is excluded from the
+current runtime artifact closure: the exact predecessor gate rebuilds a fully current
+genesis/store and never makes predecessor semantics selectable after open.
+
+The mutation complexity contract is expressed in changed data, not total retained
+history. A normal fixed-size local Add Text must not enumerate unrelated Canvas
+nodes, ProjectIndex entries, operation history, canonical pairs, accepted frames, or
+renderer entities. Project root resolution uses the manager-owned exact-id registry
+index and revalidates only that native root; it does not reread or search every
+registered Project. Owner validation, commitment, placement, durable-head transition,
+and accepted projection delivery are bounded by the changed bytes and fixed number
+of changed keys; balanced indexes may add logarithmic path work, while bounded radix
+keys make commitment work independent of collection cardinality. A bulk command may
+cost proportional to its requested/result entity count, and cold open, explicit
+recovery, checkpoint construction, export, or cache loss may rebuild the complete
+state once in O(N). Tests enforce this boundary with structural visit/copy/sync
+counters across multiple cardinalities; wall-clock measurements supplement those
+proofs but never replace them.
+
+For a normal local command, Collaboration captures the exact update-v1 bytes emitted
+by the sole owner transaction and uses those bytes as the signed frame delta. It
+binds the capture to the expected origin, replica, candidate generation and sealed
+owner result, and verifies that applying the accepted frame emits the same update.
+It does not call `Y.encodeStateAsUpdate(candidate, baseStateVector)` on this hot path,
+because Yjs constructs a delete set by traversing retained structs even when the
+output delta is fixed-size. A missing, multiple, widened or wrong-origin local event
+is rejected before durability. Remote validation and cold recovery replay and
+revalidate the exact event bytes as explicit non-hot boundaries.
 
 Within a mounted Canvas, `CanvasSelection` is the sole selected-element state.
 `CanvasSelectionContext` classifies that set as none, single, multi or mixed so UI
@@ -888,32 +969,43 @@ renderer process memory                 Canvas-owned editable-text write-behind 
       manifest-v2.bin                   projectEpoch/schema/store identity
       documents/<document-native-key>/
         objects/
-          frames/<digest-native-key>.bin
+          frames/<digest-native-key>.bin legacy/maintenance frame object surface;
+                                        normal current accepted-frame append uses the WAL
           checkpoints/<digest-native-key>.bin
           certificates/<digest-native-key>.bin
-          acks/<digest-native-key>.bin
+          acks/<digest-native-key>.bin legacy ACK-object surface; current ACK bytes live in the WAL
           cutoffs/<digest-native-key>.bin
+          genesis-proofs/<digest-native-key>.bin
           reset-claims/<digest-native-key>.bin
         snapshots/
           sets/<digest-native-key>.bin   immutable set of 1..8 checkpoints
           staged/<digest-native-key>.ref
         journals/
+          accepted-frames.wal            current checksummed digest-chained accepted-frame log;
+                                        one normal append plus one file sync is the commit
           bases/<digest-native-key>.bin  immutable checkpoint/prunable base
-          segments/<segment-native-key>.bin
-        heads/durable-head.bin           sole local accepted head pointer
+          segments/<segment-native-key>.bin legacy staged/recovery surface; current
+                                        frame/ACK/checkpoint/prune transitions use the WAL
+        heads/durable-head.bin           genesis/legacy base anchor; the current logical head
+                                        is the final complete WAL record
         outbox/
-          frames/<digest-native-key>.ref
+          frames/<digest-native-key>.ref legacy/maintenance surface; the accepted-frame WAL
+                                        carries the normal logical replication obligation
           checkpoints/<digest-native-key>.ref
         inbox/
-          pending/<digest-native-key>.ref
+          pending-frames/<digest-native-key>.ref
           unsupported/<digest-native-key>.ref
         floors/<digest-native-key>.bin
         prune/
           plans/<digest-native-key>.bin
           active-plan.bin
-        recovery/<recovery-native-key>/
-          manifest.bin
-          refs/
+          trash/
+        recovery/
+          operations/<digest-native-key>.bin legacy immutable operation-sidecar surface
+          shard-disposition-head.bin
+          <recovery-native-key>/
+            manifest.bin
+            refs/
         quarantine/<evidence-native-key>.bin
         reset/<claim-native-key>/manifest.bin
       blob-replication/
@@ -933,6 +1025,20 @@ Durable store filenames above are literal current on-disk names. A numeric suffi
 one of them is inherited naming, not a protocol selector: the runtime never chooses a
 decoder, kernel, or reducer from a filename, and renaming such a file remains
 mechanical cleanup rather than a compatibility mechanism.
+
+Every new current genesis durably publishes the accepted-frame WAL before the shard
+can open. Its one current format uses file magic `CVXAWL01`, record magic
+`CVXAWREC`, closed canonical headers, the exact signed frame and state-vector bytes,
+and a checksum plus prior-record/durable-transition digest chain. A complete record
+reconstructs the operation, logical outbox, journal transition, accepted head, and
+reachability indexes. A truncated tail that could not have reported success is
+repaired only during cold open before another append; a complete response-lost
+record is returned idempotently. An unknown layout discovered at cutover is
+unsupported Project data; a missing, corrupt, checksum-invalid or closure-invalid
+WAL required by an already-recognized current manifest is current-store corruption.
+Neither condition is an invitation to run the retired multi-file accepted-frame
+writer. An exact immediate-predecessor store is migrated through the sealed pre-open
+gate; unknown or damaged private bytes remain unchanged in recovery.
 
 `Create Project` receives only a portable project name from renderer and creates a
 new root at `<user Documents>/Convax/<project name>` without opening a native folder
@@ -1039,62 +1145,62 @@ accepts legacy `/1` state long enough to discard retired provisioning decisions 
 memory; the next mutation writes `/2`. No startup job interprets or recreates those
 decisions.
 
-The current collaboration protocol is an explicitly approved breaking cutover from
-both the legacy JSON catalog/document plus global revision-counter model and the
-retired multi-release experimental trees. Project open first detects unsupported
-portable collaboration data and offers only an explicit user-confirmed reset; it must
-not hydrate JSON into Yjs, dual-write both stores, keep an old decoder behind a
-migration helper, or silently migrate.
-Before confirmation, every unsupported byte is preserved unchanged and excluded
-from new mutation and GC paths. Reset stages a fresh ProjectIndexYDoc/per-Canvas
-binary tree, publishes it only after the required durable/service fences, and never
-deletes ordinary Project files, including conflict copies, `Notes/`, `Generated/`,
-or other user-visible content. Unsupported bytes may be retired only by the
-explicit reset policy after confirmation, never by open, checkpoint, or GC. A
-completed reset retains a recoverable backup of the previous private tree until the
-user deletes it. The backup is the byte-exact inert sibling
-`.convax-archive-<reset-token-suffix>` and is never a runtime authority, so the only
-admitted handling of unsupported collaboration data is archive, export, or confirmed
-new-epoch genesis.
-The Node open guard runs before registry publication or recency mutation. Its
-host-local reset planner inventories and digests the exact private deletion set;
-ProjectIndex first registration independently repeats that cutover guard before it
-may create a durable local-owner binding or publish collaboration genesis bytes. An
-explicitly user-confirmed unshared-local reset does not decode unsupported private
-bytes or require them to resemble an empty bootstrap. It is eligible only when the
-durable Team authority store returns exact `missing` and the inventoried Project tree
-contains no Team/control or sharing-handoff namespace. Any active or rejected Team
-record, Team/control namespace, stale plan, or changed tree requires the control-plane
-rollover path and keeps the Project closed.
+The current collaboration protocol is the only protocol used after Project open.
+Before discovery or registration may classify a Project as current, Project/node may
+recognize exactly one code-pinned immediate predecessor through an isolated migration
+reader. The reader accepts no selector, probes no alternative formats, and never
+escapes the migration module. It verifies every predecessor frame, signature, causal
+transition, state vector, owner schema, and canonical digest before rebuilding fresh
+current ProjectIndexYDoc and CanvasYDoc state. Ordinary Project files, stable Project
+identity, Canvas identity, catalog data, and semantic Canvas content are preserved;
+old Yjs structs, protocol identities, frame history, and stale route proofs are not
+copied into current authority.
 
-Every eligible unshared-local reset prepares a fresh current local-owner binding and
-Project epoch. The prepared binding remains inert while Project/node stages and
-publishes the new genesis and verifies the old private tree's byte-exact archive;
-only then does Desktop atomically make it current. It never reuses an authority
-decoded from unsupported bytes, and interruption keeps the previous binding or
-recovery state fail-closed.
-Publication requires the exact control/Project verifier to persist and approve the
-frozen confirmation/approval/rollover evidence, then re-verifies the complete
-published tree before archiving the old private tree. Stale plans, symlink changes,
-receipt rejection, service unavailability, or ambiguous rename recovery keep the
-Project closed and retain the old bytes.
+Publication is a same-filesystem transaction: write a randomized sibling staging
+tree, sync and reopen-verify its complete current inventory, capture no-follow native
+identity tokens, move the old `.convax` to a transient rollback name, move the staged
+tree into place, sync the parent, and verify current open. A crash or validation
+failure deterministically restores or completes that switch without touching user
+files. Once the current tree is proven, the transient rollback is deleted and no
+long-lived archive remains. Unknown, corrupt, or unauthorized predecessor data is
+never replaced; the original tree stays closed and available for recovery or export.
+A predecessor Team Project migrates only when the predecessor authority is verified
+and current Team authorization is available. Missing or contradictory Team state
+never falls back to local-owner signing.
 
 After cutover, ProjectIndexYDoc and each CanvasYDoc are the only portable structured
 authorities. Main holds one `replicaDoc` per shard and creates an isolated
 `candidateDoc` only while validating one closed typed intent. Offline and online
-edits use the same final actor-signed frame and the same durable barrier; reconnect
+edits use the same final actor-signed frame and atomic accepted-frame record; reconnect
 replicates the stored bytes without replaying the intent or re-signing it. No JSON
 repository, renderer history, delivery queue, service registry, or global revision
 counter may be kept as a mirror.
 
+Owner-side incremental validation is disposable acceleration: missing evidence falls
+back to full validation. Once an owner arms and seals one candidate transaction, any
+widened write, delete, nested mutation, or later transaction is a stale candidate and
+fails closed; full-schema validation cannot authorize those extra bytes. Every
+operation receipt names retained node/edge records, and one operation id may have only
+one actor receipt.
+
 Project/node may retain a process-local `VerifiedMaterializedHeadCache` only as a
-digest-bound, disposable projection of the exact durable head record, checkpoint
-base, journal tail and reachable frame closure. Every hot-path use first re-reads
-and hashes the durable head record; a mismatch, recovery, checkpoint change,
-quarantine or reopen discards the projection and rebuilds from durable objects.
-The cache never authorizes a write or recovery decision. Operation-sidecar and
-outbox-usage indexes are likewise rebuildable derived state: immutable sidecar
-fsync precedes index publication, and reopen validates/rebuilds them.
+digest-bound, disposable projection of the exact complete accepted-frame WAL tail,
+checkpoint base, reachable closure and a persistent linked sequence of certified
+delta references. The serialized atomic appender compares the caller's expected
+head with that WAL-derived identity, then a normal accepted append path-copies only
+the new metadata/ref and never reconstructs, applies, hashes, or clones the retained
+full Yjs update. Reopen, cache loss, truncated-tail repair, checkpoint change,
+quarantine, ACK maintenance, or explicit recovery discards that acceleration and
+rebuilds by validating the checksum/digest chain and replaying exact signed frames
+from the checkpoint base. The cache never authorizes a write or recovery decision.
+Operation and logical-outbox indexes are likewise rebuildable derived state and are
+published only after the enclosing atomic WAL record is durable. Writer open warms
+their complete bounded-capacity projections from the cold WAL scan before Project
+activation, so the first subsequent command performs no retained-outbox traversal.
+Prune advances the logical checkpoint base and discards obsolete derived
+reachability/operation entries, but it does not yet physically compact prior frame
+records from the WAL. Checkpoint-driven rotation/compaction is a separate future
+maintenance operation and must preserve the same cold-replay closure.
 
 The Project asset single-source transition is one approved breaking cutover under
 this rule. Its authoritative scope and safeguards are recorded in
@@ -1189,25 +1295,66 @@ ProjectIndex-selected winner. An untracked native edit is retained and reported 
 a reconciliation conflict rather than silently overwritten. Move IPC consumes the
 native operation's explicit source/target correspondence instead of reconstructing
 it by basename, and explicit deletion commits ProjectIndex tombstones before native
-removal. Watcher notifications remain invalidation hints, not an update log.
+removal. Resource publication may query the live ProjectIndex owner for only the
+requested target and ancestor paths; a directory-only result never scans or projects
+unrelated file content families. A complete materialization plan remains the
+compatibility and reconciliation surface, not a required resource-creation hot path.
+For a file-first local mutation, ProjectIndex may attach a bounded process-local
+coverage hint to the exact accepted frame. The materializer independently re-queries
+only those owner paths, checks stable entry ids and blob digests, re-verifies the
+native file or directory identity, and records the exact deletion receipt before it
+suppresses that frame's full-plan reconciliation. Missing, stale, conflicting or
+unverifiable coverage fails open. Publication of an unrelated already-present blob
+does not schedule reconciliation; only a digest recorded as unavailable by the last
+complete plan does. Bursts of uncovered frames coalesce into one full reconciliation.
+Watcher notifications remain invalidation hints, not an update log.
 Desktop owns transport and signer composition; it does not provide a native path or
 choose current content. Replication-cache GC requires a complete injected union of
 Project/Canvas/history/outbox/recovery roots, retains active transfers, waits seven
 days across two store generations and performs a second complete scan. Any scan,
 schema, clock, symlink or digest uncertainty retains every candidate.
 
-Structural replica ACK persistence uses the same one-head durability discipline as
-accepted frames: verify the exact credential-bound ACK, create/fsync its immutable
-object, append/fsync a `record-durable-ack` journal, advance/fsync the sole durable
-head, and only then retire the corresponding frame outbox. Retry is byte-identical.
-An ACK journal whose object is missing closes the shard as corrupt even when outbox
-cleanup is already visible; authorization currentness affects replication status,
-not reconstruction of accepted document state.
+Structural replica ACK persistence is a maintenance transition rather than an
+accepted-frame hot-path append: verify the exact credential-bound ACK, place those
+exact bytes and the `record-durable-ack` transition in one closed WAL maintenance
+header, advance the logical head durably, and only then retire the corresponding
+logical frame outbox. Exact response-loss retry is byte-identical. An incomplete
+tail that never reported success leaves the previous outbox-active state and is
+repaired before the next writer append; a complete checksum-, closure-, or
+credential-mismatched ACK record closes the shard as corrupt. ACK maintenance may
+invalidate process-local materialization acceleration, so the next authority use
+rebuilds from the accepted-frame WAL. Authorization currentness affects replication
+status, not reconstruction of accepted document state.
 
-Every coalesced Project filesystem event marks the current Project's mounted resource
-snapshots stale; an optional path only prioritizes lazy refresh. Watcher events are not
-an event log. File and directory moves do not rewrite Canvas references in v1. Users
-explicitly relink missing nodes.
+An external or unknown coalesced Project filesystem event remains fail-open
+invalidation. A bounded debounce batch emits one exact path only when that is the
+sole uncovered external path. Multiple uncovered paths, an unknown path or
+path-capacity overflow emit one pathless fallback that marks every mounted resource
+stale. A path-bearing event instead queries a Canvas-owned disposable ordered-prefix
+index built from a complete ProjectIndex-derived classification sidecar. That reset
+sidecar classifies every canonical Canvas resource entity exactly once as one exact
+portable path with `leaf` or `subtree` coverage, or as `not-path-backed`; a certified
+append carries the same exact classification for every changed resource entity.
+Missing, duplicate, illegal, extra, or projection-identity-mismatched evidence makes
+the index sticky-unavailable until a later complete reset, but never rejects an
+already-durable Canvas patch. ProjectIndex alone resolves exact current Canvas
+resource proofs to materialized portable paths; neither Desktop Renderer nor Canvas
+infers a path from a URI. Exact queries cover descendant leaf resources plus
+proper-ancestor subtree resources in `O(depth log N + k)`, retain `O(N)` index
+storage, and hydrate only those k exact entity incarnations, including offscreen
+nodes. An unavailable or corrupt disposable index cannot prove an empty match and
+therefore takes the conservative all-resource recovery path; the same fallback
+handles an explicit pathless event. Normal path-bearing events never widen.
+One process-local, one-shot coverage token may suppress the exact same
+`{projectId,path}` event caused by Convax's own no-clobber publication only after the
+publisher re-verifies the published file identity, size and SHA-256 when the watcher
+consumes it. When that publication created its ordinary `Notes/` or `Generated/`
+directory, a separate exact-path token may cover that directory-create event only
+while its captured directory identity still matches. Each token is removed before
+its asynchronous check; mismatch, error, duplicate, unknown-path and external events
+still invalidate. This coverage is not a watcher log, durable receipt, debounce
+window or permission to suppress another path. File and directory moves do not
+rewrite Canvas references in v1. Users explicitly relink missing nodes.
 
 Installed Plugins are user-global. Canvas documents persist only the existing file
 node kind plus a stable Plugin reference and namespaced portable instance state.
@@ -1370,31 +1517,18 @@ active Project and activates the next available binding only through a fresh
 `project:touch`; if that barrier fails, the window remains fail-closed with no active
 Project rather than projecting either the removed Project or an unactivated fallback.
 
-### Legacy format cleanup guidance
+### Immediate-predecessor migration guidance
 
-When a Project contains retired collaboration data (`.convax/protocol-v3/`,
-`.convax/canvases/catalog.json`, or `.convax/canvases/<id>/document.json`), the
-open guard reports `unsupported-project-data` and blocks activation. The user
-sees a guided reset dialog that:
+The pre-open gate recognizes only the one exact code-pinned public predecessor.
+For that identity, migration is automatic and idempotent: it preserves ordinary
+Project files, imports non-empty ProjectIndex and every live Canvas, verifies current
+open/edit/reopen behavior, and removes the transient rollback after success. The
+Project never appears as unsupported merely because the application upgraded.
 
-1. Lists every unsupported path found in the private tree.
-2. Explains that ordinary Project files (`Notes/`, `Generated/`, and root-level
-   files) are preserved unchanged.
-3. Requires explicit confirmation before archiving the legacy private data to
-   `.convax-archive-<token-suffix>` and creating a fresh empty Canvas.
-
-After a successful reset, the archive directory is inert: runtime open, mutation,
-checkpoint, and GC paths ignore it. Only an explicit later user action may delete
-it. The archive is the byte-exact copy of the prior `.convax` tree, not a
-selective migration.
-
-Desktop renders a post-reset success surface that includes the archive
-directory name so the user can locate and optionally remove it through the
-operating system. No runtime path removes the archive automatically.
-
-A Project with unsupported data is never silently opened, migrated, or reset.
-Checkpoint, GC, and ordinary open never delete or rewrite the legacy bytes.
-This one-time confirmed reset is the only admitted cleanup path.
+All other retired collaboration data remains `unsupported-project-data`. Unknown,
+tampered, partial, or unauthorized stores are not guessed, emptied, archived by
+default, or silently downgraded. Their original bytes remain unchanged for explicit
+recovery or export, and current mutation/checkpoint/GC paths stay closed.
 
 ### Marketplace listing, install and setup
 
@@ -2038,9 +2172,9 @@ UI action, typed Agent tool, or principal-bound Plugin call
   -> enter the per-shard final-commit mutex and clone current replicaDoc
   -> validate/apply one closed typed intent in an isolated candidateDoc
   -> sign one final causal frame from the validated candidate result
-  -> @convax/project/node fsyncs the exact object/outbox/journal/head barrier
+  -> @convax/project/node appends one exact accepted-frame WAL record and fsyncs it once
   -> apply that exact accepted delta to replicaDoc through @convax/collaboration ports
-  -> return the authoritative session projection plus accepted frame digest
+  -> return an owner-certified base-bound projection patch plus accepted frame digest
   -> optional mounted-view reconciliation/reveal
 ```
 
@@ -2061,14 +2195,28 @@ preserve the camera by default; broader Fit, Reveal, and Zoom remain explicit vi
 operations.
 
 Mounted Desktop Canvas UI commands use one session lease for application execute,
-undo, redo, resource delivery and projection query. A local mutation response
-installs its complete session projection and marks the accepted frame digest as
-covered; the matching invalidation therefore performs no query. An unknown/remote
-frame schedules one trailing query, and an invalidation arriving during that query
-retains another trailing refresh. `drain` waits only the renderer lane, `refresh`
-queries explicitly, and compatibility `flush` is reserved for scope transitions,
-Agent barriers and recovery. UI semantic roots enter only the originating lease;
-Agent, Plugin and background roots never enter a renderer undo stack.
+undo, redo, resource delivery and projection query. A fixed-size local resource
+append returns a Canvas-owner-certified patch bound to the exact base and result
+owner-state commitment digests. Main and Preload preserve that closed patch without
+inventing changed keys. Renderer applies it to its Canvas-owned persistent indexed
+view only when the mounted ref, session, accepted frame and base cursor all match,
+then installs any separately validated transient prepared-resource sidecars for the
+same created entity incarnations. The same bounded delivery carries an unchanged
+ProjectIndex-derived hierarchy delta for those certified nodes; full resets carry
+an identity-bound complete snapshot. Canvas validates exact classification coverage
+and advances its disposable prefix index only after the owner patch applies. A
+missing, duplicate, malformed, or stale classification makes only that index sticky
+unavailable until a complete reset and never reverses the durable mutation. It marks
+the accepted frame digest as covered, so
+the matching invalidation performs no query and neither Main nor Renderer projects,
+serializes, clears or refills the complete Canvas. A missing patch, stale cursor,
+invalid envelope, unknown/remote frame, or cache loss performs one authoritative
+full projection query/reset; it never widens or repairs the patch locally. An
+invalidation arriving during that query retains one trailing refresh. `drain` waits
+only the renderer lane, `refresh` queries explicitly, and compatibility `flush` is
+reserved for scope transitions, Agent barriers and recovery. UI semantic roots
+enter only the originating lease; Agent, Plugin and background roots never enter a
+renderer undo stack.
 
 Immediate feedback is a Canvas-owned, session-local presentation overlay, not a
 candidate projection. Its symbol operation token and `ghost-node`, `ghost-edge`,
@@ -2137,11 +2285,14 @@ Fit only after the authoritative command commits.
 
 Canvas application transactions encode a non-empty bounded command list as one typed
 intent and execute it in one isolated candidate transaction against the latest
-`replicaDoc`. The durable object/outbox/journal/head barrier is the local commit
-boundary used by UI, Plugin, and Agent callers; transports do not compose atomicity
-from repeated saves. Resource admission/replacement remains outside the generic
-document intent because it has separate Project lifecycle, managed-asset, guard, and
-rollback semantics.
+`replicaDoc`. The atomic accepted-frame persistence call is the local commit boundary
+used by UI, Plugin, and Agent callers; transports do not compose atomicity from
+repeated saves. A successful return proves one exact signed frame, logical outbox,
+journal transition and resulting head were made visible by the same WAL record. A
+rejected return exposes no partial success, and retry after response loss is
+idempotent for the exact request. Resource admission/replacement remains outside the
+generic document intent because it has separate Project lifecycle, managed-asset,
+guard, and rollback semantics.
 
 Whole-Canvas tidy is the `canvas.auto-layout` business operation. The built-in engine
 uses directed edges, heterogeneous node sizes, group ownership, cycle-tolerant
@@ -2197,6 +2348,26 @@ the durable top-left placement. Toolbar, Agent, and other non-pointer insertion
 paths retain the top-left default. The optimistic ghost follows the same origin
 semantics using only its non-authoritative size hint, so the committed card does not
 jump away from the pointer when the authoritative projection arrives.
+
+Prepared resource runtime state is a bounded presentation result, not part of the
+typed intent or durable Canvas node. Main returns it beside the accepted mutation;
+Canvas installs it only after the accepted projection proves the returned created
+node id and exact live incarnation, canonical resource identity and renderer
+identity. A stale or unavailable delivery falls back to ordinary exact-target
+hydration and cannot turn a durable mutation into failure.
+
+Mounted hydration carries a bounded list of exact `{nodeId, entity incarnation}`
+targets from the originating Canvas session. Main validates that lease and every
+live target against its accepted snapshot, clones only those selected nodes for the
+Project hydrator, and repeats the live-target and Workbench-scope checks before
+returning bounded runtime patches. Preload validates the closed DTO, and Renderer
+batches large target sets and merges only still-stale, metadata-identical nodes into
+the transient overlay. For a path-bearing watcher event, Canvas resolves those
+targets through its identity-bound hierarchy index and performs the exact refresh
+against its keyed projection/runtime stores without materializing or mapping all
+Canvas document entries. Hydration never performs a full Canvas application query,
+returns a whole Canvas projection, persists runtime state, or widens one resource
+invalidation to every node.
 
 ### Creating a generic Plugin Canvas surface
 
@@ -2750,38 +2921,37 @@ application execute surface. Renderer translates local optimistic gestures
 into bounded semantic commands and never supplies an actor id, operation identity,
 raw Yjs update, or document version. Main derives the actor and stable identities,
 applies the intent through `CanvasApplicationService` to an isolated candidate,
-signs one final causal frame, persists its exact object/outbox/journal/head barrier,
-applies that exact accepted delta to `replicaDoc`, and returns the authoritative
-projection plus accepted frame digest. Main-originated commits publish digest-marked
-invalidations; same-frame responses suppress a query while unknown frames preserve
-one trailing refresh. Resource IPC carries the current session id: durable commit
-success is retained when delivery becomes unavailable, and a live Renderer performs
-one explicit refresh fallback. The incompatible bridge change is identified by
-`convax.desktop-ipc/38`; its Canvas session projection carries complete exact
-node- and edge-incarnation tables so guarded visual history cannot hide a reused
-React Flow id.
+signs one final causal frame, commits its exact atomic accepted-frame record, and
+only then applies that accepted delta to `replicaDoc`. Full execute/query surfaces
+return an authoritative reset projection plus accepted frame digest. The dedicated
+mounted resource-append surface instead returns the owner-certified bounded patch;
+it does not first construct a full projection or expose the validated owner
+snapshot. Main-originated commits publish digest-marked invalidations; same-frame
+responses suppress a query while unknown frames preserve one trailing refresh.
+Resource IPC carries the current session id: durable commit success is retained
+when patch delivery becomes unavailable or cannot be applied, and a live Renderer
+performs one explicit full-query reset fallback. Full reset projections carry
+complete exact node- and edge-incarnation tables so guarded visual history cannot
+hide a reused React Flow id.
 The active Canvas sidebar outline consumes that same mounted session projection and
 does not start a concurrent compatibility `load` while the session opens. Inactive
 Canvas outlines and explicit cross-Canvas search may still use the compatibility
 bridge. This removes a duplicate authoritative read without changing IPC shape,
 scope authority, or Canvas persistence.
 
-Targeted Canvas resource rehydration carries the exact mounted Canvas `ref`, current
-session id, and only a bounded, unique list of Canvas node ids. Main derives the
-renderer actor from the trusted sender and synchronously validates that exact live
-owner lease before the authoritative query, immediately before hydration, and after
-hydration. It never issues a nested request to the same Renderer to rediscover
-Workbench scope. Main then passes those ids with the authoritative projection to the
-Project-owned hydrator.
-Project/canvas alone recognizes valid legacy concrete references and valid canonical
-Canvas resource references, enforces node-kind and directory compatibility, resolves
-canonical identity through the current ProjectIndex projection, and hydrates only
-the exact stale subset. An already-ready or concurrently deleted target is
-idempotent, while an existing non-resource or invalid host-owned reference fails
-closed. Omitting the list retains the explicit full refresh compatibility path. This
-typed request advances the Desktop IPC
-compatibility line to `convax.desktop-ipc/44`; it does not change collaboration
-frames or durable Canvas state.
+Exact-target resource hydration, resource-hierarchy classification, and
+prepared-runtime delivery use the closed `convax.desktop-ipc/47` contract. Requests
+carry the exact mounted Canvas `ref`,
+originating session id, and a bounded list of exact node entity incarnations. Main
+derives the renderer actor from the trusted sender, validates that exact live lease
+before and after every asynchronous owner step, and queries only those entities from
+the accepted Canvas snapshot. Responses carry only validated runtime patches for
+the same targets; resource-add responses may additionally carry prepared runtime
+for their returned created-node ids. Main never performs a full Canvas query or a
+nested Renderer request on this path, Preload never synthesizes state, and Renderer
+never treats patches as document or persistence authority. Project alone resolves
+the exact current ProjectIndex proofs and paths needed by those targets. A widened,
+reincarnated, concurrently changed, or non-resource target fails closed.
 
 ## 11. Portable paths and trust boundaries
 

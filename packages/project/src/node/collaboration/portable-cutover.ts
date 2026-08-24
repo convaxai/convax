@@ -458,6 +458,7 @@ export async function runWithProjectClosedExclusiveMutationLease<T>(
 
 async function detectUnsupportedPaths(projectRoot: string) {
   const unsupported: string[] = []
+  const legacyCanvasPaths: string[] = []
   const retiredProtocol = path.join(projectRoot, ".convax", "protocol-v3")
   const retiredProtocolStat = await lstatOrNull(retiredProtocol)
   if (retiredProtocolStat?.isSymbolicLink()) {
@@ -468,7 +469,7 @@ async function detectUnsupportedPaths(projectRoot: string) {
   }
   if (retiredProtocolStat?.isDirectory()) unsupported.push(".convax/protocol-v3")
   const catalog = path.join(projectRoot, ".convax", "canvases", "catalog.json")
-  if (await exists(catalog)) unsupported.push(".convax/canvases/catalog.json")
+  if (await exists(catalog)) legacyCanvasPaths.push(".convax/canvases/catalog.json")
   const canvases = path.join(projectRoot, ".convax", "canvases")
   const canvasesStat = await lstatOrNull(canvases)
   if (canvasesStat?.isSymbolicLink()) {
@@ -486,9 +487,10 @@ async function detectUnsupportedPaths(projectRoot: string) {
       }
       if (!dirent.isDirectory()) continue
       const document = path.join(canvases, dirent.name, "document.json")
-      if (await exists(document)) unsupported.push(`.convax/canvases/${dirent.name}/document.json`)
+      if (await exists(document)) legacyCanvasPaths.push(`.convax/canvases/${dirent.name}/document.json`)
     }
   }
+  let legacyCanvasDataWasImported = false
   const collaboration = path.join(projectRoot, ".convax", "collaboration")
   const collaborationStat = await lstatOrNull(collaboration)
   if (collaborationStat?.isSymbolicLink()) {
@@ -509,12 +511,22 @@ async function detectUnsupportedPaths(projectRoot: string) {
           decoded.uriProtocolDigest !== CURRENT_PROTOCOL_IDENTITIES.uriProtocolDigest
         ) {
           unsupported.push(".convax/collaboration/manifest-v2.bin")
+        } else if (
+          decoded.projectIndexGenesisKind === "immediate-predecessor-import" &&
+          decoded.migrationImportBaseProofDigest !== null
+        ) {
+          // The sealed migrator has already imported the authoritative legacy
+          // ProjectIndex/Canvas state into this proof-bound current genesis.
+          // Retained portable Canvas JSON is inert input evidence, not a second
+          // live document authority and must not re-open the destructive reset UI.
+          legacyCanvasDataWasImported = true
         }
       } catch {
         unsupported.push(".convax/collaboration/manifest-v2.bin")
       }
     }
   }
+  if (!legacyCanvasDataWasImported) unsupported.push(...legacyCanvasPaths)
   return unsupported.sort(compareUtf8)
 }
 

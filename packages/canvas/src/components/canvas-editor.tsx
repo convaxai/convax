@@ -7,6 +7,7 @@ import {
   ReactFlow,
   ReactFlowProvider,
   SelectionMode,
+  ViewportPortal,
   useReactFlow,
   useStoreApi,
   useViewport,
@@ -195,6 +196,7 @@ import {
   CanvasCombinedPresentationStore,
   CanvasMergedOptimisticOverlayStore,
   CanvasOptimisticOverlayCoordinator,
+  type CanvasGhostEdge,
   type CanvasGhostNode,
   type CanvasOptimisticOverlaySnapshot,
 } from "../optimistic-overlay"
@@ -220,16 +222,28 @@ import { snapCanvasNodePositionChanges } from "./canvas-node-snapping"
 import { resolveCanvasOnlyRenderVisibleElements } from "./canvas-node-visibility"
 import { createCanvasFileNode, type CanvasFileRendererRegistry } from "../file-renderer-registry"
 import {
-  assertResourceRef,
-  canvasProjectionResourceMetadataKey,
+  CANVAS_RENDERER_VIEWPORT_MAX_NODES,
   canvasGeometryCommand,
   createReadonlyCanvasProjectionBootstrap,
   type CanvasEntityRef,
   type CanvasRendererCollaborationClient,
   type CanvasRendererProjectionStore,
+  type CanvasRendererResourceHierarchyKey,
+  type CanvasRendererResourceHierarchyTarget,
+  type CanvasRendererViewportProjection,
 } from "../collaboration"
 import type { CanvasNodeRegistry } from "../node-registry"
 import { CanvasReloadQueue } from "../reload-queue"
+import {
+  canvasCanonicalResourceIdentity,
+} from "../resource-runtime-projection"
+import { CanvasPersistentRuntimeMap } from "../persistent-runtime-map"
+import {
+  canvasDocumentPlacementIndex,
+  installCanvasDocumentPlacementAppend,
+  resolveIndexedCanvasResourcePlacements,
+  type CanvasIndexedPlacementObstacle,
+} from "../resource-placement"
 import {
   CanvasSelectionActionExecutor,
   createCanvasSelectionActionContext,
@@ -249,20 +263,22 @@ import {
   type CanvasFolderBrowseListing,
   type CanvasFolderBrowsePathEntry,
   type CanvasPendingDraft,
+  type CanvasAcceptedPreparedResourceRuntime,
   type CanvasResourceMutationRequest,
   type CanvasResourceHydrationService,
-  type CanvasResourceInvalidationPredicate,
   type CanvasServices,
   useCanvasService,
 } from "../services"
-import type {
-  CanvasDocument,
-  CanvasEdge,
-  CanvasNode,
-  CanvasPoint,
-  CanvasResourceRuntimeState,
-  CanvasSelection,
-  CanvasSize,
+// Runtime resource values stay at the Canvas-owned transient boundary.
+import {
+  parseCanvasResourceRuntimeState,
+  type CanvasDocument,
+  type CanvasEdge,
+  type CanvasNode,
+  type CanvasPoint,
+  type CanvasResourceRuntimeState,
+  type CanvasSelection,
+  type CanvasSize,
 } from "../types"
 import {
   canRunCanvasShortcutCommand,
@@ -437,6 +453,24 @@ interface CanvasPendingNodeGeometry {
   size?: CanvasPendingGeometryValue<CanvasSize>
 }
 
+function projectCanvasTransientNodeGeometry(
+  node: CanvasNode,
+  gesture: CanvasTransientGeometry | undefined,
+  pending: CanvasPendingNodeGeometry | undefined,
+): CanvasNode {
+  const position = gesture?.position ?? pending?.position?.value
+  const size = gesture?.size ?? pending?.size?.value
+  const positionChanged =
+    position !== undefined && (position.x !== node.position.x || position.y !== node.position.y)
+  const sizeChanged = size !== undefined && !sameCanvasSize(size, getCanvasNodeSize(node))
+  if (!positionChanged && !sizeChanged) return node
+  return {
+    ...node,
+    ...(positionChanged ? { position } : {}),
+    ...(sizeChanged ? { style: { ...node.style, height: size.height, width: size.width } } : {}),
+  }
+}
+
 interface CanvasTransientMeasurement {
   canonicalSize: CanvasSize
   entity?: CanvasEntityRef
@@ -481,35 +515,14 @@ function canvasFileRendererIdentity(node: CanvasNode, registry: CanvasFileRender
   return definition ? `renderer:${definition.id}` : `missing:${node.data.kind}`
 }
 
-function canvasCanonicalResourceIdentity(node: CanvasNode): string | undefined {
-  const metadata = node.data.metadata
-  if (!metadata || typeof metadata !== "object" || Array.isArray(metadata)) return undefined
-  const candidate = (metadata as Record<string, unknown>)[canvasProjectionResourceMetadataKey]
-  try {
-    assertResourceRef(candidate)
-  } catch {
-    return undefined
-  }
-  return [
-    candidate.format,
-    candidate.uri,
-    candidate.mediaClass,
-    candidate.mime,
-    candidate.byteLength,
-    candidate.contentDigest,
-    candidate.ownerProofDigest,
-  ].join("\u0000")
-}
-
 function sameCanvasTransientResourceOwner(
   transient: CanvasTransientResourceState,
   node: CanvasNode,
   entity: CanvasEntityRef | undefined,
 ) {
+  if (transient.entity && !sameCanvasEntity(transient.entity, entity)) return false
   const resourceIdentity = canvasCanonicalResourceIdentity(node)
-  return transient.resourceIdentity !== undefined
-    ? transient.resourceIdentity === resourceIdentity
-    : !transient.entity || sameCanvasEntity(transient.entity, entity)
+  return transient.resourceIdentity !== undefined ? transient.resourceIdentity === resourceIdentity : true
 }
 
 function submitCanvasTransientGeometry(
@@ -678,9 +691,9 @@ export interface CanvasEditorProps {
   viewScopeId?: string
 }
 
-type CanvasEditorTransientAction = {
-  type: "begin-gesture" | "cancel-gesture" | "end-gesture" | "redo" | "undo"
-}
+type CanvasEditorTransientAction =
+  | { readonly type: "begin-gesture"; readonly nodeIds?: readonly string[] }
+  | { readonly type: "cancel-gesture" | "end-gesture" | "redo" | "undo" }
 
 export interface CanvasEditorHandle {
   /** Reports whether Canvas can currently accept one host-routed shortcut command. */
@@ -689,7 +702,10 @@ export interface CanvasEditorHandle {
   flush: () => Promise<CanvasDocument>
   /** Inserts one registered node type through the ordinary editor flow and returns its id when accepted. */
   insertNode: (type: string) => string | undefined
-  invalidateResources: (shouldInvalidate?: CanvasResourceInvalidationPredicate) => Promise<void>
+  /** Marks and refreshes exact nodes, or every mounted resource when omitted. */
+  invalidateResources: (nodeIds?: readonly string[]) => Promise<void>
+  /** Resolves one exact host-neutral hierarchy key; unavailable indexes fall back to one bulk refresh. */
+  invalidateResourcesAtHierarchyKey: (key: CanvasRendererResourceHierarchyKey) => Promise<void>
   /** Opens Canvas's existing generation surface without exposing its internal query state. */
   openGenerate: () => void
   /** Opens Canvas's existing search surface without exposing its internal query state. */
@@ -777,28 +793,87 @@ interface CanvasResourceRefreshRequestSnapshot extends CanvasResourceRefreshCurr
 
 interface CanvasResourceRefreshControllerOptions {
   current(): CanvasResourceRefreshCurrentSnapshot
+  exact?: CanvasResourceExactRefreshAdapter
   onError?(error: unknown): void
   queue?: CanvasReloadQueue
   replace(document: CanvasDocument): void
   service: CanvasResourceHydrationService
 }
 
+interface CanvasResourceExactRefreshCapture {
+  readonly entity: CanvasEntityRef & { readonly kind: "node" }
+  readonly node: CanvasNode
+  readonly nodeId: string
+  readonly ownerToken: unknown
+  readonly rendererId: string
+  readonly resourceIdentity: string
+}
+
+interface CanvasResourceExactRefreshReplacement {
+  readonly capture: CanvasResourceExactRefreshCapture
+  readonly state: CanvasResourceRuntimeState
+}
+
+interface CanvasResourceExactRefreshAdapter {
+  capture(target: CanvasRendererResourceHierarchyTarget): CanvasResourceExactRefreshCapture | null
+  header(): Pick<CanvasDocument, "id" | "metadata">
+  replace(replacements: readonly CanvasResourceExactRefreshReplacement[]): boolean
+}
+
 export class CanvasResourceRefreshController {
   readonly #controllers = new Set<AbortController>()
+  readonly #exactQueue = new CanvasReloadQueue()
+  readonly #pendingExactTargets = new Map<string, CanvasRendererResourceHierarchyTarget>()
   readonly #pendingNodeIds = new Set<string>()
   readonly #queue: CanvasReloadQueue
   #disposed = false
   #invalidationGeneration = 0
+  #exactInvalidationGeneration = 0
 
   constructor(private readonly options: CanvasResourceRefreshControllerOptions) {
     this.#queue = options.queue ?? new CanvasReloadQueue()
   }
 
-  invalidateResources(shouldInvalidate?: CanvasResourceInvalidationPredicate): Promise<void> {
+  invalidateResources(nodeIds?: readonly string[]): Promise<void> {
     if (this.#disposed) return Promise.resolve()
+    const exactNodeIds = normalizeCanvasResourceRefreshNodeIds(nodeIds)
+    if (exactNodeIds?.length === 0) return Promise.resolve()
     const current = this.options.current()
-    for (const node of current.document.nodes) {
-      if (shouldInvalidate?.(node) ?? true) this.#pendingNodeIds.add(node.id)
+    for (const nodeId of exactNodeIds ?? current.document.nodes.map((node) => node.id)) {
+      this.#pendingNodeIds.add(nodeId)
+    }
+    if (this.#pendingNodeIds.size === 0) return Promise.resolve()
+    this.#invalidationGeneration += 1
+    return this.#requestRefresh()
+  }
+
+  /** Exact indexed path: no canonical Canvas array is read or materialized. */
+  invalidateExactResources(targets: readonly CanvasRendererResourceHierarchyTarget[]): Promise<void> {
+    if (this.#disposed || !this.options.exact || targets.length === 0) return Promise.resolve()
+    for (const target of targets) {
+      if (
+        !target ||
+        target.entity.kind !== "node" ||
+        target.nodeId !== target.entity.id ||
+        typeof target.entity.incarnation !== "string"
+      ) continue
+      this.#pendingExactTargets.set(target.nodeId, target)
+    }
+    if (this.#pendingExactTargets.size === 0) return Promise.resolve()
+    this.#exactInvalidationGeneration += 1
+    const pending = this.#exactQueue.request(() => this.#refreshExact())
+    void pending.catch((error) => this.options.onError?.(error))
+    return pending
+  }
+
+  /** Refreshes already-stale runtime state without widening invalidation. */
+  refreshStaleResources(nodeIds?: readonly string[]): Promise<void> {
+    if (this.#disposed) return Promise.resolve()
+    const exactNodeIds = normalizeCanvasResourceRefreshNodeIds(nodeIds)
+    if (exactNodeIds?.length === 0) return Promise.resolve()
+    const current = this.options.current()
+    for (const nodeId of exactNodeIds ?? staleCanvasResourceNodeIds(current.document)) {
+      this.#pendingNodeIds.add(nodeId)
     }
     if (this.#pendingNodeIds.size === 0) return Promise.resolve()
     this.#invalidationGeneration += 1
@@ -826,7 +901,7 @@ export class CanvasResourceRefreshController {
     const invalidationGeneration = this.#invalidationGeneration
     const presented = this.options.current()
     const pendingNodeIds = new Set(this.#pendingNodeIds)
-    const requestDocument = this.options.service.markStale(presented.document, (node) => pendingNodeIds.has(node.id))
+    const requestDocument = this.options.service.markStale(presented.document, [...pendingNodeIds])
     const targetNodeIds = new Set<string>()
     for (const node of requestDocument.nodes) {
       if (pendingNodeIds.has(node.id) && isStaleCanvasResourceState(canvasNodeResourceState(node))) {
@@ -849,6 +924,7 @@ export class CanvasResourceRefreshController {
     try {
       hydrated = await this.options.service.hydrateStale({
         document: requested.document,
+        nodeIds: [...requested.targetNodeIds],
         signal: controller.signal,
       })
     } catch (error) {
@@ -857,23 +933,116 @@ export class CanvasResourceRefreshController {
         !controller.signal.aborted &&
         !isCanvasResourceRefreshTargetCurrent(requested, this.options.current())
       ) {
-        void this.#requestRefresh()
+        if (this.#pendingNodeIds.size > 0) void this.#requestRefresh()
         return
       }
       throw error
     } finally {
       this.#controllers.delete(controller)
     }
-    if (this.#disposed || controller.signal.aborted || invalidationGeneration !== this.#invalidationGeneration) return
+    if (this.#disposed || controller.signal.aborted) return
+    if (invalidationGeneration !== this.#invalidationGeneration) {
+      if (this.#pendingNodeIds.size > 0) void this.#requestRefresh()
+      return
+    }
 
     const current = this.options.current()
     const merged = mergeCanvasResourceRefresh(requested, current, hydrated)
     if (!merged) {
-      void this.#requestRefresh()
+      if (this.#pendingNodeIds.size > 0) void this.#requestRefresh()
       return
     }
-    this.#pendingNodeIds.clear()
+    for (const nodeId of requested.targetNodeIds) this.#pendingNodeIds.delete(nodeId)
     this.options.replace(merged)
+    if (this.#pendingNodeIds.size > 0) void this.#requestRefresh()
+  }
+
+  async #refreshExact() {
+    if (this.#disposed || !this.options.exact || this.#pendingExactTargets.size === 0) return
+    const invalidationGeneration = this.#exactInvalidationGeneration
+    const exact = this.options.exact
+    const captures: CanvasResourceExactRefreshCapture[] = []
+    for (const target of this.#pendingExactTargets.values()) {
+      const capture = exact.capture(target)
+      if (capture) captures.push(capture)
+      else this.#pendingExactTargets.delete(target.nodeId)
+    }
+    if (captures.length === 0) return
+
+    const header = exact.header()
+    const presentedDocument: CanvasDocument = {
+      id: header.id,
+      metadata: header.metadata,
+      edges: [],
+      nodes: captures.map((capture) => capture.node),
+    }
+    const nodeIds = captures.map((capture) => capture.nodeId)
+    const requestDocument = this.options.service.markStale(presentedDocument, nodeIds)
+    const requestedNodes = new Map(requestDocument.nodes.map((node) => [node.id, node]))
+    const requestedCaptures = captures.filter((capture) => {
+      const requested = requestedNodes.get(capture.nodeId)
+      return Boolean(
+        requested &&
+          isStaleCanvasResourceState(canvasNodeResourceState(requested)) &&
+          sameCanvasRuntimeValue(requested.data.metadata, capture.node.data.metadata),
+      )
+    })
+    if (requestedCaptures.length === 0) {
+      for (const capture of captures) this.#pendingExactTargets.delete(capture.nodeId)
+      return
+    }
+    const requestedNodeIds = requestedCaptures.map((capture) => capture.nodeId)
+    const controller = new AbortController()
+    this.#controllers.add(controller)
+    let hydrated: CanvasDocument
+    try {
+      hydrated = await this.options.service.hydrateStale({
+        document: {
+          ...requestDocument,
+          nodes: requestedCaptures.map((capture) => requestedNodes.get(capture.nodeId)!),
+        },
+        nodeIds: requestedNodeIds,
+        signal: controller.signal,
+      })
+    } finally {
+      this.#controllers.delete(controller)
+    }
+    if (this.#disposed || controller.signal.aborted) return
+    if (invalidationGeneration !== this.#exactInvalidationGeneration) {
+      if (this.#pendingExactTargets.size > 0) void this.#requestExactRefresh()
+      return
+    }
+    if (hydrated.id !== header.id) return
+    const hydratedNodes = new Map(hydrated.nodes.map((node) => [node.id, node]))
+    const replacements: CanvasResourceExactRefreshReplacement[] = []
+    for (const capture of requestedCaptures) {
+      const hydratedNode = hydratedNodes.get(capture.nodeId)
+      const state = hydratedNode ? parseCanvasResourceRuntimeState(canvasNodeResourceState(hydratedNode)) : null
+      if (
+        !hydratedNode ||
+        !state ||
+        !sameCanvasRuntimeValue(hydratedNode.data.metadata, capture.node.data.metadata) ||
+        canvasCanonicalResourceIdentity(hydratedNode) !== capture.resourceIdentity
+      ) return
+      replacements.push({ capture, state })
+    }
+    if (!exact.replace(replacements)) {
+      if (this.#pendingExactTargets.size > 0) void this.#requestExactRefresh()
+      return
+    }
+    for (const capture of requestedCaptures) {
+      const pending = this.#pendingExactTargets.get(capture.nodeId)
+      if (pending && sameCanvasEntity(pending.entity, capture.entity)) {
+        this.#pendingExactTargets.delete(capture.nodeId)
+      }
+    }
+    if (this.#pendingExactTargets.size > 0) void this.#requestExactRefresh()
+  }
+
+  #requestExactRefresh() {
+    const pending = this.#exactQueue.request(() => this.#refreshExact())
+    void pending.catch((error) => this.options.onError?.(error))
+    return pending
   }
 }
 
@@ -943,38 +1112,47 @@ function canvasNodeResourceState(node: CanvasNode): unknown {
   return node.data.resourceState
 }
 
-function parseCanvasResourceRuntimeState(value: unknown): CanvasResourceRuntimeState | null {
-  if (value === null || typeof value !== "object" || Array.isArray(value)) return null
-  const state = value as Record<string, unknown>
-  if (!["stale", "ready", "missing", "corrupt", "unsupported", "conflict"].includes(String(state.status))) {
-    return null
-  }
-  for (const key of ["contentRevision", "error", "mediaType", "name", "posterUrl", "text", "url"] as const) {
-    if (state[key] !== undefined && typeof state[key] !== "string") return null
-  }
-  for (const key of ["canSaveEditableCopy", "editableText"] as const) {
-    if (state[key] !== undefined && typeof state[key] !== "boolean") return null
-  }
-  return structuredClone(value) as CanvasResourceRuntimeState
-}
-
 function isStaleCanvasResourceState(value: unknown) {
   return value !== null && typeof value === "object" && "status" in value && value.status === "stale"
 }
 
-function canvasResourceHydrationTargetSignature(document: CanvasDocument) {
+function staleCanvasResourceNodeIds(document: CanvasDocument) {
   return document.nodes
-    .flatMap((node) => {
-      if (!isStaleCanvasResourceState(canvasNodeResourceState(node))) return []
-      const canonicalIdentity = canvasCanonicalResourceIdentity(node)
-      if (canonicalIdentity !== undefined) return [`${node.id}\u0000${canonicalIdentity}`]
-      try {
-        return [`${node.id}\u0000${JSON.stringify(node.data.metadata)}`]
-      } catch {
-        return [node.id]
-      }
-    })
-    .join("\u0001")
+    .filter((node) => isStaleCanvasResourceState(canvasNodeResourceState(node)))
+    .map((node) => node.id)
+}
+
+function canvasResourceHydrationTargets(document: CanvasDocument) {
+  const nodeIds: string[] = []
+  const signatures: string[] = []
+  for (const node of document.nodes) {
+    if (!isStaleCanvasResourceState(canvasNodeResourceState(node))) continue
+    nodeIds.push(node.id)
+    const canonicalIdentity = canvasCanonicalResourceIdentity(node)
+    if (canonicalIdentity !== undefined) {
+      signatures.push(`${node.id}\u0000${canonicalIdentity}`)
+      continue
+    }
+    try {
+      signatures.push(`${node.id}\u0000${JSON.stringify(node.data.metadata)}`)
+    } catch {
+      signatures.push(node.id)
+    }
+  }
+  return {
+    nodeIds,
+    signature: signatures.join("\u0001"),
+  }
+}
+
+function normalizeCanvasResourceRefreshNodeIds(nodeIds: readonly string[] | undefined): readonly string[] | undefined {
+  if (nodeIds === undefined) return undefined
+  const unique = new Set<string>()
+  for (const nodeId of nodeIds) {
+    if (typeof nodeId !== "string" || !nodeId.trim()) throw new TypeError("Canvas resource node id is invalid")
+    unique.add(nodeId)
+  }
+  return [...unique]
 }
 
 function sameCanvasRuntimeValue(left: unknown, right: unknown) {
@@ -1162,6 +1340,7 @@ export function isCanvasAuthoritativeResourceReadyForOptimisticHandoff(input: {
   document: CanvasDocument
   focusVisible: boolean
   nodeIds: readonly string[]
+  resolveNode?: (nodeId: string) => CanvasNode | undefined
   root: ParentNode | null
 }) {
   if (!input.root || input.nodeIds.length === 0) return false
@@ -1169,7 +1348,7 @@ export function isCanvasAuthoritativeResourceReadyForOptimisticHandoff(input: {
   return input.nodeIds.every((nodeId) => {
     const container = [...containers].find((candidate) => candidate.dataset.id === nodeId)
     if (!container) return false
-    const node = input.document.nodes.find((candidate) => candidate.id === nodeId)
+    const node = input.resolveNode?.(nodeId) ?? input.document.nodes.find((candidate) => candidate.id === nodeId)
     const nodeSurface = container.querySelector<HTMLElement>("[data-canvas-node-kind]")
     // A focused ghost must not hand off merely because the owner-derived
     // component mounted. React Flow and Canvas selection can commit on a later
@@ -1201,13 +1380,14 @@ export function canvasAuthorityMatchesOptimisticResourceBounds(
   ghosts: readonly CanvasGhostNode[],
   nodeIds: readonly string[],
   document: CanvasDocument,
+  resolveNode?: (nodeId: string) => CanvasNode | undefined,
 ) {
   if (ghosts.length !== nodeIds.length || ghosts.length === 0) return false
   const unmatchedAuthorityBounds = nodeIds.map((nodeId) => {
-    const node = document.nodes.find((candidate) => candidate.id === nodeId)
+    const node = resolveNode?.(nodeId) ?? document.nodes.find((candidate) => candidate.id === nodeId)
     if (!node) return null
     return {
-      position: getNodeWorldPosition(document, node.id),
+      position: node.parentId ? getNodeWorldPosition(document, node.id) : node.position,
       size: getCanvasNodePresentationSize(node),
     }
   })
@@ -1280,6 +1460,150 @@ const emptyCanvasOptimisticOverlayStore = Object.freeze({
   subscribe: () => () => undefined,
 })
 
+/**
+ * O(k) presentation-only layer for immediate resource feedback. It lives in
+ * React Flow's public viewport portal but never enters the authoritative
+ * `nodes`/`edges` arrays or its document reconciliation path.
+ */
+function CanvasOptimisticViewportLayer(props: Readonly<{
+  edges: readonly CanvasGhostEdge[]
+  focusedGroupId: string | null
+  nodes: readonly CanvasGhostNode[]
+  resolveNode: (nodeId: string) => CanvasNode | undefined
+}>) {
+  const nodes = props.nodes.filter(
+    (ghost) => (ghost.parentPresentationKey ?? null) === props.focusedGroupId,
+  )
+  const ghostBounds = new Map(nodes.map((ghost) => [ghost.presentationKey, {
+    position: ghost.snapshot?.position ?? ghost.position,
+    size: ghost.snapshot?.size ?? ghost.size,
+  }] as const))
+  const endpoint = (value: CanvasGhostEdge["source"]) => {
+    const ghost = ghostBounds.get(value.key)
+    const node = ghost ? undefined : props.resolveNode(value.key)
+    const position = ghost?.position ?? node?.position
+    const size = ghost?.size ?? (node ? getCanvasNodeSize(node) : undefined)
+    if (!position || !size) return null
+    return {
+      x: value.side === "output" ? position.x + size.width : value.side === "input" ? position.x : position.x + size.width / 2,
+      y: position.y + size.height / 2,
+    }
+  }
+  const edges = props.edges.map((ghost) => {
+    const source = endpoint(ghost.source)
+    const target = endpoint(ghost.target)
+    if (!source || !target) return { ghost, path: null }
+    const control = Math.max(48, Math.abs(target.x - source.x) / 2)
+    return {
+      ghost,
+      path: {
+        d: `M ${source.x} ${source.y} C ${source.x + control} ${source.y}, ${target.x - control} ${target.y}, ${target.x} ${target.y}`,
+        labelX: (source.x + target.x) / 2,
+        labelY: (source.y + target.y) / 2,
+      },
+    }
+  })
+  return (
+    <div aria-hidden="true" className="pointer-events-none absolute inset-0 overflow-visible">
+      <svg className="absolute left-0 top-0 overflow-visible" height="1" width="1">
+        {edges.flatMap(({ ghost, path }) => path ? [
+          <g
+            key={ghost.presentationKey}
+            data-canvas-optimistic-ghost="edge"
+            data-canvas-optimistic-key={ghost.presentationKey}
+          >
+            <path
+              className="text-muted-foreground"
+              d={path.d}
+              fill="none"
+              opacity="0.64"
+              stroke="currentColor"
+              strokeDasharray="6 5"
+              strokeWidth="2"
+              vectorEffect="non-scaling-stroke"
+            />
+            {ghost.label ? (
+              <text
+                className="fill-muted-foreground text-xs"
+                textAnchor="middle"
+                x={path.labelX}
+                y={path.labelY - 6}
+              >
+                {ghost.label}
+              </text>
+            ) : null}
+          </g>,
+        ] : [])}
+      </svg>
+      {edges.flatMap(({ ghost, path }) => path ? [] : [
+        <span
+          key={ghost.presentationKey}
+          data-canvas-optimistic-ghost="edge"
+          data-canvas-optimistic-key={ghost.presentationKey}
+          hidden
+        />,
+      ])}
+      {nodes.map((ghost) => (
+        <div
+          key={ghost.presentationKey}
+          className={cn(
+            "absolute overflow-hidden rounded-xl border border-border bg-card text-card-foreground shadow-sm",
+            ghost.focusVisible && "ring-2 ring-ring/70",
+          )}
+          data-canvas-optimistic-ghost="node"
+          data-canvas-optimistic-key={ghost.presentationKey}
+          style={{
+            height: ghost.size.height,
+            opacity: 0.72,
+            transform: `translate(${ghost.position.x}px, ${ghost.position.y}px)`,
+            width: ghost.size.width,
+          }}
+        >
+          {ghost.presentation.previewUrl ? (
+            <img
+              alt=""
+              className="size-full object-cover"
+              draggable={false}
+              src={ghost.presentation.previewUrl}
+            />
+          ) : (
+            <div className="flex size-full items-start px-3 py-2 text-sm text-muted-foreground">
+              {ghost.presentation.title}
+            </div>
+          )}
+        </div>
+      ))}
+    </div>
+  )
+}
+
+function createCanvasKeyedNodeDocument(
+  document: CanvasDocument,
+  nodeIds: readonly string[],
+  resolveNode: ((nodeId: string) => CanvasNode | undefined) | undefined,
+  edgeIds: readonly string[] = [],
+  resolveEdge?: (edgeId: string) => CanvasEdge | undefined,
+): CanvasDocument {
+  if (!resolveNode) return document
+  const nodes = new Map<string, CanvasNode>()
+  for (const nodeId of nodeIds.slice(0, CANVAS_RENDERER_VIEWPORT_MAX_NODES)) {
+    const path: CanvasNode[] = []
+    const visited = new Set<string>()
+    let node = resolveNode(nodeId)
+    while (node && !visited.has(node.id) && nodes.size + path.length < CANVAS_RENDERER_VIEWPORT_MAX_NODES) {
+      visited.add(node.id)
+      path.push(node)
+      node = node.parentId ? resolveNode(node.parentId) : undefined
+    }
+    for (let index = path.length - 1; index >= 0; index -= 1) nodes.set(path[index]!.id, path[index]!)
+  }
+  const edges = edgeIds.slice(0, CANVAS_RENDERER_VIEWPORT_MAX_NODES).flatMap((edgeId) => {
+    const edge = resolveEdge?.(edgeId)
+    return edge ? [edge] : []
+  })
+  return { ...document, edges, nodes: [...nodes.values()] }
+}
+
 function CanvasEditorContent(
   props: CanvasEditorProps & {
     editorRef: ForwardedRef<CanvasEditorHandle>
@@ -1330,12 +1654,21 @@ function CanvasEditorContent(
     },
     [combinedPresentationStore, mergedOptimisticOverlay],
   )
+  const subscribeCombinedPresentation = useCallback(
+    (listener: () => void) => combinedPresentationStore.subscribe(listener),
+    [combinedPresentationStore],
+  )
+  const readCombinedPresentation = useCallback(
+    () => combinedPresentationStore.getSnapshot(),
+    [combinedPresentationStore],
+  )
   const combinedPresentation = useSyncExternalStore(
-    combinedPresentationStore.subscribe.bind(combinedPresentationStore),
-    combinedPresentationStore.getSnapshot.bind(combinedPresentationStore),
-    combinedPresentationStore.getSnapshot.bind(combinedPresentationStore),
+    subscribeCombinedPresentation,
+    readCombinedPresentation,
+    readCombinedPresentation,
   )
   const canonicalDocument = combinedPresentation.authoritative
+  const boundedViewportEnabled = typeof projectionStore.queryViewport === "function"
   const [gestureStart, setGestureStart] = useState<CanvasDocument | undefined>()
   const gestureStartRef = useRef<CanvasDocument | undefined>(undefined)
   const gestureEntitiesRef = useRef(new Map<string, CanvasEntityRef>())
@@ -1346,7 +1679,9 @@ function CanvasEditorContent(
   const [reactFlowMeasurements, setReactFlowMeasurements] = useState(
     () => new Map<string, CanvasTransientMeasurement>(),
   )
-  const [resourceStates, setResourceStates] = useState(() => new Map<string, CanvasTransientResourceState>())
+  const [resourceStates, setResourceStates] = useState(
+    () => CanvasPersistentRuntimeMap.empty<CanvasTransientResourceState>(),
+  )
   const resourceStatesRef = useRef(resourceStates)
   resourceStatesRef.current = resourceStates
   const localResourcePreviewsRef = useRef(new Map<string, CanvasLocalResourcePreview>())
@@ -1403,7 +1738,9 @@ function CanvasEditorContent(
   )
   const renderedDocument = useMemo(() => {
     const resourceOverlays = new Map<string, CanvasTransientResourceState>()
-    if (resourceStates.size > 0) {
+    // The indexed production session applies runtime state only to its bounded
+    // working set below. Resource completion must never map the full document.
+    if (!boundedViewportEnabled && resourceStates.size > 0) {
       const canonicalNodes = new Map(canonicalDocument.nodes.map((node) => [node.id, node]))
       for (const [nodeId, transient] of resourceStates) {
         const currentNode = canonicalNodes.get(nodeId)
@@ -1439,8 +1776,9 @@ function CanvasEditorContent(
       }
     })
     return changed ? { ...canonicalDocument, nodes } : canonicalDocument
-  }, [canonicalDocument, gestureGeometry, pendingGeometry, projectionStore, resourceStates])
+  }, [boundedViewportEnabled, canonicalDocument, gestureGeometry, pendingGeometry, projectionStore, resourceStates])
   const resourceHydrationDocument = useMemo(() => {
+    if (boundedViewportEnabled) return canonicalDocument
     if (resourceStates.size === 0) return canonicalDocument
     const canonicalNodes = new Map(canonicalDocument.nodes.map((node) => [node.id, node]))
     const resourceStateOverlays = new Map<string, CanvasResourceRuntimeState>()
@@ -1456,7 +1794,7 @@ function CanvasEditorContent(
       resourceStateOverlays.set(nodeId, transient.state)
     }
     return replaceCanvasNodeResourceStates(canonicalDocument, resourceStateOverlays)
-  }, [canonicalDocument, projectionStore, resourceStates])
+  }, [boundedViewportEnabled, canonicalDocument, projectionStore, resourceStates])
   const history = useMemo(
     () => ({
       document: renderedDocument,
@@ -1566,6 +1904,15 @@ function CanvasEditorContent(
   )
   const documentRef = useRef(history.document)
   const canonicalDocumentRef = useRef(canonicalDocument)
+  // Exact certified append entries that have reached the mounted React Flow but
+  // have not yet been folded into an explicit full presentation reconcile.
+  const incrementalProjectionNodesRef = useRef(new Map<string, CanvasNode>())
+  const incrementalProjectionEdgesRef = useRef(new Map<string, CanvasEdge>())
+  const certifiedViewportPinsRef = useRef(new Set<string>())
+  const [viewportProjectionRevision, invalidateViewportProjection] = useReducer(
+    (revision: number) => revision + 1,
+    0,
+  )
   const resourceHydrationDocumentRef = useRef(resourceHydrationDocument)
   const resourceMutationScopeRef = useRef<CanvasResourceMutationScopeToken>({
     documentId: history.document.id,
@@ -1593,10 +1940,104 @@ function CanvasEditorContent(
   const submitGenerationRef = useRef<(submission: CanvasGenerationComposerSubmission) => void>(() => undefined)
   const pendingDraftsRef = useRef(createCanvasPendingDraftRegistry())
   const reactFlow = useReactFlow<CanvasNode>()
+  const rendererViewport = useViewport()
   const reactFlowStore = useStoreApi<CanvasNode>()
   const reactFlowRef = useRef(reactFlow)
+  const [rendererViewportSize, setRendererViewportSize] = useState({ height: 1080, width: 1920 })
   const pointerMultiSelectionGenerationRef = useRef(0)
   reactFlowRef.current = reactFlow
+  useEffect(() => {
+    if (!overlayRoot || typeof ResizeObserver === "undefined") return
+    const update = () => {
+      const bounds = overlayRoot.getBoundingClientRect()
+      if (bounds.width <= 0 || bounds.height <= 0) return
+      setRendererViewportSize((current) =>
+        current.width === bounds.width && current.height === bounds.height
+          ? current
+          : { height: bounds.height, width: bounds.width },
+      )
+    }
+    update()
+    const observer = new ResizeObserver(update)
+    observer.observe(overlayRoot)
+    return () => observer.disconnect()
+  }, [overlayRoot])
+  useEffect(() => {
+    if (!projectionStore.subscribeProjectionChanges) return
+    return projectionStore.subscribeProjectionChanges((change) => {
+      if (change.kind === "reset") {
+        incrementalProjectionNodesRef.current.clear()
+        incrementalProjectionEdgesRef.current.clear()
+        certifiedViewportPinsRef.current.clear()
+        invalidateViewportProjection()
+        return
+      }
+      if (boundedViewportEnabled) {
+        for (const node of change.changes.nodes) {
+          const pins = certifiedViewportPinsRef.current
+          if (!pins.has(node.id) && pins.size >= CANVAS_RENDERER_VIEWPORT_MAX_NODES) {
+            const oldest = pins.values().next().value
+            if (typeof oldest === "string") pins.delete(oldest)
+          }
+          pins.add(node.id)
+        }
+        if (change.preparedResources.length > 0) {
+          setResourceStates((current) => {
+            let next = current
+            for (const prepared of change.preparedResources) {
+              const node = projectionStore.resolveNode?.(prepared.nodeId)
+              const entity = projectionStore.resolveNodeEntity(prepared.nodeId)
+              if (
+                !node ||
+                !entity ||
+                !sameCanvasEntity(prepared.entity, entity) ||
+                prepared.resourceIdentity !== canvasCanonicalResourceIdentity(node)
+              ) continue
+              const transient: CanvasTransientResourceState = {
+                entity: prepared.entity,
+                rendererId: canvasFileRendererIdentity(node, props.fileRendererRegistry),
+                resourceIdentity: prepared.resourceIdentity,
+                state: prepared.state,
+              }
+              const previous = next.get(prepared.nodeId)
+              if (
+                previous &&
+                sameCanvasTransientResourceOwner(previous, node, entity) &&
+                previous.rendererId === transient.rendererId &&
+                sameCanvasRuntimeValue(previous.state, transient.state)
+              ) continue
+              next = next.set(prepared.nodeId, transient)
+            }
+            return next
+          })
+        }
+        invalidateViewportProjection()
+        return
+      }
+      const addedNodes: CanvasNode[] = []
+      const addedEdges: CanvasEdge[] = []
+      for (const node of change.changes.nodes) {
+        incrementalProjectionNodesRef.current.set(node.id, node)
+        addedNodes.push(projectCanvasNodeInitialDimensions(node))
+      }
+      for (const edge of change.changes.edges) {
+        incrementalProjectionEdgesRef.current.set(edge.id, edge)
+        addedEdges.push({
+          ...edge,
+          animated: false,
+          selected: false,
+          sourceHandle: CANVAS_NODE_OUTPUT_HANDLE_ID,
+          targetHandle: CANVAS_NODE_INPUT_HANDLE_ID,
+          type: !edge.type || edge.type === "smoothstep" ? "canvas" : edge.type,
+        })
+      }
+      // @xyflow's public incremental calls are the presentation-reconciliation
+      // boundary. Canvas supplies only k exact additions and never reads the
+      // projection store's full getter in this callback.
+      if (addedNodes.length > 0 && typeof reactFlow.addNodes === "function") reactFlow.addNodes(addedNodes)
+      if (addedEdges.length > 0 && typeof reactFlow.addEdges === "function") reactFlow.addEdges(addedEdges)
+    })
+  }, [boundedViewportEnabled, projectionStore, props.fileRendererRegistry, reactFlow])
   const setPointerMultiSelection = useCallback(
     (active: boolean) => {
       pointerMultiSelectionGenerationRef.current += 1
@@ -1657,6 +2098,25 @@ function CanvasEditorContent(
   saveErrorRef.current = saveError
   selectionRef.current = selection
   snapEnabledRef.current = snapEnabled
+  const resolveCurrentNode = useCallback(
+    (nodeId: string) => projectionStore.resolveNode?.(nodeId) ??
+      documentRef.current.nodes.find((node) => node.id === nodeId),
+    [projectionStore],
+  )
+  const readCurrentBulkDocument = useCallback(
+    () => boundedViewportEnabled ? projectionStore.getProjection() : documentRef.current,
+    [boundedViewportEnabled, projectionStore],
+  )
+  const readCurrentWorkingDocument = useCallback(
+    (nodeIds?: readonly string[]) => boundedViewportEnabled
+      ? createCanvasKeyedNodeDocument(
+          documentRef.current,
+          nodeIds ?? reactFlowRef.current.getNodes().map((node) => node.id),
+          resolveCurrentNode,
+        )
+      : documentRef.current,
+    [boundedViewportEnabled, resolveCurrentNode],
+  )
   const updateConnectionTargetNode = useCallback((nodeId: string | null) => {
     if (connectionTargetNodeIdRef.current === nodeId) return
     connectionTargetNodeIdRef.current = nodeId
@@ -1697,7 +2157,7 @@ function CanvasEditorContent(
     setPendingGeometry(new Map())
     setGestureStart(undefined)
     setReactFlowMeasurements(new Map())
-    setResourceStates(new Map())
+    setResourceStates(CanvasPersistentRuntimeMap.empty())
     optimisticOverlay.clear()
     setPendingConnection(null)
     setPendingNodeFocus(null)
@@ -1758,7 +2218,7 @@ function CanvasEditorContent(
     const next = new Map(pendingGeometryRef.current)
     let changed = false
     for (const [nodeId, pending] of next) {
-      const node = canonicalDocument.nodes.find((candidate) => candidate.id === nodeId)
+      const node = resolveCurrentNode(nodeId)
       if (!node || !sameCanvasEntity(pending.entity, projectionStore.resolveNodeEntity(nodeId))) {
         next.delete(nodeId)
         changed = true
@@ -1782,22 +2242,29 @@ function CanvasEditorContent(
     if (!changed) return
     pendingGeometryRef.current = next
     setPendingGeometry(next)
-  }, [canonicalDocument, projectionStore])
+  }, [projectionStore, resolveCurrentNode, viewportProjectionRevision])
   const dispatch = useCallback(
     (action: CanvasEditorTransientAction) => {
       if (leavingRef.current || hydratingRef.current) return
       if (action.type === "begin-gesture") {
         if (!gestureStartRef.current) {
-          gestureStartRef.current = canonicalDocument
+          const start = boundedViewportEnabled
+            ? createCanvasKeyedNodeDocument(
+                canonicalDocument,
+                action.nodeIds ?? [...selectionRef.current.nodeIds],
+                resolveCurrentNode,
+              )
+            : canonicalDocument
+          gestureStartRef.current = start
           gestureEntitiesRef.current = new Map(
-            canonicalDocument.nodes.flatMap((node) => {
+            start.nodes.flatMap((node) => {
               const entity = projectionStore.resolveNodeEntity(node.id)
               return entity ? [[node.id, entity] as const] : []
             }),
           )
           gestureGeometryRef.current = new Map()
           setGestureGeometry(new Map())
-          setGestureStart(canonicalDocument)
+          setGestureStart(start)
         }
         return
       }
@@ -1851,7 +2318,15 @@ function CanvasEditorContent(
         if (collaborationSession) void collaborationSession.redo()
       }
     },
-    [canonicalDocument, clearPendingGeometry, clearTransientGeometry, collaborationSession, projectionStore],
+    [
+      boundedViewportEnabled,
+      canonicalDocument,
+      clearPendingGeometry,
+      clearTransientGeometry,
+      collaborationSession,
+      projectionStore,
+      resolveCurrentNode,
+    ],
   )
   const rejectUnmappedCanvasMutation = useCallback(() => {
     notificationService?.show({
@@ -1865,8 +2340,7 @@ function CanvasEditorContent(
       if (document.id !== canonicalDocument.id) return
       const canonicalNodes = new Map(canonicalDocument.nodes.map((node) => [node.id, node]))
       setResourceStates((current) => {
-        const next = new Map(current)
-        let changed = false
+        let next = current
         for (const node of document.nodes) {
           const canonicalNode = canonicalNodes.get(node.id)
           const state = parseCanvasResourceRuntimeState(canvasNodeResourceState(node))
@@ -1891,21 +2365,70 @@ function CanvasEditorContent(
           ) {
             continue
           }
-          next.set(node.id, {
+          next = next.set(node.id, {
             entity,
             rendererId,
             resourceIdentity: canvasCanonicalResourceIdentity(canonicalNode),
             state,
           })
-          changed = true
         }
-        return changed ? next : current
+        return next
       })
     },
     [canonicalDocument, projectionStore, props.fileRendererRegistry],
   )
   const replaceRuntimeResourceStatesRef = useRef(replaceRuntimeResourceStates)
   replaceRuntimeResourceStatesRef.current = replaceRuntimeResourceStates
+  const installPreparedResourceStates = useCallback(
+    (preparedResources: readonly CanvasAcceptedPreparedResourceRuntime[] | undefined, createdNodeIds: readonly string[]) => {
+      if (!preparedResources?.length) return
+      const created = new Set(createdNodeIds)
+      setResourceStates((current) => {
+        let next = current
+        const installed = new Set<string>()
+        for (const prepared of preparedResources) {
+          if (
+            !prepared ||
+            typeof prepared.nodeId !== "string" ||
+            installed.has(prepared.nodeId) ||
+            !created.has(prepared.nodeId)
+          ) {
+            continue
+          }
+          installed.add(prepared.nodeId)
+          const node = projectionStore.resolveNode?.(prepared.nodeId) ??
+            canonicalDocumentRef.current.nodes.find((candidate) => candidate.id === prepared.nodeId)
+          const state = parseCanvasResourceRuntimeState(prepared.state)
+          const entity = projectionStore.resolveNodeEntity(prepared.nodeId)
+          if (
+            !node ||
+            !state ||
+            !entity ||
+            !sameCanvasEntity(prepared.entity, entity) ||
+            prepared.resourceIdentity !== canvasCanonicalResourceIdentity(node)
+          ) continue
+          const rendererId = canvasFileRendererIdentity(node, props.fileRendererRegistry)
+          const previous = next.get(prepared.nodeId)
+          if (
+            previous &&
+            sameCanvasTransientResourceOwner(previous, node, entity) &&
+            previous.rendererId === rendererId &&
+            sameCanvasRuntimeValue(previous.state, state)
+          ) {
+            continue
+          }
+          next = next.set(prepared.nodeId, {
+            entity: prepared.entity,
+            rendererId,
+            resourceIdentity: prepared.resourceIdentity,
+            state,
+          })
+        }
+        return next
+      })
+    },
+    [projectionStore, props.fileRendererRegistry],
+  )
   const registryVersion = useSyncExternalStore(
     props.nodeRegistry.subscribe,
     props.nodeRegistry.getVersion,
@@ -1935,19 +2458,18 @@ function CanvasEditorContent(
       return next
     })
     setResourceStates((current) => {
-      const next = new Map<string, CanvasTransientResourceState>()
+      let next = CanvasPersistentRuntimeMap.empty<CanvasTransientResourceState>()
       for (const [nodeId, transient] of current) {
         if (!liveNodes.has(nodeId)) continue
         const node = liveNodes.get(nodeId)!
         const entity = projectionStore.resolveNodeEntity(nodeId)
         if (!sameCanvasTransientResourceOwner(transient, node, entity)) continue
         if (transient.rendererId !== canvasFileRendererIdentity(node, props.fileRendererRegistry)) continue
-        next.set(nodeId, transient)
+        next = next.set(nodeId, transient)
       }
-      if (next.size === current.size && [...next].every(([nodeId, value]) => current.get(nodeId) === value)) {
-        return current
-      }
-      return next
+      if (next.size !== current.size) return next
+      for (const [nodeId, value] of next) if (current.get(nodeId) !== value) return next
+      return current
     })
   }, [canonicalDocument, fileRendererRegistryVersion, projectionStore, props.fileRendererRegistry])
   useEffect(() => {
@@ -1969,7 +2491,7 @@ function CanvasEditorContent(
       if (!currentPreviewToken) hydrationNodeIds.add(nodeId)
     }
     if (hydrationNodeIds.size > 0) {
-      void resourceRefreshControllerRef.current?.invalidateResources((node) => hydrationNodeIds.has(node.id))
+      void resourceRefreshControllerRef.current?.invalidateResources([...hydrationNodeIds])
     }
   }, [resourceStates])
   useEffect(
@@ -2007,9 +2529,12 @@ function CanvasEditorContent(
   const selectedNodeIds = useMemo(() => [...selection.nodeIds], [selection.nodeIds])
   const selectedEdgeIds = useMemo(() => [...selection.edgeIds], [selection.edgeIds])
   const selectionContext = useMemo(() => deriveCanvasSelectionContext(selection), [selection])
+  const singleSelectedNode = selectionContext.kind === "single-node"
+    ? resolveCurrentNode(selectionContext.nodeId)
+    : undefined
   const selectedNodeKind =
     selectionContext.kind === "single-node"
-      ? history.document.nodes.find((node) => node.id === selectionContext.nodeId)?.data.kind
+      ? singleSelectedNode?.data.kind
       : undefined
   const onlyRenderVisibleElements = resolveCanvasOnlyRenderVisibleElements({
     assistantAvailable: Boolean(assistantService),
@@ -2018,21 +2543,38 @@ function CanvasEditorContent(
     selectedNodeKind,
   })
   const selectionProjection = useMemo(
-    () =>
+    () => {
+      const projectionDocument = boundedViewportEnabled
+        ? createCanvasKeyedNodeDocument(
+            history.document,
+            selectedNodeIds,
+            resolveCurrentNode,
+            selectedEdgeIds,
+            projectionStore.resolveEdge?.bind(projectionStore),
+          )
+        : history.document
+      return (
       createCanvasSelectionProjection({
-        document: history.document,
+        document: projectionDocument,
         renderers: props.fileRendererRegistry,
         scopeId: currentViewScopeId,
         selection: selectionContext,
         viewId: props.viewId ?? "",
-      }),
+      }))
+    },
     [
+      boundedViewportEnabled,
       currentViewScopeId,
       fileRendererRegistryVersion,
       history.document,
+      projectionStore,
       props.fileRendererRegistry,
       props.viewId,
+      resolveCurrentNode,
+      selectedEdgeIds,
+      selectedNodeIds,
       selectionContext,
+      viewportProjectionRevision,
     ],
   )
   useLayoutEffect(() => {
@@ -2047,22 +2589,96 @@ function CanvasEditorContent(
     () => new Map(history.document.nodes.map((node) => [node.id, node])),
     [history.document.nodes],
   )
-  const groupFocus = useMemo(
+  const legacyGroupFocus = useMemo(
     () => projectCanvasGroupFocus(history.document, focusedGroupId),
     [focusedGroupId, history.document],
   )
   useEffect(() => {
-    if (focusedGroupId && groupFocus.focusedGroupId !== focusedGroupId) setFocusedGroupId(null)
-  }, [focusedGroupId, groupFocus.focusedGroupId])
-  const hasSingleGroupSelection =
-    selectionContext.kind === "single-node" && nodeById.get(selectionContext.nodeId)?.data.kind === "group"
+    if (!focusedGroupId) return
+    const current = projectionStore.resolveNode?.(focusedGroupId)
+    if ((boundedViewportEnabled ? current?.data.kind !== "group" : legacyGroupFocus.focusedGroupId !== focusedGroupId)) {
+      setFocusedGroupId(null)
+    }
+  }, [boundedViewportEnabled, focusedGroupId, legacyGroupFocus.focusedGroupId, projectionStore])
+  const rendererViewportPins = useMemo(() => {
+    const pins = new Set<string>()
+    const add = (nodeId: string | null | undefined) => {
+      if (nodeId && pins.size < CANVAS_RENDERER_VIEWPORT_MAX_NODES) pins.add(nodeId)
+    }
+    add(focusedGroupId)
+    for (const nodeId of pendingNodeFocus?.nodeIds ?? []) add(nodeId)
+    for (const nodeId of gestureGeometry.keys()) add(nodeId)
+    for (const nodeId of pendingGeometry.keys()) add(nodeId)
+    add(connectionTargetNodeId)
+    add(connectionStartRef.current?.nodeId)
+    add(groupDropTargetId)
+    for (const nodeId of selection.nodeIds) add(nodeId)
+    for (const nodeId of certifiedViewportPinsRef.current) add(nodeId)
+    return Object.freeze([...pins])
+  }, [
+    connectionTargetNodeId,
+    focusedGroupId,
+    gestureGeometry,
+    groupDropTargetId,
+    pendingGeometry,
+    pendingNodeFocus,
+    selection.nodeIds,
+    viewportProjectionRevision,
+  ])
+  const viewportProjection = useMemo<CanvasRendererViewportProjection | null>(() => {
+    if (!projectionStore.queryViewport) return null
+    const zoom = Number.isFinite(rendererViewport.zoom) && rendererViewport.zoom > 0 ? rendererViewport.zoom : 1
+    const overscan = 256 / zoom
+    return projectionStore.queryViewport({
+      focusedGroupId,
+      pinnedNodeIds: rendererViewportPins,
+      rect: {
+        height: rendererViewportSize.height / zoom + overscan * 2,
+        width: rendererViewportSize.width / zoom + overscan * 2,
+        x: -rendererViewport.x / zoom - overscan,
+        y: -rendererViewport.y / zoom - overscan,
+      },
+    })
+  }, [
+    focusedGroupId,
+    projectionStore,
+    rendererViewport.x,
+    rendererViewport.y,
+    rendererViewport.zoom,
+    rendererViewportPins,
+    rendererViewportSize.height,
+    rendererViewportSize.width,
+    viewportProjectionRevision,
+  ])
+  const viewportPresentationNodes = useMemo(
+    () => viewportProjection?.nodes.map((node) =>
+      projectCanvasTransientNodeGeometry(node, gestureGeometry.get(node.id), pendingGeometry.get(node.id))),
+    [gestureGeometry, pendingGeometry, viewportProjection],
+  )
+  const groupFocus = useMemo(
+    () => viewportProjection
+      ? projectCanvasGroupFocus(
+          {
+            ...history.document,
+            edges: [...viewportProjection.edges],
+            nodes: [...(viewportPresentationNodes ?? [])],
+          },
+          focusedGroupId,
+        )
+      : legacyGroupFocus,
+    [focusedGroupId, history.document, legacyGroupFocus, viewportPresentationNodes, viewportProjection],
+  )
+  const hasSingleGroupSelection = selectionContext.kind === "single-node" && singleSelectedNode?.data.kind === "group"
   const selectedGroup =
     hasSingleGroupSelection && selectionContext.kind === "single-node"
-      ? nodeById.get(selectionContext.nodeId)
+      ? singleSelectedNode
       : undefined
   const selectedGroupFolded = isCanvasGroupFolded(selectedGroup)
+  const selectedNodeDocument = boundedViewportEnabled
+    ? createCanvasKeyedNodeDocument(history.document, selectedNodeIds, resolveCurrentNode)
+    : history.document
   const groupMenuCapabilities = resolveCanvasGroupMenuCapabilities({
-    canGroupSelection: selectionContext.kind === "multi-node" && canGroupCanvasNodes(history.document, selectedNodeIds),
+    canGroupSelection: selectionContext.kind === "multi-node" && canGroupCanvasNodes(selectedNodeDocument, selectedNodeIds),
     hasSingleGroupSelection,
     singleGroupFolded: selectedGroupFolded,
     singleGroupFoldUnsupported: hasUnsupportedCanvasGroupFold(selectedGroup),
@@ -2071,17 +2687,34 @@ function CanvasEditorContent(
     const ids = [...selection.nodeIds]
     if (ids.length !== 1) return ids
     if (!groupMenuCapabilities.canArrangeChildren) return ids
-    const selected = nodeById.get(ids[0])
+    const selected = resolveCurrentNode(ids[0]!)
     if (!selected) return ids
-    return history.document.nodes.filter((node) => node.parentId === selected.id).map((node) => node.id)
-  }, [groupMenuCapabilities.canArrangeChildren, history.document.nodes, nodeById, selection.nodeIds])
+    const currentNodes = viewportProjection?.nodes ?? history.document.nodes
+    return currentNodes.filter((node) => node.parentId === selected.id).map((node) => node.id)
+  }, [
+    groupMenuCapabilities.canArrangeChildren,
+    history.document.nodes,
+    resolveCurrentNode,
+    selection.nodeIds,
+    viewportProjection,
+  ])
   const arrangeNodes = arrangeNodeIds.flatMap((id) => {
-    const node = nodeById.get(id)
+    const node = resolveCurrentNode(id)
     return node ? [node] : []
   })
   const canArrangeSelection =
-    arrangeNodes.length >= 2 && arrangeNodes.every((node) => node.parentId === arrangeNodes[0]?.parentId)
-  const canDistributeSelection = canArrangeSelection && arrangeNodes.length >= 3
+    groupMenuCapabilities.canArrangeChildren ||
+    (arrangeNodes.length >= 2 && arrangeNodes.every((node) => node.parentId === arrangeNodes[0]?.parentId))
+  const canDistributeSelection =
+    groupMenuCapabilities.canArrangeChildren || (canArrangeSelection && arrangeNodes.length >= 3)
+  const resolveCurrentArrangeNodeIds = useCallback(() => {
+    const ids = [...selectionRef.current.nodeIds]
+    if (ids.length !== 1) return ids
+    const selected = resolveCurrentNode(ids[0]!)
+    if (selected?.data.kind !== "group" || isCanvasGroupFolded(selected)) return ids
+    const document = readCurrentBulkDocument()
+    return document.nodes.filter((node) => node.parentId === selected.id).map((node) => node.id)
+  }, [readCurrentBulkDocument, resolveCurrentNode])
   const folderFocusNodes = useMemo(
     () =>
       folderFocus?.listing
@@ -2099,29 +2732,59 @@ function CanvasEditorContent(
   )
   const canLayoutCanvas = !readOnly && canvasNodeIds.length >= 2
   const nodes = useMemo(() => {
-    if (folderFocus) return folderFocusNodes
+    if (folderFocus) {
+      return boundedViewportEnabled
+        ? folderFocusNodes.slice(0, CANVAS_RENDERER_VIEWPORT_MAX_NODES)
+        : folderFocusNodes
+    }
+    const activeFocusedGroupId = viewportProjection ? focusedGroupId : groupFocus.focusedGroupId
     const depth = (node: CanvasNode, visited = new Set<string>()): number => {
       if (visited.has(node.id)) return 0
       visited.add(node.id)
       const parent = node.parentId ? nodeById.get(node.parentId) : undefined
       return parent ? depth(parent, visited) + 1 : 0
     }
-    const authoritativeNodes = history.document.nodes
-      .filter((node) => groupFocus.visibleNodeIds.has(node.id) && !optimisticHiddenNodeIds.has(node.id))
+    const incrementalNodes = !viewportProjection && incrementalProjectionNodesRef.current.size > 0
+      ? (() => {
+          const documentNodeIds = new Set(history.document.nodes.map((node) => node.id))
+          return [...incrementalProjectionNodesRef.current.values()].filter((node) => !documentNodeIds.has(node.id))
+        })()
+      : []
+    const sourceNodes = viewportPresentationNodes ?? (incrementalNodes.length > 0
+      ? [...history.document.nodes, ...incrementalNodes]
+      : history.document.nodes)
+    const authoritativeNodes = sourceNodes
+      .filter(
+        (node) =>
+          (viewportProjection !== null || groupFocus.visibleNodeIds.has(node.id) ||
+            (groupFocus.focusedGroupId === null && incrementalProjectionNodesRef.current.has(node.id))) &&
+          !optimisticHiddenNodeIds.has(node.id),
+      )
       .map((authoritativeNode) => {
+        const incrementalRuntime = resourceStates.get(authoritativeNode.id)
+        const currentEntity = projectionStore.resolveNodeEntity(authoritativeNode.id)
+        const runtimeNode =
+          incrementalRuntime &&
+          "resourceState" in authoritativeNode.data &&
+          sameCanvasTransientResourceOwner(incrementalRuntime, authoritativeNode, currentEntity)
+            ? {
+                ...authoritativeNode,
+                data: { ...authoritativeNode.data, resourceState: incrementalRuntime.state },
+              }
+            : authoritativeNode
         const node = applyCanvasReplacePresentation(
-          authoritativeNode,
-          optimisticNodeReplacements.get(authoritativeNode.id),
+          runtimeNode,
+          optimisticNodeReplacements.get(runtimeNode.id),
         )
-        const isFocusRoot = node.id === groupFocus.focusedGroupId
+        const isFocusRoot = node.id === activeFocusedGroupId
         const isFolder = node.data.kind === "group" && !isFocusRoot && isCanvasGroupFolded(node)
         const measurement = reactFlowMeasurements.get(node.id)
-        const currentEntity = projectionStore.resolveNodeEntity(node.id)
+        const currentNodeEntity = projectionStore.resolveNodeEntity(node.id)
         const measured =
           !isFocusRoot &&
           !isFolder &&
           measurement &&
-          (!measurement.entity || sameCanvasEntity(measurement.entity, currentEntity)) &&
+          (!measurement.entity || sameCanvasEntity(measurement.entity, currentNodeEntity)) &&
           sameCanvasSize(measurement.canonicalSize, getCanvasNodeSize(node)) &&
           measurement.rendererId === canvasFileRendererIdentity(node, props.fileRendererRegistry)
             ? measurement.size
@@ -2156,7 +2819,7 @@ function CanvasEditorContent(
                     zIndex: 0,
                   }
                 : node,
-            groupFocus.focusedGroupId,
+            activeFocusedGroupId,
           ),
           measured,
         )
@@ -2170,14 +2833,17 @@ function CanvasEditorContent(
           selected,
         }
       })
+    if (viewportProjection) return authoritativeNodes
     const ghostNodes = optimisticResourceGhosts
       .filter((ghost) => (ghost.parentPresentationKey ?? null) === (groupFocus.focusedGroupId ?? null))
       .map(projectCanvasGhostNodeForReactFlow)
     return [...authoritativeNodes, ...ghostNodes].sort((left, right) => depth(left) - depth(right))
   }, [
     connectionTargetNodeId,
+    boundedViewportEnabled,
     folderFocus,
     folderFocusNodes,
+    focusedGroupId,
     groupFocus.focusedGroupId,
     groupFocus.visibleNodeIds,
     history.document.nodes,
@@ -2188,11 +2854,22 @@ function CanvasEditorContent(
     projectionStore,
     props.fileRendererRegistry,
     reactFlowMeasurements,
+    resourceStates,
     selection.nodeIds,
+    viewportProjection,
+    viewportPresentationNodes,
   ])
   const edges = useMemo(() => {
     if (edgesHidden || folderFocus) return []
-    const authoritativeEdges = groupFocus.edges
+    const incrementalEdges = !viewportProjection && groupFocus.focusedGroupId === null && incrementalProjectionEdgesRef.current.size > 0
+      ? (() => {
+          const documentEdgeIds = new Set(groupFocus.edges.map((edge) => edge.id))
+          return [...incrementalProjectionEdgesRef.current.values()].filter((edge) => !documentEdgeIds.has(edge.id))
+        })()
+      : []
+    const sourceEdges = viewportProjection?.edges ??
+      (incrementalEdges.length > 0 ? [...groupFocus.edges, ...incrementalEdges] : groupFocus.edges)
+    const authoritativeEdges = sourceEdges
       .filter(
         (edge) =>
           !optimisticHiddenEdgeIds.has(edge.id) &&
@@ -2207,6 +2884,7 @@ function CanvasEditorContent(
         targetHandle: CANVAS_NODE_INPUT_HANDLE_ID,
         type: !edge.type || edge.type === "smoothstep" ? "canvas" : edge.type,
       }))
+    if (viewportProjection) return authoritativeEdges
     const ghostEdges = optimisticGhostEdges.map(projectCanvasGhostEdgeForReactFlow)
     return [...authoritativeEdges, ...ghostEdges]
   }, [
@@ -2217,6 +2895,7 @@ function CanvasEditorContent(
     optimisticHiddenEdgeIds,
     optimisticHiddenNodeIds,
     selection,
+    viewportProjection,
   ])
   const nodeTypes = useMemo(() => {
     const fallback = props.nodeRegistry.get("file")?.component
@@ -2317,8 +2996,7 @@ function CanvasEditorContent(
   )
   const startNodeEntryPresentation = useCallback(
     (nodeIds: readonly string[]) => {
-      const availableNodeIds = new Set(documentRef.current.nodes.map((node) => node.id))
-      const activated = [...new Set(nodeIds)].filter((nodeId) => availableNodeIds.has(nodeId))
+      const activated = [...new Set(nodeIds)].filter((nodeId) => Boolean(resolveCurrentNode(nodeId)))
       if (activated.length === 0 || prefersReducedMotion) return
       nodeEntryPresentation.start(nodeEntryScopeKey, activated)
       for (const nodeId of activated) {
@@ -2331,17 +3009,17 @@ function CanvasEditorContent(
         )
       }
     },
-    [finishNodeEntryForScope, nodeEntryPresentation, nodeEntryScopeKey, prefersReducedMotion],
+    [finishNodeEntryForScope, nodeEntryPresentation, nodeEntryScopeKey, prefersReducedMotion, resolveCurrentNode],
   )
   const presentNodeEntries = useCallback(
     (nodeIds: readonly string[]) => {
       const tracker = nodeEntryTrackerRef.current
       if (!tracker || tracker.scopeKey !== nodeEntryScopeKey) return
       tracker.queue(nodeEntryScopeKey, nodeIds)
-      const availableNodeIds = new Set(documentRef.current.nodes.map((node) => node.id))
+      const availableNodeIds = new Set(nodeIds.filter((nodeId) => Boolean(resolveCurrentNode(nodeId))))
       startNodeEntryPresentation(tracker.activate(nodeEntryScopeKey, availableNodeIds))
     },
-    [nodeEntryScopeKey, startNodeEntryPresentation],
+    [nodeEntryScopeKey, resolveCurrentNode, startNodeEntryPresentation],
   )
   const adoptOptimisticallyPresentedNodeEntries = useCallback(
     (nodeIds: readonly string[]) => {
@@ -2441,15 +3119,14 @@ function CanvasEditorContent(
     // Camera bounds are Canvas-owned. Mounted React Flow measurements may be
     // stale or absent under virtualization, so readiness comes from the same
     // authoritative geometry that fit/reveal consumes.
-    const document = documentRef.current
     const ready = uniqueNodeIds.every((nodeId) => {
-      const node = document.nodes.find((item) => item.id === nodeId)
+      const node = resolveCurrentNode(nodeId)
       if (!node) return false
       const size = getCanvasNodePresentationSize(node)
       return isPositiveFiniteDimension(size.width) && isPositiveFiniteDimension(size.height)
     })
     return ready && isCurrent()
-  }, [])
+  }, [resolveCurrentNode])
   const getSafeViewportRect = useCallback(() => {
     const bounds = rootRef.current?.getBoundingClientRect()
     return bounds
@@ -2529,7 +3206,7 @@ function CanvasEditorContent(
   )
   const navigateGroupFocus = useCallback(
     async (requestedGroupId: string | null, fitScope = true): Promise<"changed" | "stale" | "unchanged"> => {
-      const document = documentRef.current
+      const document = readCurrentBulkDocument()
       const requestedGroup = requestedGroupId
         ? document.nodes.find((node) => node.id === requestedGroupId && node.data.kind === "group")
         : undefined
@@ -2554,17 +3231,15 @@ function CanvasEditorContent(
         .map((node) => node.id)
       if (scopeNodeIds.length === 0) return "changed"
       if (navigationGeneration !== groupFocusNavigationGenerationRef.current) return "stale"
-      await reactFlowRef.current.fitView({
-        duration: resolveCanvasMotionDuration(CANVAS_MOTION_DURATION.fit, prefersReducedMotion),
-        ease: canvasViewportEase,
-        interpolate: "smooth",
+      await fitDocumentViewport(document, {
+        duration: CANVAS_MOTION_DURATION.fit,
         maxZoom: CANVAS_FIT_MAX_ZOOM,
-        nodes: scopeNodeIds.map((id) => ({ id })),
+        nodeIds: scopeNodeIds,
         padding: CANVAS_FIT_PADDING,
       })
       return navigationGeneration === groupFocusNavigationGenerationRef.current ? "changed" : "stale"
     },
-    [markUserNavigation, prefersReducedMotion, updateSelection],
+    [fitDocumentViewport, markUserNavigation, readCurrentBulkDocument, updateSelection],
   )
   const focusGroup = useCallback(
     (groupId: string) => {
@@ -2591,7 +3266,7 @@ function CanvasEditorContent(
       const nodeIds = createCanvasFolderFocusNodes({
         listing,
         ownerNodeId,
-        reservedNodeIds: documentRef.current.nodes.map((node) => node.id),
+        reservedNodeIds: readCurrentBulkDocument().nodes.map((node) => node.id),
       }).map((node) => node.id)
       if (nodeIds.length === 0) return
       await waitForFocusProjection()
@@ -2604,7 +3279,7 @@ function CanvasEditorContent(
         padding: CANVAS_FIT_PADDING,
       })
     },
-    [prefersReducedMotion, waitForFocusProjection],
+    [prefersReducedMotion, readCurrentBulkDocument, waitForFocusProjection],
   )
   const leaveFolderFocus = useCallback(
     async (fitScope = true) => {
@@ -2618,22 +3293,20 @@ function CanvasEditorContent(
       setFocusedGroupId(current.returnGroupId)
       if (!fitScope) return true
       await waitForFocusProjection()
-      const document = documentRef.current
+      const document = readCurrentBulkDocument()
       const scopeNodeIds = document.nodes
         .filter((node) => (current.returnGroupId ? node.parentId === current.returnGroupId : !node.parentId))
         .map((node) => node.id)
       if (scopeNodeIds.length === 0) return true
-      await reactFlowRef.current.fitView({
-        duration: resolveCanvasMotionDuration(CANVAS_MOTION_DURATION.fit, prefersReducedMotion),
-        ease: canvasViewportEase,
-        interpolate: "smooth",
+      await fitDocumentViewport(document, {
+        duration: CANVAS_MOTION_DURATION.fit,
         maxZoom: CANVAS_FIT_MAX_ZOOM,
-        nodes: scopeNodeIds.map((id) => ({ id })),
+        nodeIds: scopeNodeIds,
         padding: CANVAS_FIT_PADDING,
       })
       return true
     },
-    [markUserNavigation, prefersReducedMotion, updateSelection, waitForFocusProjection],
+    [fitDocumentViewport, markUserNavigation, readCurrentBulkDocument, updateSelection, waitForFocusProjection],
   )
   const navigateFolderFocus = useCallback(
     async (
@@ -2646,8 +3319,8 @@ function CanvasEditorContent(
         userNavigation?: boolean
       },
     ) => {
-      const owner = documentRef.current.nodes.find((node) => node.id === ownerNodeId && node.data.kind === "folder")
-      if (!owner) return false
+      const owner = resolveCurrentNode(ownerNodeId)
+      if (owner?.data.kind !== "folder") return false
       const current = folderFocusRef.current
       const returnGroupId = current?.returnGroupId ?? focusedGroupIdRef.current
       const path = options?.path ?? current?.path ?? [{ id: directoryId ?? ownerNodeId, label: owner.data.label }]
@@ -2719,17 +3392,17 @@ function CanvasEditorContent(
         return false
       }
     },
-    [fitFolderFocusListing, folderBrowseService, markUserNavigation, props.viewId, updateSelection],
+    [fitFolderFocusListing, folderBrowseService, markUserNavigation, props.viewId, resolveCurrentNode, updateSelection],
   )
   useEffect(() => {
     if (
       !folderFocus ||
-      documentRef.current.nodes.some((node) => node.id === folderFocus.ownerNodeId && node.data.kind === "folder")
+      resolveCurrentNode(folderFocus.ownerNodeId)?.data.kind === "folder"
     ) {
       return
     }
     void leaveFolderFocus(false)
-  }, [folderFocus, history.document.nodes, leaveFolderFocus])
+  }, [folderFocus, history.document.nodes, leaveFolderFocus, resolveCurrentNode, viewportProjectionRevision])
   useEffect(() => {
     if (!folderBrowseService?.subscribe) return
     return folderBrowseService.subscribe(() => {
@@ -2761,16 +3434,29 @@ function CanvasEditorContent(
     if (action === "skip") return
     initialCameraScopeRef.current = scope
     if (action === "mark-and-fit") {
-      void reactFlowRef.current.fitView({
+      const document = readCurrentBulkDocument()
+      const initialNodeIds = folderFocus
+        ? folderFocusNodes.map((node) => node.id)
+        : document.nodes
+            .filter((node) => (focusedGroupIdRef.current ? node.parentId === focusedGroupIdRef.current : !node.parentId))
+            .map((node) => node.id)
+      void fitDocumentViewport(document, {
         duration: 0,
-        ease: canvasViewportEase,
-        interpolate: "smooth",
         maxZoom: CANVAS_FIT_MAX_ZOOM,
-        nodes: canvasNodeIds.map((id) => ({ id })),
+        nodeIds: initialNodeIds,
         padding: CANVAS_FIT_PADDING,
       })
     }
-  }, [canvasNodeIds, currentViewScopeId, history.document, hydrating, loadError])
+  }, [
+    currentViewScopeId,
+    fitDocumentViewport,
+    folderFocus,
+    folderFocusNodes,
+    history.document,
+    hydrating,
+    loadError,
+    readCurrentBulkDocument,
+  ])
   const revealCanvasNodesAfterMutation = useCallback(
     async (nodeIds: readonly string[], guard: CanvasPostMutationRevealGuard) => {
       if (
@@ -2785,11 +3471,18 @@ function CanvasEditorContent(
         )
       )
         return
+      const revealDocument = boundedViewportEnabled
+        ? createCanvasKeyedNodeDocument(
+            documentRef.current,
+            nodeIds,
+            projectionStore.resolveNode?.bind(projectionStore),
+          )
+        : documentRef.current
       const safeRect = getSafeViewportRect()
       if (
         !safeRect ||
         !shouldRevealCanvasNodes({
-          document: documentRef.current,
+          document: revealDocument,
           nodeIds,
           safeRect,
           viewport: reactFlowRef.current.getViewport(),
@@ -2798,7 +3491,7 @@ function CanvasEditorContent(
         return
       if (!isCanvasPostMutationRevealGuardCurrent(guard, getPostMutationRevealGuard())) return
       const motionGeneration = cameraMotionGenerationRef.current
-      await fitDocumentViewport(documentRef.current, {
+      await fitDocumentViewport(revealDocument, {
         duration: CANVAS_MOTION_DURATION.postMutationReveal,
         maxZoom: CANVAS_POST_MUTATION_REVEAL.maxZoom,
         nodeIds,
@@ -2811,7 +3504,14 @@ function CanvasEditorContent(
         return
       }
     },
-    [confirmCanvasNodeGeometry, fitDocumentViewport, getPostMutationRevealGuard, getSafeViewportRect],
+    [
+      boundedViewportEnabled,
+      confirmCanvasNodeGeometry,
+      fitDocumentViewport,
+      getPostMutationRevealGuard,
+      getSafeViewportRect,
+      projectionStore,
+    ],
   )
   const focusCanvasNodes = useCallback(
     async (
@@ -2834,10 +3534,17 @@ function CanvasEditorContent(
       const motionGeneration = cameraMotionGenerationRef.current
       const motionDuration = resolveCanvasMotionDuration(duration, prefersReducedMotion)
       const interruption = createCanvasCameraMotionInterruptWaiter(cameraMotionInterruptListenersRef.current)
+      const focusDocument = boundedViewportEnabled
+        ? createCanvasKeyedNodeDocument(
+            documentRef.current,
+            nodeIds,
+            projectionStore.resolveNode?.bind(projectionStore),
+          )
+        : documentRef.current
       let timeoutId: ReturnType<typeof setTimeout> | undefined
       try {
         await Promise.race([
-          fitDocumentViewport(documentRef.current, {
+          fitDocumentViewport(focusDocument, {
             duration,
             maxZoom: CANVAS_CENTER_FIT_MAX_ZOOM,
             nodeIds,
@@ -2863,10 +3570,12 @@ function CanvasEditorContent(
     },
     [
       confirmCanvasNodeGeometry,
+      boundedViewportEnabled,
       fitDocumentViewport,
       getPostMutationRevealGuard,
       interruptCameraMotion,
       prefersReducedMotion,
+      projectionStore,
       startNodeEntryPresentation,
     ],
   )
@@ -2887,7 +3596,8 @@ function CanvasEditorContent(
       const ghostNodes = ghosts.map(projectCanvasGhostNodeForReactFlow)
       const presentationDocument: CanvasDocument = {
         ...documentRef.current,
-        nodes: [...documentRef.current.nodes, ...ghostNodes],
+        edges: [],
+        nodes: ghostNodes,
       }
       let timeoutId: ReturnType<typeof setTimeout> | undefined
       try {
@@ -2921,7 +3631,7 @@ function CanvasEditorContent(
       setPendingNodeFocus(null)
       return
     }
-    if (!pendingNodeFocus.nodeIds.every((nodeId) => history.document.nodes.some((node) => node.id === nodeId))) return
+    if (!pendingNodeFocus.nodeIds.every((nodeId) => resolveCurrentNode(nodeId))) return
     setPendingNodeFocus(null)
     void focusCanvasNodes(pendingNodeFocus.nodeIds, pendingNodeFocus.guard).then(
       (focused) => {
@@ -2929,7 +3639,14 @@ function CanvasEditorContent(
       },
       () => cancelNodeEntries(pendingNodeFocus.nodeIds),
     )
-  }, [cancelNodeEntries, focusCanvasNodes, getPostMutationRevealGuard, history.document.nodes, pendingNodeFocus])
+  }, [
+    cancelNodeEntries,
+    focusCanvasNodes,
+    getPostMutationRevealGuard,
+    pendingNodeFocus,
+    resolveCurrentNode,
+    viewportProjectionRevision,
+  ])
   useEffect(() => {
     const key = [
       props.viewportInsets?.top ?? 0,
@@ -2942,7 +3659,7 @@ function CanvasEditorContent(
     const safeRect = getSafeViewportRect()
     if (!safeRect || selectedNodeIds.length === 0) return
     const viewport = resolveCanvasFocusAvoidanceViewport({
-      document: documentRef.current,
+      document: readCurrentWorkingDocument(selectedNodeIds),
       nodeIds: selectedNodeIds,
       safeRect,
       viewport: reactFlow.getViewport(),
@@ -2961,6 +3678,7 @@ function CanvasEditorContent(
     props.viewportInsets?.right,
     props.viewportInsets?.top,
     reactFlow,
+    readCurrentWorkingDocument,
     selectedNodeIds,
   ])
   const waitForStableLoad = useCallback(async () => {
@@ -2974,7 +3692,7 @@ function CanvasEditorContent(
     async (command: CanvasViewCommand, guard?: CanvasViewExecutionGuard): Promise<CanvasViewCommandResult> => {
       await waitForStableLoad()
       if (guard) assertCanvasViewGuard(getViewSnapshot(), guard)
-      const document = documentRef.current
+      const document = readCurrentBulkDocument()
       const existingNodeIds = new Set(document.nodes.map((node) => node.id))
       const resolveNodeIds = (nodeIds: readonly string[]) => ({
         foundNodeIds: [...new Set(nodeIds.filter((nodeId) => existingNodeIds.has(nodeId)))],
@@ -3048,6 +3766,7 @@ function CanvasEditorContent(
         }
       }
       if (command.type === "viewport.fit") {
+        const currentFocus = projectCanvasGroupFocus(document, focusedGroupIdRef.current)
         const resolved = resolveCanvasFitTargetNodeIds(document, command.nodeIds)
         foundNodeIds = resolved.foundNodeIds
         missingNodeIds = resolved.missingNodeIds
@@ -3076,22 +3795,20 @@ function CanvasEditorContent(
         if (
           fitGroupScopeChanged ||
           typeof fitGroupId === "string" ||
-          (!resolved.explicit && groupFocus.focusedGroupId)
+          (!resolved.explicit && currentFocus.focusedGroupId)
         ) {
-          const nodeIds = fitGroupId !== undefined ? foundNodeIds : [...groupFocus.scopeNodeIds]
-          await reactFlowRef.current.fitView({
+          const nodeIds = fitGroupId !== undefined ? foundNodeIds : [...currentFocus.scopeNodeIds]
+          await fitDocumentViewport(document, {
             duration,
-            ease: canvasViewportEase,
-            interpolate: "smooth",
             maxZoom: command.maxZoom,
-            nodes: nodeIds.map((id) => ({ id })),
+            nodeIds,
             padding: command.padding,
           })
         } else {
           await fitDocumentViewport(document, {
             duration,
             maxZoom: command.maxZoom,
-            nodeIds: resolved.explicit ? foundNodeIds : [...groupFocus.scopeNodeIds],
+            nodeIds: resolved.explicit ? foundNodeIds : [...currentFocus.scopeNodeIds],
             padding: command.padding,
           })
         }
@@ -3135,12 +3852,11 @@ function CanvasEditorContent(
       focusCanvasNodes,
       getPostMutationRevealGuard,
       getViewSnapshot,
-      groupFocus.focusedGroupId,
-      groupFocus.scopeNodeIds,
       markUserNavigation,
       navigateGroupFocus,
       notificationService,
       prefersReducedMotion,
+      readCurrentBulkDocument,
       reactFlow,
       updateSelection,
       waitForStableLoad,
@@ -3178,50 +3894,54 @@ function CanvasEditorContent(
       y: bounds.top + bounds.height / 2,
     })
   }, [])
+  const resolveIndexedInsertPoint = useCallback(
+    (anchor: CanvasPoint, size: CanvasSize = { height: 200, width: 320 }) =>
+      resolveIndexedCanvasResourcePlacements({
+        anchor,
+        index: canvasDocumentPlacementIndex(
+          canonicalDocumentRef.current,
+          groupFocus.focusedGroupId ?? undefined,
+        ),
+        sizes: [size],
+      })?.[0] ?? anchor,
+    [groupFocus.focusedGroupId],
+  )
   const nextViewportInsertPoint = useCallback(
     (size = { height: 200, width: 320 }) => {
       const safeRect = getSafeViewportRect()
       const worldBounds = safeRect
         ? resolveCanvasVisibleWorldRect({ safeRect, viewport: reactFlowRef.current.getViewport() })
         : undefined
-      if (!worldBounds) return findOpenCanvasPoint(history.document, pointAtCenter(), size)
+      if (!worldBounds) return resolveIndexedInsertPoint(pointAtCenter(), size)
       const preferred = {
         x: worldBounds.left + (worldBounds.width - size.width) / 2,
         y: worldBounds.top + (worldBounds.height - size.height) / 2,
       }
-      return findOpenCanvasPoint(history.document, preferred, size, worldBounds)
+      return resolveIndexedInsertPoint(preferred, size)
     },
-    [getSafeViewportRect, history.document, pointAtCenter],
+    [getSafeViewportRect, pointAtCenter, resolveIndexedInsertPoint],
   )
   const fitCanvas = useCallback(() => {
     markUserNavigation()
-    if (groupFocus.focusedGroupId) {
-      void reactFlowRef.current.fitView({
-        duration: resolveCanvasMotionDuration(CANVAS_MOTION_DURATION.fit, prefersReducedMotion),
-        ease: canvasViewportEase,
-        interpolate: "smooth",
-        maxZoom: CANVAS_FIT_MAX_ZOOM,
-        nodes: [...groupFocus.scopeNodeIds].map((id) => ({ id })),
-        padding: CANVAS_FIT_PADDING,
-      })
-      return
-    }
-    void fitDocumentViewport(documentRef.current, { nodeIds: canvasNodeIds })
+    const document = readCurrentBulkDocument()
+    const currentFocus = projectCanvasGroupFocus(document, focusedGroupIdRef.current)
+    void fitDocumentViewport(document, {
+      maxZoom: CANVAS_MAX_ZOOM,
+      nodeIds: [...currentFocus.scopeNodeIds],
+      padding: CANVAS_FIT_PADDING,
+    })
   }, [
-    canvasNodeIds,
     fitDocumentViewport,
-    groupFocus.focusedGroupId,
-    groupFocus.scopeNodeIds,
     markUserNavigation,
-    prefersReducedMotion,
+    readCurrentBulkDocument,
   ])
   const nextInsertPoint = useCallback(
-    (index = 0) => {
+    (index = 0, size: CanvasSize = { height: 200, width: 320 }) => {
       const point = insertPoint ?? pointerRef.current ?? pointAtCenter()
-      const open = findOpenCanvasPoint(history.document, point)
+      const open = resolveIndexedInsertPoint(point, size)
       return { x: open.x + index * 36, y: open.y + index * 36 }
     },
-    [history.document, insertPoint, pointAtCenter],
+    [insertPoint, pointAtCenter, resolveIndexedInsertPoint],
   )
   const notifyError = useCallback(
     (title: string, error: unknown) => {
@@ -3238,36 +3958,122 @@ function CanvasEditorContent(
   const resourceRefreshController = useMemo(
     () =>
       hydrationService
-        ? new CanvasResourceRefreshController({
+          ? new CanvasResourceRefreshController({
             current: () => ({
               document: resourceHydrationDocumentRef.current,
               scope: resourceMutationScopeRef.current,
             }),
+            ...(typeof projectionStore.queryResourceHierarchy === "function"
+              ? {
+                  exact: {
+                    capture(target: CanvasRendererResourceHierarchyTarget) {
+                      const node = projectionStore.resolveNode?.(target.nodeId)
+                      const entity = projectionStore.resolveNodeEntity(target.nodeId)
+                      if (!node || !entity || !sameCanvasEntity(target.entity, entity)) return null
+                      const resourceIdentity = canvasCanonicalResourceIdentity(node)
+                      if (!resourceIdentity) return null
+                      const transient = resourceStatesRef.current.get(target.nodeId)
+                      const localPreview = localResourcePreviewsRef.current.get(target.nodeId)
+                      if (
+                        transient?.localPreviewToken &&
+                        localPreview?.token === transient.localPreviewToken &&
+                        localPreview.pending
+                      ) return null
+                      const presentedState =
+                        transient && sameCanvasTransientResourceOwner(transient, node, entity)
+                          ? transient.state
+                          : parseCanvasResourceRuntimeState(canvasNodeResourceState(node))
+                      const presentedNode =
+                        presentedState && "resourceState" in node.data
+                          ? { ...node, data: { ...node.data, resourceState: presentedState } }
+                          : node
+                      return {
+                        entity,
+                        node: presentedNode,
+                        nodeId: node.id,
+                        ownerToken: transient,
+                        rendererId: canvasFileRendererIdentity(node, props.fileRendererRegistry),
+                        resourceIdentity,
+                      }
+                    },
+                    header() {
+                      const current = canonicalDocumentRef.current
+                      return { id: current.id, metadata: current.metadata }
+                    },
+                    replace(replacements: readonly CanvasResourceExactRefreshReplacement[]) {
+                      const isCurrent = (
+                        replacement: CanvasResourceExactRefreshReplacement,
+                        states: CanvasPersistentRuntimeMap<CanvasTransientResourceState>,
+                      ) => {
+                        const { capture } = replacement
+                        const node = projectionStore.resolveNode?.(capture.nodeId)
+                        const entity = projectionStore.resolveNodeEntity(capture.nodeId)
+                        return Boolean(
+                          node &&
+                            entity &&
+                            sameCanvasEntity(capture.entity, entity) &&
+                            canvasCanonicalResourceIdentity(node) === capture.resourceIdentity &&
+                            canvasFileRendererIdentity(node, props.fileRendererRegistry) === capture.rendererId &&
+                            states.get(capture.nodeId) === capture.ownerToken,
+                        )
+                      }
+                      if (!replacements.every((replacement) => isCurrent(replacement, resourceStatesRef.current))) {
+                        return false
+                      }
+                      setResourceStates((current) => {
+                        if (!replacements.every((replacement) => isCurrent(replacement, current))) return current
+                        let next = current
+                        for (const { capture, state } of replacements) {
+                          next = next.set(capture.nodeId, {
+                            entity: capture.entity,
+                            rendererId: capture.rendererId,
+                            resourceIdentity: capture.resourceIdentity,
+                            state,
+                          })
+                        }
+                        return next
+                      })
+                      return true
+                    },
+                  },
+                }
+              : {}),
             onError: (error) => notifyErrorRef.current("Could not refresh canvas resources", error),
             queue: reloadQueueRef.current,
-            replace: (document) => replaceRuntimeResourceStatesRef.current(document),
+            replace: (document) => {
+              documentRef.current = document
+              replaceRuntimeResourceStatesRef.current(document)
+            },
             service: hydrationService,
           })
         : undefined,
-    [hydrationService],
+    [hydrationService, projectionStore, props.fileRendererRegistry],
   )
   resourceRefreshControllerRef.current = resourceRefreshController
   useEffect(() => () => resourceRefreshController?.dispose(), [resourceRefreshController])
-  const resourceHydrationTargetSignature = useMemo(
-    () => canvasResourceHydrationTargetSignature(resourceHydrationDocument),
+  const invalidateResourcesAtHierarchyKey = useCallback(
+    (key: CanvasRendererResourceHierarchyKey) => {
+      const result = projectionStore.queryResourceHierarchy?.(key)
+      if (!result || result.status === "unavailable") {
+        return resourceRefreshController?.invalidateResources() ?? Promise.resolve()
+      }
+      return resourceRefreshController?.invalidateExactResources(result.targets) ?? Promise.resolve()
+    },
+    [projectionStore, resourceRefreshController],
+  )
+  const resourceHydrationTargets = useMemo(
+    () => canvasResourceHydrationTargets(resourceHydrationDocument),
     [resourceHydrationDocument],
   )
   useEffect(() => {
-    if (!resourceHydrationTargetSignature) return
-    void resourceRefreshController?.invalidateResources((node) =>
-      isStaleCanvasResourceState(canvasNodeResourceState(node)),
-    )
-  }, [resourceHydrationTargetSignature, resourceRefreshController])
+    if (!resourceHydrationTargets.signature) return
+    void resourceRefreshController?.refreshStaleResources(resourceHydrationTargets.nodeIds)
+  }, [resourceHydrationTargets.signature, resourceRefreshController])
   const beginLocalResourcePreview = useCallback(
     async (nodeId: string, file: File, kind: string | null | undefined, signal: AbortSignal) => {
       if (kind !== "image" && kind !== "video" && kind !== "audio") return undefined
       if (typeof URL.createObjectURL !== "function") return undefined
-      const node = canonicalDocumentRef.current.nodes.find((candidate) => candidate.id === nodeId)
+      const node = resolveCurrentNode(nodeId)
       const entity = projectionStore.resolveNodeEntity(nodeId)
       if (!node || !entity || node.data.kind !== kind) return undefined
       let objectUrl: string
@@ -3280,7 +4086,7 @@ function CanvasEditorContent(
         revokeCanvasLocalResourcePreviewUrl(objectUrl)
         return undefined
       }
-      const currentNode = canonicalDocumentRef.current.nodes.find((candidate) => candidate.id === nodeId)
+      const currentNode = resolveCurrentNode(nodeId)
       const currentEntity = projectionStore.resolveNodeEntity(nodeId)
       if (!currentNode || !sameCanvasEntity(entity, currentEntity) || currentNode.data.kind !== kind) {
         revokeCanvasLocalResourcePreviewUrl(objectUrl)
@@ -3301,11 +4107,10 @@ function CanvasEditorContent(
       }
       localResourcePreviewsRef.current.set(nodeId, preview)
       setResourceStates((current) => {
-        const currentNode = canonicalDocumentRef.current.nodes.find((candidate) => candidate.id === nodeId)
+        const currentNode = resolveCurrentNode(nodeId)
         const currentEntity = projectionStore.resolveNodeEntity(nodeId)
         if (!currentNode || !sameCanvasEntity(entity, currentEntity)) return current
-        const next = new Map(current)
-        next.set(nodeId, {
+        return current.set(nodeId, {
           entity,
           localPreviewToken: token,
           rendererId: canvasFileRendererIdentity(currentNode, props.fileRendererRegistry),
@@ -3317,11 +4122,10 @@ function CanvasEditorContent(
             url: objectUrl,
           },
         })
-        return next
       })
       return token
     },
-    [projectionStore, props.fileRendererRegistry],
+    [projectionStore, props.fileRendererRegistry, resolveCurrentNode],
   )
   const cancelLocalResourcePreview = useCallback(
     (nodeId: string, token: symbol) => {
@@ -3333,8 +4137,7 @@ function CanvasEditorContent(
       }
       setResourceStates((current) => {
         if (current.get(nodeId)?.localPreviewToken !== token) return current
-        const next = new Map(current)
-        const node = canonicalDocumentRef.current.nodes.find((candidate) => candidate.id === nodeId)
+        const node = resolveCurrentNode(nodeId)
         const entity = projectionStore.resolveNodeEntity(nodeId)
         if (
           preview.previous &&
@@ -3343,14 +4146,12 @@ function CanvasEditorContent(
           sameCanvasTransientResourceOwner(preview.previous, node, entity) &&
           preview.previous.rendererId === canvasFileRendererIdentity(node, props.fileRendererRegistry)
         ) {
-          next.set(nodeId, preview.previous)
-        } else {
-          next.delete(nodeId)
+          return current.set(nodeId, preview.previous)
         }
-        return next
+        return current.delete(nodeId)
       })
     },
-    [projectionStore, props.fileRendererRegistry],
+    [projectionStore, props.fileRendererRegistry, resolveCurrentNode],
   )
   const completeLocalResourcePreview = useCallback(
     (nodeId: string, token: symbol) => {
@@ -3361,7 +4162,7 @@ function CanvasEditorContent(
       // An in-flight pass can now finish normally; blindly invalidating it would
       // discard valid work and add another full Main hydration round-trip.
       if (blockedLocalResourcePreviewHydrationsRef.current.delete(token)) {
-        void resourceRefreshController?.invalidateResources((node) => node.id === nodeId)
+        void resourceRefreshController?.invalidateResources([nodeId])
       }
     },
     [resourceRefreshController],
@@ -3394,15 +4195,35 @@ function CanvasEditorContent(
     ],
   )
   selectionActionControllerRef.current = selectionActionController
+  const selectionActionDocument = useMemo(
+    () => boundedViewportEnabled
+      ? createCanvasKeyedNodeDocument(
+          history.document,
+          selectedNodeIds,
+          resolveCurrentNode,
+          selectedEdgeIds,
+          projectionStore.resolveEdge?.bind(projectionStore),
+        )
+      : history.document,
+    [
+      boundedViewportEnabled,
+      history.document,
+      projectionStore,
+      resolveCurrentNode,
+      selectedEdgeIds,
+      selectedNodeIds,
+      viewportProjectionRevision,
+    ],
+  )
   const selectionActionContext = useMemo(
     () =>
       createCanvasSelectionActionContext(
-        history.document,
+        selectionActionDocument,
         selectedNodeIds,
         selectedEdgeIds,
         selectionActionController.signal,
       ),
-    [history.document, selectedEdgeIds, selectedNodeIds, selectionActionController],
+    [selectedEdgeIds, selectedNodeIds, selectionActionController, selectionActionDocument],
   )
   const visibleSelectionActions = useMemo(
     () => getVisibleCanvasSelectionActions(props.selectionActions ?? [], selectionActionContext),
@@ -3482,14 +4303,14 @@ function CanvasEditorContent(
       if (
         hydratingRef.current ||
         leavingRef.current ||
-        selectionActionContext.document !== documentRef.current ||
+        selectionActionContext.document !== selectionActionDocument ||
         !equalIds(new Set(selectionActionContext.selectedNodeIds), selectionRef.current.nodeIds) ||
         !equalIds(new Set(selectionActionContext.selectedEdgeIds), selectionRef.current.edgeIds)
       )
         return
       void selectionActionExecutor.execute(action, selectionActionContext)
     },
-    [selectionActionContext, selectionActionExecutor],
+    [selectionActionContext, selectionActionDocument, selectionActionExecutor],
   )
   const isSelectionActionPending = useCallback(
     (actionId: string) => selectionActionExecutor.isPending(actionId, selectionActionContext.signal),
@@ -3499,10 +4320,10 @@ function CanvasEditorContent(
     () =>
       !hydratingRef.current &&
       !leavingRef.current &&
-      selectionActionContext.document === documentRef.current &&
+      selectionActionContext.document === selectionActionDocument &&
       equalIds(new Set(selectionActionContext.selectedNodeIds), selectionRef.current.nodeIds) &&
       equalIds(new Set(selectionActionContext.selectedEdgeIds), selectionRef.current.edgeIds),
-    [selectionActionContext],
+    [selectionActionContext, selectionActionDocument],
   )
   const selectHeldSelectionDragCandidate = useCallback(
     (nodeId: string) => {
@@ -3519,7 +4340,7 @@ function CanvasEditorContent(
       if (current.nodeIds.has(nodeId)) return true
       const candidateController = new AbortController()
       const candidateContext = createCanvasSelectionActionContext(
-        documentRef.current,
+        createCanvasKeyedNodeDocument(documentRef.current, [nodeId], resolveCurrentNode),
         [nodeId],
         [],
         candidateController.signal,
@@ -3531,7 +4352,7 @@ function CanvasEditorContent(
       updateSelection([nodeId])
       return true
     },
-    [props.selectionDragSource, readOnly, selectionDragGesture, updateSelection],
+    [props.selectionDragSource, readOnly, resolveCurrentNode, selectionDragGesture, updateSelection],
   )
   const setSelectionDragCandidateNode = useCallback(
     (nodeId: string | null) => {
@@ -3718,16 +4539,17 @@ function CanvasEditorContent(
     })
   }, [searchOpen])
   useEffect(() => {
-    if (pendingConnection && !history.document.nodes.some((node) => node.id === pendingConnection.nodeId)) {
+    if (pendingConnection && !resolveCurrentNode(pendingConnection.nodeId)) {
       setPendingConnection(null)
     }
-  }, [history.document.nodes, pendingConnection])
+  }, [pendingConnection, resolveCurrentNode, viewportProjectionRevision])
   const runResourceMutation = useCallback(
     (
       input: Omit<CanvasResourceMutationRequest, "signal">,
       options: {
         focusCreatedNodes?: boolean
         parentGroupId?: string | null
+        resolvedOptimisticPositions?: readonly CanvasPoint[]
         revealCreatedNodes?: boolean
         showSelectionImmediately?: boolean
       } = {},
@@ -3791,6 +4613,7 @@ function CanvasEditorContent(
                 document: documentRef.current,
                 focusVisible: options.focusCreatedNodes === true || options.showSelectionImmediately === true,
                 nodeIds: createdNodeIds,
+                resolveNode: projectionStore.resolveNode?.bind(projectionStore),
                 root: rootRef.current,
               }),
             onReady: () => {
@@ -3830,6 +4653,9 @@ function CanvasEditorContent(
                 document: mutationStartDocument,
                 kind: input.pending?.kind ?? "text",
                 ...(options.parentGroupId ? { parentPresentationKey: options.parentGroupId } : {}),
+                ...(options.resolvedOptimisticPositions
+                  ? { resolvedPositions: options.resolvedOptimisticPositions }
+                  : {}),
               })
             : []
           const baseAlignedGhosts = emptyLocalCreate
@@ -3843,6 +4669,9 @@ function CanvasEditorContent(
                 previewUrls: optimisticPreviewUrls,
                 sources: input.sources,
                 ...(options.parentGroupId ? { parentPresentationKey: options.parentGroupId } : {}),
+                ...(options.resolvedOptimisticPositions
+                  ? { resolvedPositions: options.resolvedOptimisticPositions }
+                  : {}),
               })
           optimisticGhosts = [...emptyGhosts, ...baseAlignedGhosts].map((ghost) =>
             options.focusCreatedNodes || options.showSelectionImmediately
@@ -3927,6 +4756,9 @@ function CanvasEditorContent(
                   previewUrls: optimisticPreviewUrls,
                   sources: input.sources,
                   ...(options.parentGroupId ? { parentPresentationKey: options.parentGroupId } : {}),
+                  ...(options.resolvedOptimisticPositions
+                    ? { resolvedPositions: options.resolvedOptimisticPositions }
+                    : {}),
                 })
                 if (refinedAlignedGhosts.length !== baseAlignedGhosts.length) return
                 const refinedGhosts = refinedAlignedGhosts.map((ghost) =>
@@ -3952,6 +4784,23 @@ function CanvasEditorContent(
           recordPerformanceStage("authority-delivered")
           await completeCanvasResourceMutation({
             afterReload: (createdNodeIds) => {
+              installPreparedResourceStates(result.preparedResources, result.createdNodeIds)
+              if (
+                !projectionStore.subscribeProjectionChanges &&
+                createdNodeIds.length === optimisticGhosts.length
+              ) {
+                const obstacles: CanvasIndexedPlacementObstacle[] = createdNodeIds.map((nodeId, index) => ({
+                  key: nodeId,
+                  ...optimisticGhosts[index]!.position,
+                  ...optimisticGhosts[index]!.size,
+                }))
+                installCanvasDocumentPlacementAppend({
+                  base: mutationStartDocument,
+                  next: projectionStore.getProjection(),
+                  obstacles,
+                  parentId: options.parentGroupId ?? undefined,
+                })
+              }
               scheduleOptimisticHandoff(createdNodeIds)
             },
             cancelPreparedNodes: cancelNodeEntries,
@@ -3999,6 +4848,7 @@ function CanvasEditorContent(
                         optimisticGhosts,
                         createdNodeIds,
                         documentRef.current,
+                        projectionStore.resolveNode?.bind(projectionStore),
                       )
                     ) {
                       await optimisticFocusPromise
@@ -4052,6 +4902,7 @@ function CanvasEditorContent(
       focusCanvasNodes,
       focusOptimisticCanvasGhosts,
       interruptCameraMotion,
+      installPreparedResourceStates,
       mutationService,
       notificationService,
       notifyError,
@@ -4065,6 +4916,7 @@ function CanvasEditorContent(
       startNodeEntryPresentation,
       optimisticResourceScopeKey,
       optimisticOverlay,
+      projectionStore,
       telemetryService,
     ],
   )
@@ -4156,7 +5008,7 @@ function CanvasEditorContent(
   const requestResourceRelink = useCallback(
     (nodeId: string) => {
       if (!mutationService?.relink || readOnly) return
-      const node = documentRef.current.nodes.find((candidate) => candidate.id === nodeId)
+      const node = resolveCurrentNode(nodeId)
       const kind = typeof node?.data.kind === "string" ? node.data.kind : null
       const input = relinkInputRef.current
       if (!input || !canPickLocalCanvasRelinkFile(kind)) return
@@ -4165,7 +5017,7 @@ function CanvasEditorContent(
       relinkKindRef.current = kind
       input.click()
     },
-    [mutationService, readOnly],
+    [mutationService, readOnly, resolveCurrentNode],
   )
   const requestSelectedResourceRelink = useCallback(
     (nodeId: string) => {
@@ -4186,9 +5038,14 @@ function CanvasEditorContent(
   )
   const addTextResource = useCallback(
     (position?: CanvasPoint, relation?: CanvasResourceMutationRequest["relation"], focusAfterCreate = false) => {
+      const anchor = position
+        ? resolveIndexedInsertPoint(position, { height: 180, width: 320 })
+        : focusAfterCreate
+          ? nextViewportInsertPoint({ height: 180, width: 320 })
+          : nextInsertPoint(0, { height: 180, width: 320 })
       runResourceMutation(
         {
-          anchor: position ?? (focusAfterCreate ? nextViewportInsertPoint() : nextInsertPoint()),
+          anchor,
           files: [],
           relation,
           sources: [{ kind: "new-text", sourceId: createCanvasId("source"), text: "" }],
@@ -4196,13 +5053,21 @@ function CanvasEditorContent(
         {
           ...(focusAfterCreate ? { focusCreatedNodes: true } : {}),
           parentGroupId: groupFocus.focusedGroupId,
+          resolvedOptimisticPositions: [anchor],
         },
       )
       setNodeMenuOpen(false)
       setInsertPoint(null)
       telemetryService?.track({ name: "canvas.node.added", properties: { type: "text" } })
     },
-    [groupFocus.focusedGroupId, nextInsertPoint, nextViewportInsertPoint, runResourceMutation, telemetryService],
+    [
+      groupFocus.focusedGroupId,
+      nextInsertPoint,
+      nextViewportInsertPoint,
+      resolveIndexedInsertPoint,
+      runResourceMutation,
+      telemetryService,
+    ],
   )
   const createNodeForType = useCallback(
     (type: string, position: CanvasPoint, data?: Record<string, unknown>) => {
@@ -4315,8 +5180,11 @@ function CanvasEditorContent(
       insertNode(type) {
         return addNode(type)
       },
-      invalidateResources(shouldInvalidate) {
-        return resourceRefreshController?.invalidateResources(shouldInvalidate) ?? Promise.resolve()
+      invalidateResources(nodeIds) {
+        return resourceRefreshController?.invalidateResources(nodeIds) ?? Promise.resolve()
+      },
+      invalidateResourcesAtHierarchyKey(key) {
+        return invalidateResourcesAtHierarchyKey(key)
       },
       openGenerate() {
         requestGenerate()
@@ -4413,7 +5281,7 @@ function CanvasEditorContent(
     const reportFailure = (error: unknown) => notifyError("Could not duplicate Canvas nodes", error)
     const optimisticOperation = optimisticOverlay.begin(
       optimisticResourceScopeKey,
-      createCanvasDuplicateOverlay({ document: canonicalDocument, nodeIds: selectedNodeIds }),
+      createCanvasDuplicateOverlay({ document: readCurrentBulkDocument(), nodeIds: selectedNodeIds }),
     )
     try {
       void props
@@ -4428,13 +5296,13 @@ function CanvasEditorContent(
       reportFailure(error)
     }
   }, [
-    canonicalDocument,
     hasNodeOnlySelection,
     notifyError,
     optimisticOverlay,
     optimisticResourceScopeKey,
     presentNodeEntries,
     props.executeCommand,
+    readCurrentBulkDocument,
     rejectUnmappedCanvasMutation,
     selectedNodeIds,
     selectNodes,
@@ -4458,7 +5326,7 @@ function CanvasEditorContent(
       if (command.type === "nodes.setTitle") add(command.nodeId, { title: command.title.trim().slice(0, 200) })
       if (command.type === "nodes.move") {
         for (const nodeId of command.nodeIds) {
-          const node = canonicalDocument.nodes.find((candidate) => candidate.id === nodeId)
+          const node = resolveCurrentNode(nodeId)
           if (node)
             add(nodeId, { position: { x: node.position.x + command.delta.x, y: node.position.y + command.delta.y } })
         }
@@ -4473,7 +5341,7 @@ function CanvasEditorContent(
       }
       const pendingNodeIds =
         command.type === "canvas.auto-layout"
-          ? (command.nodeIds ?? canonicalDocument.nodes.map((node) => node.id))
+          ? (command.nodeIds ?? readCurrentBulkDocument().nodes.map((node) => node.id))
           : command.type === "nodes.align" ||
               command.type === "nodes.distribute" ||
               command.type === "nodes.layout" ||
@@ -4486,7 +5354,7 @@ function CanvasEditorContent(
                 : []
       if (replacements.length === 0) {
         for (const nodeId of pendingNodeIds) {
-          const node = canonicalDocument.nodes.find((candidate) => candidate.id === nodeId)
+          const node = resolveCurrentNode(nodeId)
           if (!node) continue
           add(nodeId, {
             position: node.position,
@@ -4497,7 +5365,7 @@ function CanvasEditorContent(
       }
       return replacements
     },
-    [canonicalDocument.nodes, projectionStore],
+    [projectionStore, readCurrentBulkDocument, resolveCurrentNode],
   )
   const executeControllerCommand = useCallback(
     (command: CanvasApplicationCommand) => {
@@ -4540,7 +5408,7 @@ function CanvasEditorContent(
       const reportFailure = (error: unknown) => notifyError("Could not duplicate Canvas node", error)
       const optimisticOperation = optimisticOverlay.begin(
         optimisticResourceScopeKey,
-        createCanvasDuplicateOverlay({ document: canonicalDocument, nodeIds: [nodeId] }),
+        createCanvasDuplicateOverlay({ document: readCurrentBulkDocument(), nodeIds: [nodeId] }),
       )
       try {
         void props
@@ -4556,12 +5424,12 @@ function CanvasEditorContent(
       }
     },
     [
-      canonicalDocument,
       notifyError,
       optimisticOverlay,
       optimisticResourceScopeKey,
       presentNodeEntries,
       props.executeCommand,
+      readCurrentBulkDocument,
       rejectUnmappedCanvasMutation,
       selectNodes,
     ],
@@ -4571,12 +5439,13 @@ function CanvasEditorContent(
       if (readOnly) return
       const focusAfterCreate = targetPosition !== undefined
       if (nodeType === "text" || nodeType === "image" || nodeType === "video") {
-        const anchor = documentRef.current.nodes.find((node) => node.id === nodeId)
+        const anchor = resolveCurrentNode(nodeId)
         if (!anchor) return
         const anchorSize = getCanvasNodePresentationSize(anchor)
+        const anchorDocument = createCanvasKeyedNodeDocument(documentRef.current, [anchor.id], resolveCurrentNode)
         const parentPosition =
           anchor.parentId && anchor.parentId !== groupFocus.focusedGroupId
-            ? getNodeWorldPosition(documentRef.current, anchor.parentId)
+            ? getNodeWorldPosition(anchorDocument, anchor.parentId)
             : { x: 0, y: 0 }
         const anchorWorld = {
           x: anchor.position.x + parentPosition.x,
@@ -4610,7 +5479,7 @@ function CanvasEditorContent(
         }
         return
       }
-      const anchor = documentRef.current.nodes.find((node) => node.id === nodeId)
+      const anchor = resolveCurrentNode(nodeId)
       if (!anchor) return
       const created = createNodeForType(nodeType, targetPosition ?? { x: 0, y: 0 })
       if (!created) return
@@ -4692,6 +5561,7 @@ function CanvasEditorContent(
       prepareFocusedNodeEntries,
       prefersReducedMotion,
       readOnly,
+      resolveCurrentNode,
       runResourceMutation,
       selectNodes,
       startNodeEntryPresentation,
@@ -4813,7 +5683,7 @@ function CanvasEditorContent(
       rejectUnmappedCanvasMutation()
       return
     }
-    const selectedAfterCommit = ungroupCanvasNode(history.document, groupId).selectedNodeIds
+    const selectedAfterCommit = ungroupCanvasNode(readCurrentBulkDocument(), groupId).selectedNodeIds
     const reportFailure = (error: unknown) => notifyError("Could not ungroup Canvas nodes", error)
     try {
       void props
@@ -4824,10 +5694,10 @@ function CanvasEditorContent(
     }
   }, [
     groupMenuCapabilities.canUngroup,
-    history.document,
     notifyError,
     props.executeCommand,
     rejectUnmappedCanvasMutation,
+    readCurrentBulkDocument,
     selectNodes,
     selectionContext,
   ])
@@ -4835,69 +5705,80 @@ function CanvasEditorContent(
     (direction: CanvasAlign) => {
       if (!hasNodeOnlySelection || !canArrangeSelection) return
       if (!props.executeCommand) return rejectUnmappedCanvasMutation()
-      executeControllerCommand({ type: "nodes.align", nodeIds: arrangeNodeIds, direction })
+      const nodeIds = resolveCurrentArrangeNodeIds()
+      if (nodeIds.length < 2) return
+      executeControllerCommand({ type: "nodes.align", nodeIds, direction })
     },
     [
-      arrangeNodeIds,
       canArrangeSelection,
       executeControllerCommand,
       hasNodeOnlySelection,
       props.executeCommand,
       rejectUnmappedCanvasMutation,
+      resolveCurrentArrangeNodeIds,
     ],
   )
   const distribute = useCallback(
     (axis: CanvasDistribute) => {
       if (!hasNodeOnlySelection || !canDistributeSelection) return
       if (!props.executeCommand) return rejectUnmappedCanvasMutation()
-      executeControllerCommand({ type: "nodes.distribute", nodeIds: arrangeNodeIds, axis })
+      const nodeIds = resolveCurrentArrangeNodeIds()
+      if (nodeIds.length < 3) return
+      executeControllerCommand({ type: "nodes.distribute", nodeIds, axis })
     },
     [
-      arrangeNodeIds,
       canDistributeSelection,
       executeControllerCommand,
       hasNodeOnlySelection,
       props.executeCommand,
       rejectUnmappedCanvasMutation,
+      resolveCurrentArrangeNodeIds,
     ],
   )
   const layout = useCallback(
     (value: CanvasLayout = "grid") => {
       if (!hasNodeOnlySelection || !canArrangeSelection) return
       if (!props.executeCommand) return rejectUnmappedCanvasMutation()
-      executeControllerCommand({ type: "nodes.layout", nodeIds: arrangeNodeIds, layout: value })
+      const nodeIds = resolveCurrentArrangeNodeIds()
+      if (nodeIds.length < 2) return
+      executeControllerCommand({ type: "nodes.layout", nodeIds, layout: value })
     },
     [
-      arrangeNodeIds,
       canArrangeSelection,
       executeControllerCommand,
       hasNodeOnlySelection,
       props.executeCommand,
       rejectUnmappedCanvasMutation,
+      resolveCurrentArrangeNodeIds,
     ],
   )
   const tidySelection = useCallback(() => {
     if (!canArrangeSelection) return
     if (!props.executeCommand) return rejectUnmappedCanvasMutation()
+    const nodeIds = resolveCurrentArrangeNodeIds()
+    if (nodeIds.length < 2) return
     executeControllerCommand({
       type: "canvas.auto-layout",
-      nodeIds: arrangeNodeIds,
+      nodeIds,
       options: { strategy: autoLayoutStrategy },
     })
   }, [
-    arrangeNodeIds,
     autoLayoutStrategy,
     canArrangeSelection,
     executeControllerCommand,
     props.executeCommand,
     rejectUnmappedCanvasMutation,
+    resolveCurrentArrangeNodeIds,
   ])
   const runCanvasLayout = useCallback(
     (strategy: CanvasDirectedAutoLayoutStrategy) => {
       if (!canLayoutCanvas || hydratingRef.current || leavingRef.current) return
       if (!props.executeCommand) return rejectUnmappedCanvasMutation()
+      const currentDocument = readCurrentBulkDocument()
+      const currentFocus = projectCanvasGroupFocus(currentDocument, focusedGroupIdRef.current)
+      const currentScopeNodeIds = [...currentFocus.scopeNodeIds]
       const command: CanvasApplicationCommand = {
-        ...(groupFocus.focusedGroupId ? { nodeIds: canvasNodeIds } : {}),
+        ...(currentFocus.focusedGroupId ? { nodeIds: currentScopeNodeIds } : {}),
         options: { strategy },
         type: "canvas.auto-layout",
       }
@@ -4908,7 +5789,7 @@ function CanvasEditorContent(
           if (operation) optimisticOverlay.settle(operation.token)
           return fitDocumentViewport(result.document, {
             maxZoom: CANVAS_FIT_MAX_ZOOM,
-            nodeIds: canvasNodeIds,
+            nodeIds: currentScopeNodeIds,
             padding: CANVAS_FIT_PADDING,
           })
         },
@@ -4920,14 +5801,13 @@ function CanvasEditorContent(
     },
     [
       canLayoutCanvas,
-      canvasNodeIds,
       createCommandPresentationOverlay,
       fitDocumentViewport,
-      groupFocus.focusedGroupId,
       notifyError,
       optimisticOverlay,
       optimisticResourceScopeKey,
       props.executeCommand,
+      readCurrentBulkDocument,
       rejectUnmappedCanvasMutation,
     ],
   )
@@ -4941,8 +5821,8 @@ function CanvasEditorContent(
   )
   const getClipboardPayload = useCallback(() => {
     if (!hasNodeOnlySelection) return null
-    return createCanvasClipboardPayload(history.document, selectedNodeIds, props.clipboardScope)
-  }, [hasNodeOnlySelection, history.document, props.clipboardScope, selectedNodeIds])
+    return createCanvasClipboardPayload(readCurrentBulkDocument(), selectedNodeIds, props.clipboardScope)
+  }, [hasNodeOnlySelection, props.clipboardScope, readCurrentBulkDocument, selectedNodeIds])
   const applyClipboardPayload = useCallback(
     (payload: NonNullable<ReturnType<typeof createCanvasClipboardPayload>>) => {
       if (canvasClipboardHasScopeConflict(payload, props.clipboardScope)) {
@@ -4962,12 +5842,11 @@ function CanvasEditorContent(
               y: target.y - Math.min(...roots.map((node) => node.position.y)),
             }
           : undefined
-      const liveNodeIds = new Set(documentRef.current.nodes.map((node) => node.id))
       const sourceNodeIds = payload.nodes.map((node) => node.id)
       if (
         !props.executeCommand ||
         sourceNodeIds.length === 0 ||
-        sourceNodeIds.some((nodeId) => !liveNodeIds.has(nodeId))
+        sourceNodeIds.some((nodeId) => !resolveCurrentNode(nodeId))
       ) {
         notificationService?.show({
           kind: "warning",
@@ -4980,7 +5859,7 @@ function CanvasEditorContent(
       const optimisticOperation = optimisticOverlay.begin(
         optimisticResourceScopeKey,
         createCanvasDuplicateOverlay({
-          document: canonicalDocument,
+          document: readCurrentBulkDocument(),
           nodeIds: sourceNodeIds,
           offset: duplicateOffset,
         }),
@@ -5003,7 +5882,6 @@ function CanvasEditorContent(
       return true
     },
     [
-      canonicalDocument,
       insertPoint,
       notificationService,
       notifyError,
@@ -5012,6 +5890,8 @@ function CanvasEditorContent(
       presentNodeEntries,
       props.clipboardScope,
       props.executeCommand,
+      readCurrentBulkDocument,
+      resolveCurrentNode,
       selectNodes,
     ],
   )
@@ -5230,9 +6110,9 @@ function CanvasEditorContent(
     if (!exportService) return
     const controller = new AbortController()
     void exportService
-      .export({ document: history.document, format: "json", selectedNodeIds }, controller.signal)
+      .export({ document: readCurrentBulkDocument(), format: "json", selectedNodeIds }, controller.signal)
       .then(undefined, (error) => notifyError("Export failed", error))
-  }, [exportService, history.document, notifyError, selectedNodeIds])
+  }, [exportService, notifyError, readCurrentBulkDocument, selectedNodeIds])
 
   const clearOverlays = useCallback(() => {
     snapSessionRef.current = null
@@ -5258,6 +6138,15 @@ function CanvasEditorContent(
     },
     [updateConnectionTargetNode],
   )
+  const selectAllCanvas = useCallback(() => {
+    if (folderFocus) {
+      selectNodes(folderFocusNodes.map((node) => node.id))
+      return
+    }
+    const document = readCurrentBulkDocument()
+    const currentFocus = projectCanvasGroupFocus(document, focusedGroupIdRef.current)
+    selectNodes([...currentFocus.scopeNodeIds])
+  }, [folderFocus, folderFocusNodes, readCurrentBulkDocument, selectNodes])
   const shortcutActions: CanvasShortcutActions = {
     addNode: () => setNodeMenuOpen(true),
     clearSelection: () => {
@@ -5296,7 +6185,7 @@ function CanvasEditorContent(
         : layoutCanvas(),
     openSearch: () => setSearchOpen(true),
     select: () => activateInteractionTool("select"),
-    selectAll: () => selectNodes(canvasNodeIds),
+    selectAll: selectAllCanvas,
     ungroup: () => {
       if (groupMenuCapabilities.canUnfold) unfold()
       else ungroup()
@@ -5322,7 +6211,13 @@ function CanvasEditorContent(
   shortcutRunRef.current = (command) => runCanvasShortcutCommand(command, shortcutActions, readOnly)
   const controller = useMemo(
     () => ({
-      document: history.document,
+      document: viewportProjection
+        ? {
+            ...history.document,
+            edges: [...viewportProjection.edges],
+            nodes: [...(viewportPresentationNodes ?? [])],
+          }
+        : history.document,
       scopeId: currentViewScopeId,
       enteringNodeIds,
       hydrating,
@@ -5360,16 +6255,14 @@ function CanvasEditorContent(
       reloadAuthoritative: reloadAuthoritativeDocument,
       replaceResourceState: (nodeId: string, state: CanvasResourceRuntimeState) =>
         setResourceStates((current) => {
-          const node = canonicalDocument.nodes.find((candidate) => candidate.id === nodeId)
+          const node = resolveCurrentNode(nodeId)
           if (!node) return current
-          const next = new Map(current)
-          next.set(nodeId, {
+          return current.set(nodeId, {
             entity: projectionStore.resolveNodeEntity(nodeId),
             rendererId: canvasFileRendererIdentity(node, props.fileRendererRegistry),
             resourceIdentity: canvasCanonicalResourceIdentity(node),
             state,
           })
-          return next
         }),
       registerPendingDraft: (draft: CanvasPendingDraft) => pendingDraftsRef.current.register(draft),
       removeNode,
@@ -5377,7 +6270,6 @@ function CanvasEditorContent(
       selectNodes,
     }),
     [
-      canonicalDocument.nodes,
       commit,
       connectionNodeTypes,
       quickConnectionNodeTypes,
@@ -5398,6 +6290,7 @@ function CanvasEditorContent(
       requestResourceRelink,
       requestSelectedResourceRelink,
       reloadAuthoritativeDocument,
+      resolveCurrentNode,
       removeNode,
       saveEditableCopy,
       selectNodes,
@@ -5416,6 +6309,8 @@ function CanvasEditorContent(
       projectionStore,
       visibleSelectionActions,
       visibleSelectionDragSource,
+      viewportProjection,
+      viewportPresentationNodes,
     ],
   )
   const groupPresentationController = useMemo(
@@ -5467,7 +6362,7 @@ function CanvasEditorContent(
               !isPositiveFiniteDimension(change.dimensions.height)
             )
               return false
-            const node = nodeById.get(change.id)
+            const node = resolveCurrentNode(change.id)
             return (
               node?.data.kind !== "group" || (!isCanvasGroupFolded(node) && change.id !== groupFocus.focusedGroupId)
             )
@@ -5478,7 +6373,7 @@ function CanvasEditorContent(
           let changed = false
           for (const change of measurementChanges) {
             if (change.type !== "dimensions" || !change.dimensions) continue
-            const node = canonicalDocument.nodes.find((candidate) => candidate.id === change.id)
+            const node = resolveCurrentNode(change.id)
             if (!node) continue
             const canonicalSize = getCanvasNodeSize(node)
             const entity = projectionStore.resolveNodeEntity(change.id)
@@ -5533,15 +6428,14 @@ function CanvasEditorContent(
       }
     },
     [
-      canonicalDocument.nodes,
       canvasPointerNavigationOnly,
       canvasPointerMutationEnabled,
       canvasPointerSelectionEnabled,
       groupFocus.focusedGroupId,
-      nodeById,
       projectionStore,
       props.fileRendererRegistry,
       replaceSelection,
+      resolveCurrentNode,
     ],
   )
   const executeNodeConnection = useCallback(
@@ -5616,7 +6510,7 @@ function CanvasEditorContent(
       const targetScreen = getEventClientPoint(event)
       const targetNodeId =
         start && targetScreen
-          ? getCanvasCardAtScreenPoint(rootRef.current, documentRef.current, targetScreen, start.nodeId)
+          ? getCanvasCardAtScreenPoint(rootRef.current, readCurrentWorkingDocument(), targetScreen, start.nodeId)
           : null
       updateConnectionTargetNode(null)
       if (!start || !targetScreen) return
@@ -5651,18 +6545,24 @@ function CanvasEditorContent(
         targetPosition: reactFlow.screenToFlowPosition(targetScreen),
       })
     },
-    [canvasPointerMutationEnabled, executeNodeConnection, reactFlow, updateConnectionTargetNode],
+    [
+      canvasPointerMutationEnabled,
+      executeNodeConnection,
+      reactFlow,
+      readCurrentWorkingDocument,
+      updateConnectionTargetNode,
+    ],
   )
   const handleNodeDragStart = useCallback<OnNodeDrag<CanvasNode>>(
     (event, node, draggedNodes) => {
       if (!canvasPointerMutationEnabled) return
       rootRef.current?.focus({ preventScroll: true })
-      dispatch({ type: "begin-gesture" })
+      const draggingIds = draggedNodes.length > 0 ? draggedNodes.map((draggedNode) => draggedNode.id) : [node.id]
+      dispatch({ type: "begin-gesture", nodeIds: draggingIds })
       altDragRef.current = null
       updateGroupDropTarget(null)
       setSnapLines([])
-      const snapDocument = documentRef.current
-      const draggingIds = draggedNodes.length > 0 ? draggedNodes.map((draggedNode) => draggedNode.id) : [node.id]
+      const snapDocument = readCurrentWorkingDocument()
       if (event.altKey) {
         const currentSelection = selectionRef.current
         const nodeIds = currentSelection.nodeIds.has(node.id) ? [...currentSelection.nodeIds] : [node.id]
@@ -5679,7 +6579,7 @@ function CanvasEditorContent(
           )
         : null
     },
-    [canvasPointerMutationEnabled, dispatch, updateGroupDropTarget],
+    [canvasPointerMutationEnabled, dispatch, readCurrentWorkingDocument, updateGroupDropTarget],
   )
   const handleNodeDrag = useCallback<OnNodeDrag<CanvasNode>>(
     (event, node, draggedNodes) => {
@@ -5695,10 +6595,10 @@ function CanvasEditorContent(
         return
       }
       updateGroupDropTarget(
-        getCanvasGroupFolderAtScreenPoint(rootRef.current, documentRef.current, pointer, draggedIds),
+        getCanvasGroupFolderAtScreenPoint(rootRef.current, readCurrentWorkingDocument(), pointer, draggedIds),
       )
     },
-    [canvasPointerMutationEnabled, updateGroupDropTarget],
+    [canvasPointerMutationEnabled, readCurrentWorkingDocument, updateGroupDropTarget],
   )
   const handleNodeDragStop = useCallback<OnNodeDrag<CanvasNode>>(() => {
     rootRef.current?.focus({ preventScroll: true })
@@ -5766,7 +6666,7 @@ function CanvasEditorContent(
       const operation = optimisticOverlay.begin(
         optimisticResourceScopeKey,
         createCanvasDuplicateOverlay({
-          document: canonicalDocument,
+          document: readCurrentWorkingDocument(altDrag.sourceNodeIds),
           nodeIds: altDrag.sourceNodeIds,
           offset,
         }),
@@ -5797,7 +6697,6 @@ function CanvasEditorContent(
     updateGroupDropTarget(null)
     dispatch({ type: "end-gesture" })
   }, [
-    canonicalDocument,
     canvasPointerMutationEnabled,
     dispatch,
     notifyError,
@@ -5806,6 +6705,7 @@ function CanvasEditorContent(
     presentNodeEntries,
     projectionStore,
     props.executeCommand,
+    readCurrentWorkingDocument,
     rejectUnmappedCanvasMutation,
     selectNodes,
     updateGroupDropTarget,
@@ -5835,8 +6735,8 @@ function CanvasEditorContent(
     boxSelectionBaselineRef.current = null
   }, [])
   const searchResults = useMemo(
-    () => (searchOpen ? queryCanvasNodes(history.document, { limit: 8, text: query }) : []),
-    [history.document, query, searchOpen],
+    () => (searchOpen ? queryCanvasNodes(readCurrentBulkDocument(), { limit: 8, text: query }) : []),
+    [query, readCurrentBulkDocument, searchOpen, viewportProjectionRevision],
   )
   const interactionProps = interactionPolicy
   const viewportInsetStyle = useMemo(
@@ -5991,7 +6891,7 @@ function CanvasEditorContent(
                       updateConnectionTargetNode(
                         getCanvasCardAtScreenPoint(
                           rootRef.current,
-                          documentRef.current,
+                          readCurrentWorkingDocument(),
                           { x: event.clientX, y: event.clientY },
                           connectionStart.nodeId,
                         ),
@@ -6100,6 +7000,16 @@ function CanvasEditorContent(
                       rootRef.current?.focus()
                     }}
                   >
+                    {viewportProjection ? (
+                      <ViewportPortal>
+                        <CanvasOptimisticViewportLayer
+                          edges={optimisticGhostEdges}
+                          focusedGroupId={focusedGroupId}
+                          nodes={optimisticResourceGhosts}
+                          resolveNode={resolveCurrentNode}
+                        />
+                      </ViewportPortal>
+                    ) : null}
                     {appearance.gridStyle !== "none" ? (
                       <Background
                         color={`${appearance.gridColor}4d`}
@@ -6109,7 +7019,7 @@ function CanvasEditorContent(
                       />
                     ) : null}
                     <CanvasSnapGuides lines={snapLines} />
-                    {miniMapVisible ? (
+                    {miniMapVisible && !viewportProjection?.truncated ? (
                       <MiniMap
                         className="convax-canvas-minimap !h-24 !w-36 !rounded-md !border !border-border !bg-card !shadow-sm"
                         maskColor="color-mix(in oklab, var(--background) 68%, transparent)"

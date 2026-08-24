@@ -22,6 +22,7 @@ import type {
   ProjectIndexManagedBlobAdmission,
 } from "../../canvas/project-index-file-application"
 import {
+  isEditableProjectTextPath,
   projectResourceReferenceKey,
   requireProjectResourceReference,
   type ProjectResourceReference,
@@ -331,22 +332,24 @@ export class ProjectCanvasResourcePreparation implements CanvasResourcePreparati
     throwIfAborted(signal)
     if (source.kind === "new-text") {
       const byteLength = new TextEncoder().encode(source.text).byteLength
-      const [publication, initialPlan] = await Promise.allSettled([
-        this.trace("resource-file-publication", byteLength, () =>
-          this.publisher.publishText({
-            content: source.text,
-            directory: "Notes",
-            extension: ".md",
-            name: source.name,
-            projectId,
-          }),
-        ),
-        this.trace("initial-plan", 0, () => this.prepareProjectIndexParent(projectId, "Notes/pending.md")),
-      ])
-      if (publication.status === "rejected") throw publication.reason
-      const published = publication.value
-      if (initialPlan.status === "rejected") {
-        throw new CanvasResourcePartialFailureError(initialPlan.reason, [{ label: published.path }])
+      const published = await this.trace("resource-file-publication", byteLength, () =>
+        this.publisher.publishText({
+          content: source.text,
+          directory: "Notes",
+          extension: ".md",
+          name: source.name,
+          projectId,
+        }),
+      )
+      try {
+        // File-first is also the exact reconciliation-coverage boundary: once
+        // ProjectIndex accepts the parent directory, the native path already
+        // exists and can be verified without a complete Project plan scan.
+        await this.trace("initial-plan", 0, () =>
+          this.prepareProjectIndexParent(projectId, "Notes/pending.md"),
+        )
+      } catch (error) {
+        throw new CanvasResourcePartialFailureError(error, [{ label: published.path }])
       }
       const reference = requireProjectFileReference(published.path)
       let proof: Extract<CanvasResourceProofRef, { mode: "current-owner-state" }> | undefined
@@ -354,7 +357,6 @@ export class ProjectCanvasResourcePreparation implements CanvasResourcePreparati
         proof = await this.trace("post-pi-proof", byteLength, () =>
           this.publishTextProof({
             content: source.text,
-            ...(initialPlan.value === undefined ? {} : { initialPlan: initialPlan.value }),
             mime: "text/markdown",
             path: reference.path,
             projectId,
@@ -428,6 +430,7 @@ export class ProjectCanvasResourcePreparation implements CanvasResourcePreparati
           name: sourceInfo.name,
           state: {
             contentRevision: text.contentRevision,
+            editableText: isEditableProjectTextPath(reference.path),
             status: "ready",
             text: text.content,
           },
@@ -540,7 +543,6 @@ export class ProjectCanvasResourcePreparation implements CanvasResourcePreparati
 
   private async publishTextProof(input: {
     readonly content: string
-    readonly initialPlan?: ProjectIndexFileMaterializationPlan
     readonly mime: string
     readonly path: string
     readonly projectId: string
@@ -549,7 +551,6 @@ export class ProjectCanvasResourcePreparation implements CanvasResourcePreparati
     const projectId = parseProjectId(input.projectId)
     return this.publishProjectFileProof({
       exactBytes: new TextEncoder().encode(input.content),
-      ...(input.initialPlan === undefined ? {} : { initialPlan: input.initialPlan }),
       mediaClass: "text",
       mime: input.mime,
       path: input.path,
@@ -560,7 +561,6 @@ export class ProjectCanvasResourcePreparation implements CanvasResourcePreparati
   private async publishProjectFileProof(input: {
     readonly exactBytes?: Uint8Array
     readonly exactDigest?: Digest
-    readonly initialPlan?: ProjectIndexFileMaterializationPlan
     readonly mediaClass: "text" | "image" | "video" | "audio" | "file"
     readonly mime: string
     readonly path: string
@@ -583,7 +583,10 @@ export class ProjectCanvasResourcePreparation implements CanvasResourcePreparati
       throw new Error("Project file size changed during Canvas resource preparation")
     }
     const exactDigest = input.exactDigest ?? ordinarySha256(bytes)
-    let plan = input.initialPlan ?? (await this.indexFiles.queryFileMaterializationPlan({ projectId }))
+    const plan = await this.queryProjectIndexMaterializationEntries(
+      projectId,
+      [...projectIndexParentPaths(input.path), input.path],
+    )
     const existing = plan.entries.find((entry) => entry.path === input.path)
     if (existing?.kind === "directory") throw new Error("ProjectIndex path is a directory")
     if (
@@ -604,6 +607,7 @@ export class ProjectCanvasResourcePreparation implements CanvasResourcePreparati
         exactDigest,
         mime: input.mime,
         contentPolicy: contentPolicyForProjectFile(input.path, input.mediaClass),
+        nativeMaterialization: "already-current",
         provenance: input.path === "Generated" || input.path.startsWith("Generated/") ? "generated" : "user",
       }),
     )
@@ -619,8 +623,19 @@ export class ProjectCanvasResourcePreparation implements CanvasResourcePreparati
   ): Promise<ProjectIndexFileMaterializationPlan | undefined> {
     if (!this.indexFiles) return undefined
     const projectId = parseProjectId(projectIdInput)
-    const plan = await this.indexFiles.queryFileMaterializationPlan({ projectId })
+    const plan = await this.queryProjectIndexMaterializationEntries(
+      projectId,
+      projectIndexParentPaths(filePath),
+    )
     return this.ensureProjectIndexDirectories(projectId, filePath, plan)
+  }
+
+  private async queryProjectIndexMaterializationEntries(
+    projectId: ReturnType<typeof parseProjectId>,
+    paths: readonly string[],
+  ): Promise<ProjectIndexFileMaterializationPlan> {
+    if (!this.indexFiles) return Object.freeze({ projectId, entries: Object.freeze([]) })
+    return this.indexFiles.queryFileMaterializationEntries({ projectId, paths })
   }
 
   private async publishManagedAssetProof(input: {
@@ -694,9 +709,13 @@ export class ProjectCanvasResourcePreparation implements CanvasResourcePreparati
       const existing = plan.entries.find((entry) => entry.path === current)
       if (existing?.kind === "file") throw new Error("ProjectIndex parent path is a file")
       if (existing?.kind === "directory") continue
-      const result = await this.indexFiles.createDirectory({ projectId, path: current })
+      const result = await this.indexFiles.createDirectory({
+        projectId,
+        path: current,
+        nativeMaterialization: "already-current",
+      })
       if (result.status !== "committed") {
-        plan = await this.indexFiles.queryFileMaterializationPlan({ projectId })
+        plan = await this.queryProjectIndexMaterializationEntries(projectId, [current])
         if (plan.entries.find((entry) => entry.path === current)?.kind !== "directory") {
           throw new Error("ProjectIndex did not publish the Canvas resource directory")
         }
@@ -712,6 +731,18 @@ export class ProjectCanvasResourcePreparation implements CanvasResourcePreparati
     }
     return plan
   }
+}
+
+function projectIndexParentPaths(filePath: string): readonly string[] {
+  const parentPath = path.posix.dirname(filePath)
+  if (parentPath === ".") return Object.freeze([])
+  const paths: string[] = []
+  let current = ""
+  for (const segment of parentPath.split("/").filter(Boolean)) {
+    current = current ? `${current}/${segment}` : segment
+    paths.push(current)
+  }
+  return Object.freeze(paths)
 }
 
 function localPreparedItem(

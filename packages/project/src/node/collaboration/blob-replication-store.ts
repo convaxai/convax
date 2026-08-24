@@ -141,6 +141,26 @@ interface PresenceIndex {
   readonly entries: readonly PresenceEntry[]
 }
 
+let exactPresenceDigestLookups = 0
+let historicalPresenceEntryVisits = 0
+let presenceIndexSortComparisons = 0
+let presenceIndexRewrites = 0
+
+/** Package-private structural evidence; never enters durable Project state. */
+export function projectBlobPresenceStructureMetricsForTests(): Readonly<{
+  exactDigestLookups: number
+  historicalEntryVisits: number
+  sortComparisons: number
+  indexRewrites: number
+}> {
+  return Object.freeze({
+    exactDigestLookups: exactPresenceDigestLookups,
+    historicalEntryVisits: historicalPresenceEntryVisits,
+    sortComparisons: presenceIndexSortComparisons,
+    indexRewrites: presenceIndexRewrites,
+  })
+}
+
 interface TransferRecord {
   readonly format: "convax.local-blob-transfer"
   readonly projectId: ProjectId
@@ -180,6 +200,7 @@ export class ProjectBlobReplicationStore {
   readonly #protocolDigest: Digest
   readonly #now: () => number
   #presence: PresenceIndex
+  #presenceByDigest: ReadonlyMap<Digest, PresenceEntry>
   #queue: Promise<void> = Promise.resolve()
   readonly #publishedListeners = new Set<(digest: Digest) => void>()
 
@@ -202,6 +223,7 @@ export class ProjectBlobReplicationStore {
     this.#protocolDigest = input.protocolDigest
     this.#now = input.now
     this.#presence = input.presence
+    this.#presenceByDigest = indexPresenceEntries(input.presence.entries)
   }
 
   static async open(input: {
@@ -226,7 +248,7 @@ export class ProjectBlobReplicationStore {
     const previous = await readPresenceIndex(presencePath, projectId, projectEpoch).catch(() => null)
     const generation = String(BigInt(previous?.generation ?? "0") + 1n) as Uint64
     const rebuilt = await rebuildPresence(path.join(root, "cache", "sha256"), projectId, projectEpoch, generation)
-    await replaceJcs(presencePath, rebuilt)
+    await replacePresenceIndex(presencePath, rebuilt)
     return new ProjectBlobReplicationStore({
       root,
       projectId,
@@ -274,6 +296,8 @@ export class ProjectBlobReplicationStore {
       if (BigInt(bytes.byteLength) !== BigInt(reference.blob.byteLength) || ordinarySha256(bytes) !== reference.blob.digest) {
         throw new Error("Blob admission bytes do not match the ProjectIndex reference")
       }
+      const alreadyPresent = this.#presenceEntry(reference.blob.digest)
+      if (alreadyPresent !== undefined) return this.#requireExactPresent(reference, alreadyPresent)
       const staging = path.join(this.#transfersRoot, `admit-${randomUUID()}.part`)
       await writeNewDurable(staging, bytes)
       try {
@@ -339,8 +363,8 @@ export class ProjectBlobReplicationStore {
       for (const blob of blobs) {
         const digest = parseDigest(blob.blobSha256)
         const byteLength = parseUint64(blob.byteLength)
-        const entry = this.#presence.entries.find((candidate) => candidate.blobSha256 === digest && candidate.byteLength === byteLength)
-        if (!entry) continue
+        const entry = this.#presenceEntry(digest)
+        if (!entry || entry.byteLength !== byteLength) continue
         try {
           await verifyFile(this.#blobPath(digest), digest, byteLength)
           result.push(Object.freeze({ blobSha256: digest, byteLength }))
@@ -650,6 +674,8 @@ export class ProjectBlobReplicationStore {
 
   async #publishStaging(reference: ProjectIndexResourceReference, staging: string): Promise<ProjectBlobDurabilityEvidence> {
     await verifyFile(staging, reference.blob.digest, reference.blob.byteLength)
+    const alreadyPresent = this.#presenceEntry(reference.blob.digest)
+    if (alreadyPresent !== undefined) return this.#requireExactPresent(reference, alreadyPresent)
     const target = this.#blobPath(reference.blob.digest)
     await ensureRealDirectory(path.dirname(target))
     try { await fs.link(staging, target) } catch (error) {
@@ -680,21 +706,37 @@ export class ProjectBlobReplicationStore {
   }
 
   async #requirePresent(reference: ProjectIndexResourceReference): Promise<ProjectBlobDurabilityEvidence> {
-    const entry = this.#presence.entries.find((candidate) => candidate.blobSha256 === reference.blob.digest && candidate.byteLength === reference.blob.byteLength)
+    const entry = this.#presenceEntry(reference.blob.digest)
     if (!entry) throw new Error("Project blob is not locally durable")
+    return this.#requireExactPresent(reference, entry)
+  }
+
+  async #requireExactPresent(
+    reference: ProjectIndexResourceReference,
+    entry: PresenceEntry,
+  ): Promise<ProjectBlobDurabilityEvidence> {
+    if (entry.byteLength !== reference.blob.byteLength) throw new Error("Project blob durable presence metadata is inconsistent")
     await verifyFile(this.#blobPath(reference.blob.digest), reference.blob.digest, reference.blob.byteLength)
     return Object.freeze({ format: "convax.local-blob-durability-evidence", reference, presenceGeneration: this.#presence.generation, verifiedObjectKey: entry.verifiedObjectKey })
+  }
+
+  #presenceEntry(digest: Digest): PresenceEntry | undefined {
+    exactPresenceDigestLookups += 1
+    return this.#presenceByDigest.get(digest)
   }
 
   async #removePresence(digest: Digest) { await this.#replacePresence(this.#presence.entries.filter((entry) => entry.blobSha256 !== digest)) }
 
   async #replacePresence(entries: readonly PresenceEntry[]) {
+    const sortedEntries = sortPresenceEntries(entries)
     const next: PresenceIndex = Object.freeze({
       ...this.#presence,
-      entries: Object.freeze([...entries].sort((left, right) => left.blobSha256.localeCompare(right.blobSha256, "en-US"))),
+      entries: sortedEntries,
     })
-    await replaceJcs(this.#presencePath, next)
+    const nextByDigest = indexPresenceEntries(sortedEntries)
+    await replacePresenceIndex(this.#presencePath, next)
     this.#presence = next
+    this.#presenceByDigest = nextByDigest
   }
 
   #validateReference(reference: ProjectIndexResourceReference) {
@@ -819,7 +861,40 @@ async function rebuildPresence(cacheRoot: string, projectId: ProjectId, projectE
       entries.push({ blobSha256: entry.name as Digest, byteLength: stat.size.toString() as Uint64, locationKind: "replication-cache", verifiedObjectKey: `sha256/${prefix.name}/${entry.name}`, verifiedGeneration: generation })
     }
   }
-  return Object.freeze({ format: "convax.local-blob-presence-index", projectId, projectEpoch, generation, entries: Object.freeze(entries.sort((a, b) => a.blobSha256.localeCompare(b.blobSha256, "en-US"))) })
+  return Object.freeze({
+    format: "convax.local-blob-presence-index",
+    projectId,
+    projectEpoch,
+    generation,
+    entries: sortPresenceEntries(entries),
+  })
+}
+
+function sortPresenceEntries(entries: readonly PresenceEntry[]): readonly PresenceEntry[] {
+  const copied: PresenceEntry[] = []
+  for (const entry of entries) {
+    historicalPresenceEntryVisits += 1
+    copied.push(entry)
+  }
+  copied.sort((left, right) => {
+    presenceIndexSortComparisons += 1
+    return left.blobSha256.localeCompare(right.blobSha256, "en-US")
+  })
+  return Object.freeze(copied)
+}
+
+function indexPresenceEntries(entries: readonly PresenceEntry[]): ReadonlyMap<Digest, PresenceEntry> {
+  const indexed = new Map<Digest, PresenceEntry>()
+  for (const entry of entries) {
+    if (indexed.has(entry.blobSha256)) throw new Error("Blob presence index contains duplicate digests")
+    indexed.set(entry.blobSha256, entry)
+  }
+  return indexed
+}
+
+async function replacePresenceIndex(target: string, presence: PresenceIndex): Promise<void> {
+  presenceIndexRewrites += 1
+  await replaceJcs(target, presence)
 }
 
 async function readPresenceIndex(target: string, projectId: ProjectId, projectEpoch: Id128): Promise<PresenceIndex> {

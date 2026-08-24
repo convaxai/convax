@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto"
-import { afterEach, beforeEach, describe, expect, test } from "bun:test"
+import { afterEach, beforeEach, describe, expect, mock, test } from "bun:test"
 import fs from "node:fs/promises"
 import os from "node:os"
 import path from "node:path"
@@ -37,6 +37,28 @@ describe("NodeProjectManager registry", () => {
 
     const registry = JSON.parse(await fs.readFile(path.join(temporaryRoot, "state", "projects.json"), "utf8"))
     expect(registry.projects[0]).not.toHaveProperty("activeCanvasId")
+  })
+
+  test("resolves a live Project by id without rescanning unrelated registry entries", async () => {
+    const registryFile = path.join(temporaryRoot, "state", "projects.json")
+    const reloaded = new NodeProjectManager({ registryFile })
+    const originalReadFile = fs.readFile
+    let registryReads = 0
+    fs.readFile = ((target: Parameters<typeof fs.readFile>[0], ...args: unknown[]) => {
+      if (path.resolve(String(target)) === path.resolve(registryFile)) registryReads += 1
+      return Reflect.apply(originalReadFile, fs, [target, ...args])
+    }) as typeof fs.readFile
+
+    try {
+      expect(await reloaded.resolveProjectRoot({ projectId })).toBe(await fs.realpath(projectRoot))
+      expect(await reloaded.resolveProjectRoot({ projectId })).toBe(await fs.realpath(projectRoot))
+      expect(registryReads).toBe(1)
+    } finally {
+      fs.readFile = originalReadFile
+    }
+
+    await expect(reloaded.forgetProject(projectId)).resolves.toBeTrue()
+    await expect(reloaded.resolveProjectRoot({ projectId })).rejects.toThrow("Project was not found")
   })
 
   test("restores missing private storage for the same registered Project without touching ordinary files", async () => {
@@ -85,7 +107,7 @@ describe("NodeProjectManager registry", () => {
     await fs.mkdir(outsideRoot)
     await fs.symlink(outsideRoot, path.join(unsafeRoot, ".convax"))
 
-    await expect(manager.addProject(unsafeRoot)).rejects.toThrow("symbolic link")
+    await expect(manager.addProject(unsafeRoot)).rejects.toThrow(/symbolic link/i)
     expect(await fs.readdir(outsideRoot)).toEqual([])
   })
 
@@ -133,6 +155,90 @@ describe("NodeProjectManager registry", () => {
     expect(await fs.readFile(legacyDocument, "utf8")).toBe("legacy-document")
     expect(await fs.readFile(path.join(projectRoot, "keep.md"), "utf8")).toBe("ordinary")
     expect(await fs.readFile(path.join(temporaryRoot, "state", "projects.json"))).toEqual(registryBefore)
+  })
+
+  test("runs the immediate-predecessor gate before add, list, touch, and private-storage registration", async () => {
+    const migratingRoot = path.join(temporaryRoot, "migrating-project")
+    const retiredCanvasRoot = path.join(migratingRoot, ".convax", "canvases")
+    const migratingProjectId = "project_migrating"
+    await fs.mkdir(retiredCanvasRoot, { recursive: true })
+    await fs.writeFile(
+      path.join(migratingRoot, ".convax", "project.json"),
+      JSON.stringify({ projectId: migratingProjectId, schemaVersion: "convax.project/1" }),
+    )
+    await fs.writeFile(path.join(retiredCanvasRoot, "catalog.json"), "sealed predecessor")
+    await fs.writeFile(path.join(migratingRoot, "keep.md"), "ordinary project data")
+    const calls: Array<{ projectId: string; projectRoot: string }> = []
+    const migrationRegistryFile = path.join(temporaryRoot, "migration-state", "projects.json")
+    const migrating = new NodeProjectManager({
+      collaborationMigration: {
+        async ensureCurrent(input) {
+          calls.push({ ...input })
+          const registry = JSON.parse(await fs.readFile(migrationRegistryFile, "utf8")) as {
+            projects: Array<{ id: string; rootPath: string }>
+          }
+          expect(registry.projects).toContainEqual(expect.objectContaining({
+            id: migratingProjectId,
+            rootPath: await fs.realpath(migratingRoot),
+          }))
+          const retired = await fs.lstat(retiredCanvasRoot).catch(() => null)
+          if (retired) {
+            await fs.rm(retiredCanvasRoot, { recursive: true })
+            return { status: "migrated" as const }
+          }
+          return { status: "current" as const }
+        },
+      },
+      registryFile: migrationRegistryFile,
+    })
+
+    const added = await migrating.addProject(migratingRoot)
+    expect(added.id).toBe(migratingProjectId)
+    expect(added).not.toHaveProperty("recovery")
+    expect((await migrating.listProjects())[0]).not.toHaveProperty("recovery")
+    await migrating.touchProject(migratingProjectId)
+    await migrating.ensureRegisteredProjectPrivateStorage({
+      projectId: migratingProjectId,
+      projectRoot: await fs.realpath(migratingRoot),
+    })
+
+    expect(calls).toHaveLength(4)
+    expect(calls.every((call) => call.projectId === migratingProjectId)).toBeTrue()
+    expect(new Set(calls.map((call) => call.projectRoot))).toEqual(new Set([await fs.realpath(migratingRoot)]))
+    expect(await fs.readFile(path.join(migratingRoot, "keep.md"), "utf8")).toBe("ordinary project data")
+  })
+
+  test("keeps a failed predecessor migration visible as recovery without hiding failures for current data", async () => {
+    const legacyRoot = path.join(temporaryRoot, "failed-migration-project")
+    const legacyCatalog = path.join(legacyRoot, ".convax", "canvases", "catalog.json")
+    await fs.mkdir(path.dirname(legacyCatalog), { recursive: true })
+    await fs.writeFile(
+      path.join(legacyRoot, ".convax", "project.json"),
+      JSON.stringify({ projectId: "project_failed_migration", schemaVersion: "convax.project/1" }),
+    )
+    await fs.writeFile(legacyCatalog, "unsupported")
+    const failed = new NodeProjectManager({
+      collaborationMigration: { ensureCurrent: async () => { throw new Error("migration rejected") } },
+      registryFile: path.join(temporaryRoot, "failed-migration-state", "projects.json"),
+    })
+
+    expect(await failed.addProject(legacyRoot)).toMatchObject({
+      recovery: { status: "unsupported-project-data" },
+    })
+    expect((await failed.listProjects())[0]).toMatchObject({
+      recovery: { status: "unsupported-project-data" },
+    })
+    await expect(failed.touchProject("project_failed_migration")).rejects.toThrow("migration rejected")
+    expect(await fs.readFile(legacyCatalog, "utf8")).toBe("unsupported")
+    expect(await fs.lstat(path.join(legacyRoot, ".convax", "assets")).catch(() => null)).toBeNull()
+
+    const currentRoot = path.join(temporaryRoot, "current-migration-error")
+    await fs.mkdir(currentRoot)
+    const current = new NodeProjectManager({
+      collaborationMigration: { ensureCurrent: async () => { throw new Error("unexpected migration failure") } },
+      registryFile: path.join(temporaryRoot, "current-migration-state", "projects.json"),
+    })
+    await expect(current.addProject(currentRoot)).rejects.toThrow("unexpected migration failure")
   })
 
   test("persists, renames, and forgets projects without deleting their folders", async () => {
@@ -261,6 +367,89 @@ describe("NodeProjectManager registry", () => {
 
     expect((await manager.listProjects()).map((project) => project.id)).toEqual([projectId])
     await expect(manager.addProject(projectRoot)).rejects.toThrow()
+  })
+})
+
+describe("NodeProjectManager filesystem events", () => {
+  test("suppresses an exact verified internal publication and fails open for external changes", async () => {
+    let onChange: ((eventType: string, filename: string | Buffer | null) => void) | undefined
+    const consume = mock(async ({ path: eventPath }: { path: string; projectId: string }) =>
+      eventPath === "Notes/internal.md",
+    )
+    const fakeWatcher = {
+      close() {},
+      once() {
+        return fakeWatcher
+      },
+    }
+    const watched = new NodeProjectManager({
+      filesystemEventCoverage: { cover: () => () => undefined, consume },
+      registryFile: path.join(temporaryRoot, "watched-state", "projects.json"),
+      watchDebounceMs: 0,
+      watchFileSystem(_rootPath, _options, listener) {
+        onChange = listener
+        return fakeWatcher as never
+      },
+    })
+    const watchedProject = await watched.addProject(projectRoot)
+    const events: Array<{ kind: string; path?: string; projectId: string }> = []
+    const stop = await watched.watchProject(watchedProject.id, (event) => events.push(event))
+
+    onChange?.("rename", "Notes/internal.md")
+    await new Promise((resolve) => setTimeout(resolve, 10))
+    expect(events).toEqual([])
+
+    onChange?.("rename", "Notes/internal.md")
+    onChange?.("change", "Notes/external.md")
+    onChange?.("change", "Assets/external.png")
+    await new Promise((resolve) => setTimeout(resolve, 10))
+    expect(events).toEqual([
+      { kind: "filesystem", projectId: watchedProject.id },
+    ])
+    onChange?.("change", "Notes/Cafe\u0301.md")
+    await new Promise((resolve) => setTimeout(resolve, 10))
+    onChange?.("change", "../escape.md")
+    await new Promise((resolve) => setTimeout(resolve, 10))
+    expect(events).toEqual([
+      { kind: "filesystem", projectId: watchedProject.id },
+      { kind: "filesystem", path: "Notes/Café.md", projectId: watchedProject.id },
+      { kind: "filesystem", projectId: watchedProject.id },
+    ])
+    expect(consume).toHaveBeenCalledTimes(5)
+    stop()
+  })
+
+  test("does not deliver a late filesystem event after its watcher is disposed", async () => {
+    let onChange: ((eventType: string, filename: string | Buffer | null) => void) | undefined
+    let settleConsume!: (covered: boolean) => void
+    const consume = mock(() => new Promise<boolean>((resolve) => { settleConsume = resolve }))
+    const fakeWatcher = {
+      close() {},
+      once() {
+        return fakeWatcher
+      },
+    }
+    const watched = new NodeProjectManager({
+      filesystemEventCoverage: { cover: () => () => undefined, consume },
+      registryFile: path.join(temporaryRoot, "disposed-watch-state", "projects.json"),
+      watchDebounceMs: 0,
+      watchFileSystem(_rootPath, _options, listener) {
+        onChange = listener
+        return fakeWatcher as never
+      },
+    })
+    const watchedProject = await watched.addProject(projectRoot)
+    const events: Array<{ kind: string; path?: string; projectId: string }> = []
+    const stop = await watched.watchProject(watchedProject.id, (event) => events.push(event))
+
+    onChange?.("change", "Notes/late.md")
+    await new Promise((resolve) => setTimeout(resolve, 5))
+    expect(consume).toHaveBeenCalledTimes(1)
+    stop()
+    settleConsume(false)
+    await new Promise((resolve) => setTimeout(resolve, 5))
+
+    expect(events).toEqual([])
   })
 })
 

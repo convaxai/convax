@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, test } from "bun:test"
+import { afterEach, beforeEach, describe, expect, mock, test } from "bun:test"
 import { createHash } from "node:crypto"
 import fs from "node:fs/promises"
 import os from "node:os"
@@ -314,6 +314,14 @@ describe("ProjectCanvasResourceHydrator", () => {
     await fs.writeFile(path.join(directory, "hero.png"), bytes)
     const reference = currentProjectReference(projectId, bytes, "image/png")
     const ownerProofDigest = projectIndexResourceReferenceDigest(reference)
+    const queryCurrentResources = mock(async () => {
+      throw new Error("Hydration must not query the full ProjectIndex resource projection")
+    })
+    const queryCurrentResourcesExact = mock(async () => [{
+      materializedPath: "assets/images/hero.png",
+      reference,
+      storageClass: "project-file" as const,
+    }])
     const canonicalHydrator = new ProjectCanvasResourceHydrator(
       manager,
       assets,
@@ -325,18 +333,9 @@ describe("ProjectCanvasResourceHydrator", () => {
       },
       {
         currentResources: {
-          async queryCurrentBlobDigests() {
-            return new Set([reference.blob.digest])
-          },
-          async queryCurrentResources() {
-            return [
-              {
-                materializedPath: "assets/images/hero.png",
-                reference,
-                storageClass: "project-file" as const,
-              },
-            ]
-          },
+          async queryCurrentBlobDigests() { return new Set([reference.blob.digest]) },
+          queryCurrentResources,
+          queryCurrentResourcesExact,
         },
         maximumMediaBytes: 1024,
       },
@@ -392,6 +391,11 @@ describe("ProjectCanvasResourceHydrator", () => {
     })
     expect(hydrated.nodes[1]).toBe(document.nodes[1])
     expect(hydrated.nodes[1]!.data.resourceState).toEqual({ status: "stale" })
+    expect(queryCurrentResources).not.toHaveBeenCalled()
+    expect(queryCurrentResourcesExact).toHaveBeenCalledWith({
+      projectId,
+      targets: [{ uri: reference.canonicalUri, ownerProofDigest }],
+    })
   })
 
   test("hydrates the first stale canonical new-text projection into an immediately editable runtime", async () => {
@@ -408,16 +412,17 @@ describe("ProjectCanvasResourceHydrator", () => {
       contentDigest: reference.blob.digest,
       ownerProofDigest: projectIndexResourceReferenceDigest(reference),
     }
-    let currentResourceQueries = 0
+    const queryCurrentResources = mock(async () => {
+      throw new Error("Hydration must not query the full ProjectIndex resource projection")
+    })
+    const queryCurrentResourcesExact = mock(async () => [
+      { materializedPath: "Notes/new-note.md", reference, storageClass: "project-file" as const },
+    ])
     const canonicalHydrator = new ProjectCanvasResourceHydrator(manager, assets, () => "unused", {
       currentResources: {
-        async queryCurrentBlobDigests() {
-          return new Set([reference.blob.digest])
-        },
-        async queryCurrentResources() {
-          currentResourceQueries += 1
-          return [{ materializedPath: "Notes/new-note.md", reference, storageClass: "project-file" as const }]
-        },
+        async queryCurrentBlobDigests() { return new Set([reference.blob.digest]) },
+        queryCurrentResources,
+        queryCurrentResourcesExact,
       },
     })
     const metadata = { [canvasProjectionResourceMetadataKey]: resource }
@@ -440,7 +445,11 @@ describe("ProjectCanvasResourceHydrator", () => {
       projectId,
     })
 
-    expect(currentResourceQueries).toBe(1)
+    expect(queryCurrentResources).not.toHaveBeenCalled()
+    expect(queryCurrentResourcesExact).toHaveBeenCalledWith({
+      projectId,
+      targets: [{ uri: reference.canonicalUri, ownerProofDigest: resource.ownerProofDigest }],
+    })
     expect(hydrated.nodes[0]!.data.metadata).toBe(metadata)
     expect(hydrated.nodes[0]!.data.resourceState).toEqual({
       contentRevision: reference.blob.digest,
@@ -450,6 +459,52 @@ describe("ProjectCanvasResourceHydrator", () => {
       status: "ready",
       text: "# New note",
     })
+  })
+
+  test("fails closed without an exact owner query and never falls back to the full resource projection", async () => {
+    const bytes = Buffer.from([0x89, 0x50, 0x4e, 0x47])
+    const reference = currentProjectReference(projectId, bytes, "image/png")
+    const resource = {
+      format: "convax.canvas-resource-ref" as const,
+      uri: reference.canonicalUri,
+      mediaClass: "image" as const,
+      mime: reference.blob.mime,
+      byteLength: reference.blob.byteLength,
+      contentDigest: reference.blob.digest,
+      ownerProofDigest: projectIndexResourceReferenceDigest(reference),
+    }
+    const queryCurrentResources = mock(async () => {
+      throw new Error("Hydration must not query the full ProjectIndex resource projection")
+    })
+    const exactOnlyHydrator = new ProjectCanvasResourceHydrator(
+      manager,
+      assets,
+      () => { throw new Error("An unverified resource must not receive a runtime URL") },
+      {
+        currentResources: {
+          async queryCurrentBlobDigests() { return new Set([reference.blob.digest]) },
+          queryCurrentResources,
+        },
+      },
+    )
+    const document = createCanvasDocument({
+      id: "canvas-exact-owner-unavailable",
+      nodes: [createMediaNode({
+        id: "unverified",
+        position: { x: 0, y: 0 },
+        resource: {
+          id: "unverified-resource",
+          kind: "image",
+          metadata: { [canvasProjectionResourceMetadataKey]: resource },
+          name: "unverified.png",
+          state: { status: "stale" },
+        },
+      })],
+    })
+
+    const hydrated = await exactOnlyHydrator.hydrateStale({ document, projectId })
+    expect(hydrated.nodes[0]!.data.resourceState).toEqual({ status: "stale" })
+    expect(queryCurrentResources).not.toHaveBeenCalled()
   })
 
   test("hydrates a canonical managed resource from its exact ProjectIndex storage class without persisting native metadata", async () => {
@@ -475,10 +530,9 @@ describe("ProjectCanvasResourceHydrator", () => {
       },
       {
         currentResources: {
-          async queryCurrentBlobDigests() {
-            return new Set([reference.blob.digest])
-          },
-          async queryCurrentResources() {
+          async queryCurrentBlobDigests() { return new Set([reference.blob.digest]) },
+          async queryCurrentResources() { throw new Error("must not query the full projection") },
+          async queryCurrentResourcesExact() {
             return [{ materializedPath: null, reference, storageClass: "managed-blob" as const }]
           },
         },
@@ -601,10 +655,9 @@ describe("ProjectCanvasResourceHydrator", () => {
       },
       {
         currentResources: {
-          async queryCurrentBlobDigests() {
-            return new Set([reference.blob.digest])
-          },
-          async queryCurrentResources() {
+          async queryCurrentBlobDigests() { return new Set([reference.blob.digest]) },
+          async queryCurrentResources() { throw new Error("must not query the full projection") },
+          async queryCurrentResourcesExact() {
             return [{ materializedPath: null, reference, storageClass: "project-file" as const }]
           },
         },

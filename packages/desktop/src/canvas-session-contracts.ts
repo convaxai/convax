@@ -3,7 +3,13 @@ import type {
   CanvasApplicationCommandResult,
   CanvasDocumentRef,
 } from "@convax/canvas/application"
-import type { BoundedOperationReceipt, CanvasEntityRef, CanvasRendererCommand } from "@convax/canvas/collaboration"
+import type {
+  BoundedOperationReceipt,
+  CanvasCertifiedProjectionIdentity,
+  CanvasEntityRef,
+  CanvasRendererResourceHierarchySnapshot,
+  CanvasRendererCommand,
+} from "@convax/canvas/collaboration"
 import type { CanvasDocument } from "@convax/canvas/core"
 import type { Digest, Id128 } from "@convax/collaboration"
 
@@ -33,6 +39,10 @@ export interface CanvasSessionProjectionDto {
     readonly nodeId: string
     readonly entity: CanvasEntityRef & { readonly kind: "node" }
   }>[]
+  /** Exact owner commitment cursor for base-bound incremental presentation patches. */
+  readonly projectionIdentity: CanvasCertifiedProjectionIdentity
+  /** Project-owned transient path classification bound to this exact projection. */
+  readonly resourceHierarchy: CanvasRendererResourceHierarchySnapshot
   readonly canUndo: boolean
   readonly canRedo: boolean
 }
@@ -54,7 +64,10 @@ export interface CanvasRendererSessionMutationResult {
   }>
 }
 
-export interface CanvasRendererApplicationMutationResult extends Omit<CanvasApplicationCommandResult, "document"> {
+export interface CanvasRendererApplicationMutationResult extends Omit<
+  CanvasApplicationCommandResult,
+  "createdResourceNodeIds" | "document"
+> {
   readonly projection: CanvasSessionProjectionDto
   readonly acceptedFrameDigest: Digest
 }

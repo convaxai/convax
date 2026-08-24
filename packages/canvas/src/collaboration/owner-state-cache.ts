@@ -11,14 +11,24 @@ const CANONICAL_KEYS = Object.freeze([
 ] as const)
 type CanonicalKey = (typeof CANONICAL_KEYS)[number]
 type CollectionKey = Exclude<CanonicalKey, "format" | "identity" | "meta">
-interface CanonicalPair { readonly key: string; readonly value: unknown; readonly bytes: Uint8Array; readonly evidence: CanonicalJcsEvidence }
+interface CanonicalPair {
+  readonly key: string
+  readonly tuple: readonly [string, unknown]
+  readonly evidence: CanonicalJcsEvidence
+}
 interface CanonicalFragments {
   readonly values: ReadonlyMap<CanonicalKey, Uint8Array>
   readonly pairs: ReadonlyMap<CollectionKey, readonly CanonicalPair[]>
+  readonly evidences: ReadonlyMap<CanonicalKey, CanonicalJcsEvidence>
   readonly evidence: CanonicalJcsEvidence
-  readonly bytes: Uint8Array
 }
 const fragmentsBySnapshot = new WeakMap<CanvasSnapshot, CanonicalFragments>()
+const bytesByPairCollection = new WeakMap<readonly CanonicalPair[], Uint8Array>()
+const bytesByPair = new WeakMap<CanonicalPair, Uint8Array>()
+let canonicalAssemblies = 0
+let collectionByteAssemblies = 0
+let pairByteEncodes = 0
+let evidenceArrayEntries = 0
 
 interface CacheEntry {
   root: unknown
@@ -58,10 +68,17 @@ export class CanvasOwnerStateCache {
       this.canonicalTraversals += 1
       const snapshot = this.validate(document)
       if (issuer) {
-        const fragments = createFragments(snapshot, issuer)
-        fragmentsBySnapshot.set(snapshot, fragments)
-        entry.canonicalBytes = fragments.bytes
-        entry.canonicalEvidence = fragments.evidence
+        try {
+          const fragments = fragmentsBySnapshot.get(snapshot) ?? createFragments(snapshot, issuer)
+          if (!fragmentsBySnapshot.has(snapshot)) fragmentsBySnapshot.set(snapshot, fragments)
+          entry.canonicalBytes = assemble(fragments)
+          entry.canonicalEvidence = fragments.evidence
+        } catch {
+          // Branded canonical evidence is acceleration-only. A legal validated
+          // owner state always retains the exact canonical encoder fallback.
+          entry.canonicalBytes = encodeValidatedCanvasCanonicalState(snapshot)
+          entry.canonicalEvidence = undefined
+        }
       } else {
         entry.canonicalBytes = encodeValidatedCanvasCanonicalState(snapshot)
       }
@@ -76,26 +93,16 @@ export class CanvasOwnerStateCache {
   installValidatedSnapshot(
     document: Y.Doc,
     snapshot: CanvasSnapshot,
-    incremental?: Readonly<{
-      base: CanvasSnapshot
-      changed: ReadonlyMap<string, readonly string[]>
-      issuer: CanonicalJcsEvidenceIssuer
-    }>,
   ): void {
     const entry = this.entry(document)
     entry.snapshot = snapshot
+    // The current protocol commits the issuer-bound Merkle root. Canonical JCS
+    // bytes/evidence are cold audit and recovery material only; constructing a
+    // flat evidence array here would enumerate retained history on every append.
+    entry.canonicalBytes = undefined
+    entry.canonicalEvidence = undefined
     entry.canonicalStateDigest = undefined
     entry.certifiedDurableHeadDigest = undefined
-    const baseFragments = incremental ? fragmentsBySnapshot.get(incremental.base) : undefined
-    if (incremental && baseFragments) {
-      const fragments = createFragments(snapshot, incremental.issuer, baseFragments, incremental.changed)
-      fragmentsBySnapshot.set(snapshot, fragments)
-      entry.canonicalBytes = fragments.bytes
-      entry.canonicalEvidence = fragments.evidence
-    } else {
-      entry.canonicalBytes = undefined
-      entry.canonicalEvidence = undefined
-    }
   }
 
   transferValidatedSnapshot(
@@ -106,10 +113,11 @@ export class CanvasOwnerStateCache {
     durableHeadDigest: Digest,
   ): void {
     const sourceEntry = this.entry(source)
-    if (sourceEntry.snapshot !== snapshot || sourceEntry.canonicalBytes === undefined) return
+    if (sourceEntry.snapshot !== snapshot) return
     const targetEntry = this.entry(target)
     targetEntry.snapshot = snapshot
     targetEntry.canonicalBytes = sourceEntry.canonicalBytes?.slice()
+    targetEntry.canonicalEvidence = sourceEntry.canonicalEvidence
     targetEntry.canonicalStateDigest = canonicalStateDigest
     targetEntry.certifiedDurableHeadDigest = durableHeadDigest
   }
@@ -123,7 +131,8 @@ export class CanvasOwnerStateCache {
     const entry = this.entry(document)
     const identity = entry.snapshot?.identity
     if (
-      entry.snapshot === undefined || entry.canonicalBytes === undefined || identity === undefined ||
+      entry.snapshot === undefined ||
+      identity === undefined ||
       entry.certifiedDurableHeadDigest !== durableHeadDigest ||
       entry.canonicalStateDigest !== expectedCanonicalStateDigest ||
       scope.docKind !== "canvas" || scope.docId !== identity.canvasId ||
@@ -135,6 +144,21 @@ export class CanvasOwnerStateCache {
   /** Package-private benchmark evidence; never enters protocol or diagnostics. */
   traversalCounts(): Readonly<{ fullValidation: number; canonical: number }> {
     return Object.freeze({ fullValidation: this.fullValidationTraversals, canonical: this.canonicalTraversals })
+  }
+
+  /** Package-private canonical-work evidence. Serialization remains separately visible. */
+  canonicalWorkCounts(): Readonly<{
+    assemblies: number
+    collectionByteAssemblies: number
+    pairByteEncodes: number
+    evidenceArrayEntries: number
+  }> {
+    return Object.freeze({
+      assemblies: canonicalAssemblies,
+      collectionByteAssemblies,
+      pairByteEncodes,
+      evidenceArrayEntries,
+    })
   }
 
   private entry(document: Y.Doc): CacheEntry {
@@ -174,27 +198,16 @@ export class CanvasOwnerStateCache {
 function createFragments(
   snapshot: CanvasSnapshot,
   issuer: CanonicalJcsEvidenceIssuer,
-  base?: CanonicalFragments,
-  changed?: ReadonlyMap<string, readonly string[]>,
 ): CanonicalFragments {
   const values = new Map<CanonicalKey, Uint8Array>()
   const pairs = new Map<CollectionKey, readonly CanonicalPair[]>()
   const evidences = new Map<CanonicalKey, CanonicalJcsEvidence>()
   for (const key of CANONICAL_KEYS) {
-    const changedKeys = changed?.get(key)
-    if (base && changed && changedKeys === undefined) {
-      values.set(key, base.values.get(key)!.slice())
-      evidences.set(key, fragmentEvidence(base, key, issuer, snapshot))
-      if (isCollection(key)) pairs.set(key, base.pairs.get(key)!)
-      continue
-    }
     if (isCollection(key)) {
-      const nextPairs = base && changedKeys
-        ? insertPairs(base.pairs.get(key)!, snapshotCollection(snapshot, key), key, changedKeys, issuer)
-        : allPairs(snapshotCollection(snapshot, key), key, issuer)
+      const nextPairs = allPairs(snapshotCollection(snapshot, key), key, issuer)
       pairs.set(key, nextPairs)
-      values.set(key, encodePairs(nextPairs))
-      evidences.set(key, issuer.composeArray(nextPairs.map((pair) => pair.evidence)))
+      evidenceArrayEntries += nextPairs.length
+      evidences.set(key, issuer.composeArray(nextPairs.map((item) => item.evidence)))
     } else {
       const value = key === "format" ? "convax.canvas-canonical-state" : snapshot[key]
       values.set(key, encodeRestrictedJcs(value))
@@ -202,12 +215,7 @@ function createFragments(
     }
   }
   const evidence = issuer.composeObject(CANONICAL_KEYS.map((key) => [key, evidences.get(key)!] as const))
-  return Object.freeze({ values, pairs, evidence, bytes: assemble(values) })
-}
-
-function fragmentEvidence(base: CanonicalFragments, key: CanonicalKey, issuer: CanonicalJcsEvidenceIssuer, snapshot: CanvasSnapshot): CanonicalJcsEvidence {
-  if (isCollection(key)) return issuer.composeArray(base.pairs.get(key)!.map((pair) => pair.evidence))
-  return issuer.encodeEvidence(key === "format" ? "convax.canvas-canonical-state" : snapshot[key])
+  return Object.freeze({ values, pairs, evidences, evidence })
 }
 
 function isCollection(key: CanonicalKey): key is CollectionKey {
@@ -228,35 +236,57 @@ function canonicalPairValue(key: CollectionKey, value: unknown): unknown {
 
 function pair(key: string, value: unknown, collection: CollectionKey, issuer: CanonicalJcsEvidenceIssuer): CanonicalPair {
   const canonicalValue = canonicalPairValue(collection, value)
-  const tuple = [key, canonicalValue] as const
-  return Object.freeze({ key, value: canonicalValue, bytes: encodeRestrictedJcs(tuple), evidence: issuer.encodeEvidence(tuple) })
+  const tuple = Object.freeze([key, canonicalValue] as const)
+  return Object.freeze({ key, tuple, evidence: issuer.encodeEvidence(tuple) })
 }
 
-function allPairs(collection: ReadonlyMap<string, unknown>, key: CollectionKey, issuer: CanonicalJcsEvidenceIssuer): readonly CanonicalPair[] {
-  return Object.freeze([...collection].sort(([a], [b]) => compareUtf8(a, b)).map(([name, value]) => pair(name, value, key, issuer)))
-}
-
-function insertPairs(base: readonly CanonicalPair[], collection: ReadonlyMap<string, unknown>, collectionKey: CollectionKey, keys: readonly string[], issuer: CanonicalJcsEvidenceIssuer): readonly CanonicalPair[] {
-  const result = [...base]
-  for (const key of keys) {
-    const value = collection.get(key)
-    if (value === undefined) throw new TypeError(`Canvas canonical insertion is missing: ${key}`)
-    let low = 0; let high = result.length
-    while (low < high) { const middle = (low + high) >>> 1; if (compareUtf8(result[middle]!.key, key) < 0) low = middle + 1; else high = middle }
-    if (result[low]?.key === key) throw new TypeError(`Canvas canonical insertion overwrote: ${key}`)
-    result.splice(low, 0, pair(key, value, collectionKey, issuer))
-  }
-  return Object.freeze(result)
+function allPairs(
+  collection: ReadonlyMap<string, unknown>,
+  key: CollectionKey,
+  issuer: CanonicalJcsEvidenceIssuer,
+): readonly CanonicalPair[] {
+  return Object.freeze(
+    [...collection].sort(([a], [b]) => compareUtf8(a, b)).map(([name, value]) => pair(name, value, key, issuer)),
+  )
 }
 
 function encodePairs(pairs: readonly CanonicalPair[]): Uint8Array {
-  return join([new TextEncoder().encode("["), ...pairs.flatMap((item, index) => index ? [new TextEncoder().encode(","), item.bytes] : [item.bytes]), new TextEncoder().encode("]")])
+  const cached = bytesByPairCollection.get(pairs)
+  if (cached) return cached
+  collectionByteAssemblies += 1
+  const encoder = new TextEncoder()
+  const parts: Uint8Array[] = [encoder.encode("[")]
+  let index = 0
+  for (const item of pairs) {
+    if (index !== 0) parts.push(encoder.encode(","))
+    parts.push(encodePair(item))
+    index += 1
+  }
+  parts.push(encoder.encode("]"))
+  const result = join(parts)
+  bytesByPairCollection.set(pairs, result)
+  return result
 }
 
-function assemble(values: ReadonlyMap<CanonicalKey, Uint8Array>): Uint8Array {
+function encodePair(pair: CanonicalPair): Uint8Array {
+  const cached = bytesByPair.get(pair)
+  if (cached) return cached
+  pairByteEncodes += 1
+  const bytes = encodeRestrictedJcs(pair.tuple)
+  bytesByPair.set(pair, bytes)
+  return bytes
+}
+
+function assemble(fragments: CanonicalFragments): Uint8Array {
+  canonicalAssemblies += 1
   const encoder = new TextEncoder()
   const parts: Uint8Array[] = [encoder.encode("{")]
-  CANONICAL_KEYS.forEach((key, index) => parts.push(...(index ? [encoder.encode(",")] : []), encodeRestrictedJcs(key), encoder.encode(":"), values.get(key)!))
+  CANONICAL_KEYS.forEach((key, index) => parts.push(
+    ...(index ? [encoder.encode(",")] : []),
+    encodeRestrictedJcs(key),
+    encoder.encode(":"),
+    isCollection(key) ? encodePairs(fragments.pairs.get(key)!) : fragments.values.get(key)!,
+  ))
   parts.push(encoder.encode("}"))
   return join(parts)
 }

@@ -280,7 +280,7 @@ describe("PluginInstallationRuntime", () => {
     expect(active).toMatchObject({ activeSetDigest: legacyDigest, revision: 2 })
     const handle = await reopened.acquireActivePlugin("alpha")
     expect(handle.installationActivationId).toBeUndefined()
-    expect(await handle.resolveCompanion()).toMatch(/\/closures\//)
+    expect(await handle.resolveCompanion()).toContain(`${path.sep}closures${path.sep}`)
     handle.release()
   })
 

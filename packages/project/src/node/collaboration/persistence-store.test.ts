@@ -3,23 +3,25 @@ import { createHash } from "node:crypto"
 import fs from "node:fs/promises"
 import os from "node:os"
 import path from "node:path"
-import type {
-  ActorId,
-  CausalFrontier,
-  DecodedCausalEditFrame,
-  Digest,
-  DocumentScope,
-  FrameObjectRef,
-  Id128,
-  ReplicaActorHeadSet,
-  MemberId,
-  ReplicaId,
-  StateVector,
+import {
+  causalFrontierDigest,
+  type ActorId,
+  type CausalFrontier,
+  type DecodedCausalEditFrame,
+  type Digest,
+  type DocumentScope,
+  type FrameObjectRef,
+  type Id128,
+  type ReplicaActorHeadSet,
+  type MemberId,
+  type ReplicaId,
+  type StateVector,
 } from "@convax/collaboration"
 import { deriveDocumentNativeKey, deriveObjectNativeKey } from "./native-store-keys"
 import {
   NodeCollaborationPersistenceError,
   NodeCollaborationPersistence,
+  nodeCollaborationPersistenceStructuralCounts,
   type NodeAcceptedReplicaHead,
   type NodeCollaborationPersistenceFaultHooks,
   type NodeLocalCommitDurabilityDiagnostics,
@@ -71,6 +73,107 @@ describe("NodeCollaborationPersistence", () => {
     const expected = Uint8Array.from(exposed.fullUpdate)
     exposed.fullUpdate.fill(0xff)
     expect((await fixture.store.loadReplicaHead(scope) as NodeAcceptedReplicaHead).fullUpdate).toEqual(expected)
+    fixture.store.dispose()
+  })
+
+  durabilityTest("keeps the prior reachability set unchanged until the sole-head barrier succeeds", async () => {
+    let failBeforeRename = true
+    const fixture = await createFixture({
+      afterHeadTempFsync: async () => {
+        if (!failBeforeRename) return
+        failBeforeRename = false
+        throw new Error("simulated loss before sole-head rename")
+      },
+    })
+    const scope = projectIndexScope()
+    const genesis = await initialize(fixture.store, scope)
+    const before = internalReachabilitySet(fixture.store)
+    const frame = fixture.frames.create(scope, localActor, "1", id128(124))
+    await fixture.store.putImmutableFrame(frame.ref, frame.bytes)
+    await fixture.store.putReplicationOutboxRef(frame.ref)
+    const journal = await fixture.store.appendFrameJournal(frame.ref)
+
+    expect(internalReachabilitySet(fixture.store)).toBe(before)
+    expect(before.has(frame.ref.frameDigest)).toBe(false)
+    expect(await fixture.store.compareAndCommitReplicaHead({
+      ref: frame.ref,
+      journal,
+      expectedReplicaHeadRecordDigest: genesis.headDigest,
+      resultingFrontierDigest: fixture.frames.frontierDigest(frame.ref),
+    })).toEqual({ status: "rejected", code: "durability-failed" })
+    expect(internalReachabilitySet(fixture.store)).toBe(before)
+    expect(before.has(frame.ref.frameDigest)).toBe(false)
+    expect(await fixture.store.isReachableFromAcceptedHead(frame.ref)).toBe(false)
+
+    fixture.store.dispose()
+    const reopened = await NodeCollaborationPersistence.open({
+      collaborationDirectory: fixture.collaborationDirectory,
+      localActorId: localActor,
+      materializer: fixture.frames,
+    })
+    await reopened.loadReplicaHead(scope)
+    expect(await reopened.isReachableFromAcceptedHead(frame.ref)).toBe(true)
+    reopened.dispose()
+  })
+
+  durabilityTest("transfers one owned reachability set across retained history without copying prior entries", async () => {
+    const fixture = await createFixture()
+    const scope = projectIndexScope()
+    let head = await initialize(fixture.store, scope)
+    const owned = internalReachabilitySet(fixture.store)
+    const frames: FrameObjectRef[] = []
+
+    for (let sequence = 1; sequence <= 256; sequence += 1) {
+      const frame = fixture.frames.create(scope, localActor, String(sequence), id128(600 + sequence))
+      frames.push(frame.ref)
+      await fixture.store.putImmutableFrame(frame.ref, frame.bytes)
+      await fixture.store.putReplicationOutboxRef(frame.ref)
+      const journal = await fixture.store.appendFrameJournal(frame.ref)
+      expect(internalReachabilitySet(fixture.store)).toBe(owned)
+      expect(owned.has(frame.ref.frameDigest)).toBe(false)
+      const committed = await fixture.store.compareAndCommitReplicaHead({
+        ref: frame.ref,
+        journal,
+        expectedReplicaHeadRecordDigest: head.headDigest,
+        resultingFrontierDigest: fixture.frames.frontierDigest(frame.ref),
+      })
+      if (committed.status !== "committed") throw new Error("expected committed frame")
+      head = { ...head, headDigest: committed.evidence.resultingReplicaHeadRecordDigest }
+      expect(internalReachabilitySet(fixture.store)).toBe(owned)
+      expect(owned.size).toBe(sequence)
+    }
+
+    for (const index of [0, 127, 255]) {
+      expect(await fixture.store.isReachableFromAcceptedHead(frames[index]!)).toBe(true)
+    }
+    fixture.store.dispose()
+  }, 20_000)
+
+  durabilityTest("does not let post-head cache or observer failures deny a durable commit", async () => {
+    let failCacheInstall = true
+    const fixture = await createFixture({
+      beforeHeadCacheInstall: async () => {
+        if (!failCacheInstall) return
+        failCacheInstall = false
+        throw new Error("simulated hot-cache failure after the head barrier")
+      },
+    })
+    fixture.frames.failObserveAcceptedFrame = true
+    const scope = projectIndexScope()
+    const genesis = await initialize(fixture.store, scope)
+    const frame = fixture.frames.create(scope, localActor, "1", id128(125))
+    await fixture.store.putImmutableFrame(frame.ref, frame.bytes)
+    await fixture.store.putReplicationOutboxRef(frame.ref)
+    const journal = await fixture.store.appendFrameJournal(frame.ref)
+
+    const committed = await fixture.store.compareAndCommitReplicaHead({
+      ref: frame.ref,
+      journal,
+      expectedReplicaHeadRecordDigest: genesis.headDigest,
+      resultingFrontierDigest: fixture.frames.frontierDigest(frame.ref),
+    })
+    expect(committed.status).toBe("committed")
+    expect(await fixture.store.isReachableFromAcceptedHead(frame.ref)).toBe(true)
     fixture.store.dispose()
   })
 
@@ -234,6 +337,47 @@ describe("NodeCollaborationPersistence", () => {
     reopened.dispose()
   })
 
+  durabilityTest("does not let checkpoint hot-cache installation failure deny its durable metadata head", async () => {
+    let failCacheInstall = true
+    const fixture = await createFixture(
+      {
+        beforeHeadCacheInstall: async () => {
+          if (!failCacheInstall) return
+          failCacheInstall = false
+          throw new Error("simulated checkpoint cache failure after the head barrier")
+        },
+      },
+      undefined,
+      { verifyCurrent: async () => true },
+    )
+    const scope = projectIndexScope()
+    const genesis = await initialize(fixture.store, scope)
+    const checkpoint = fixture.frames.createCheckpoint(
+      await fixture.store.loadReplicaHead(scope) as NodeAcceptedReplicaHead,
+    )
+    const contentCertificate = encoder.encode("checkpoint-cache-failure-certificate")
+
+    const result = await fixture.store.installCheckpointSet({
+      scope,
+      expectedReplicaHeadRecordDigest: genesis.headDigest,
+      bootstrapCheckpointObjectDigest: checkpoint.objectDigest,
+      checkpointObjects: [checkpoint],
+      contentCertificateObjects: [{
+        objectDigest: digestBytes(contentCertificate),
+        exactBytes: contentCertificate,
+      }],
+      prunableSetCertificateObjects: [],
+    })
+
+    expect(result.status).toBe("committed")
+    if (result.status !== "committed") throw new Error("expected committed checkpoint metadata head")
+    expect((await fixture.store.loadReplicaHead(scope) as NodeAcceptedReplicaHead).headDigest)
+      .toBe(result.resultingReplicaHeadRecordDigest)
+    expect((await fixture.store.loadInstalledBase(scope)).canonicalStateDigest)
+      .toBe(checkpoint.accepted.canonicalStateDigest)
+    fixture.store.dispose()
+  })
+
   durabilityTest("does not write checkpoint candidates for a stale sole head", async () => {
     const fixture = await createFixture({}, undefined, { verifyCurrent: async () => true })
     const scope = projectIndexScope()
@@ -313,6 +457,14 @@ describe("NodeCollaborationPersistence", () => {
     )
     await expect(fs.lstat(framePath)).rejects.toBeDefined()
     fixture.store.dispose()
+    const reopened = await NodeCollaborationPersistence.open({
+      collaborationDirectory: fixture.collaborationDirectory,
+      localActorId: localActor,
+      materializer: fixture.frames,
+    })
+    expect((await reopened.loadReplicaHead(scope) as NodeAcceptedReplicaHead).canonicalStateDigest)
+      .toBe(current.canonicalStateDigest)
+    reopened.dispose()
   })
 
   durabilityTest("does not publish a partial genesis and resumes the same G after staging loss", async () => {
@@ -406,7 +558,6 @@ describe("NodeCollaborationPersistence", () => {
       "outbox:directory-sync",
       "journal:file-sync",
       "journal:directory-sync",
-      "journal:directory-sync",
       "head:file-sync",
       "head:directory-sync",
     ])
@@ -418,7 +569,7 @@ describe("NodeCollaborationPersistence", () => {
       "object-frame": 2,
       "object-operation-sidecar": 2,
       outbox: 2,
-      journal: 3,
+      journal: 2,
       head: 2,
     })
 
@@ -456,8 +607,16 @@ describe("NodeCollaborationPersistence", () => {
       resultingFrontierDigest: fixture.frames.frontierDigest(frame.ref),
     })
     if (committed.status !== "committed") throw new Error("expected committed frame")
-    expect(await fixture.store.readAcceptedFrame(scope, frame.ref.frameDigest)).toEqual(frame.bytes)
-    expect(await fixture.store.listAcceptedFrames(scope)).toEqual([{ ref: frame.ref, exactFrameBytes: frame.bytes }])
+    expect(await fixture.store.readAcceptedFrame(scope, frame.ref.frameDigest)).toEqual({
+      ref: frame.ref,
+      exactFrameBytes: frame.bytes,
+      durableDelta: undefined,
+    })
+    expect(await fixture.store.listAcceptedFrames(scope)).toEqual([{
+      ref: frame.ref,
+      exactFrameBytes: frame.bytes,
+      durableDelta: undefined,
+    }])
     expect((await fixture.store.loadInstalledBase(scope)).frontier.heads).toEqual([])
     fixture.store.dispose()
   })
@@ -536,10 +695,16 @@ describe("NodeCollaborationPersistence", () => {
     fixture.store.dispose()
   })
 
-  durabilityTest("recovers an ACK journal below head before outbox retirement", async () => {
+  durabilityTest("recovers the same durable ACK after post-fsync response loss before outbox retirement", async () => {
     let armed = false
     const verifier = { verifyCurrent: async () => true }
-    const fixture = await createFixture({ afterJournalFileFsync: async () => { if (armed) throw new Error("ack crash") } }, verifier)
+    const fixture = await createFixture({
+      afterAcceptedFrameWalSync: async () => {
+        if (!armed) return
+        armed = false
+        throw new Error("ack response loss")
+      },
+    }, verifier)
     const scope = projectIndexScope()
     const genesis = await initialize(fixture.store, scope)
     const frame = fixture.frames.create(scope, localActor, "1", id128(120))
@@ -548,8 +713,10 @@ describe("NodeCollaborationPersistence", () => {
     const journal = await fixture.store.appendFrameJournal(frame.ref)
     await fixture.store.compareAndCommitReplicaHead({ ref: frame.ref, journal, expectedReplicaHeadRecordDigest: genesis.headDigest, resultingFrontierDigest: fixture.frames.frontierDigest(frame.ref) })
     armed = true
-    await expect(fixture.store.recordVerifiedReplicaDurableAck(durableAck(frame.ref))).rejects.toThrow("ack crash")
-    expect(await fixture.store.listDurableReplicationOutbox(scope)).toHaveLength(1)
+    const ack = durableAck(frame.ref)
+    const receipt = await fixture.store.recordVerifiedReplicaDurableAck(ack)
+    expect(await fixture.store.recordVerifiedReplicaDurableAck(ack)).toBe(receipt)
+    expect(await fixture.store.listDurableReplicationOutbox(scope)).toEqual([])
     fixture.store.dispose()
     const reopened = await NodeCollaborationPersistence.open({ collaborationDirectory: fixture.collaborationDirectory, localActorId: localActor, materializer: fixture.frames, replicaDurableAckVerifier: verifier })
     await reopened.loadReplicaHead(scope)
@@ -558,7 +725,7 @@ describe("NodeCollaborationPersistence", () => {
     reopened.dispose()
   })
 
-  durabilityTest("closes the shard when outbox cleanup is visible but its durable ACK object is missing", async () => {
+  durabilityTest("fails closed when the durable WAL ACK is tampered after outbox cleanup", async () => {
     const fixture = await createFixture({}, { verifyCurrent: async () => true })
     const scope = projectIndexScope()
     const genesis = await initialize(fixture.store, scope)
@@ -569,17 +736,23 @@ describe("NodeCollaborationPersistence", () => {
     await fixture.store.compareAndCommitReplicaHead({ ref: frame.ref, journal, expectedReplicaHeadRecordDigest: genesis.headDigest, resultingFrontierDigest: fixture.frames.frontierDigest(frame.ref) })
     const ack = durableAck(frame.ref)
     await fixture.store.recordVerifiedReplicaDurableAck(ack)
-    const ackPath = path.join(
+    const walPath = path.join(
       fixture.collaborationDirectory,
       "documents",
       deriveDocumentNativeKey(scope),
-      "objects",
-      "acks",
-      `${deriveObjectNativeKey("ack", ack.ackCoreDigest)}.bin`,
+      "journals",
+      "accepted-frames.wal",
     )
-    await fs.unlink(ackPath)
-    await expect(fixture.store.loadReplicaHead(scope)).rejects.toMatchObject({ code: "store-corrupt" })
     fixture.store.dispose()
+    const bytes = Uint8Array.from(await fs.readFile(walPath))
+    bytes[bytes.byteLength - 1] = bytes[bytes.byteLength - 1]! ^ 0xff
+    await fs.writeFile(walPath, bytes)
+    await expect(NodeCollaborationPersistence.open({
+      collaborationDirectory: fixture.collaborationDirectory,
+      localActorId: localActor,
+      materializer: fixture.frames,
+      replicaDurableAckVerifier: { verifyCurrent: async () => true },
+    })).rejects.toMatchObject({ code: "store-corrupt" })
   })
 
   durabilityTest("fails closed on an unexpected outbox filename instead of skipping it", async () => {
@@ -789,8 +962,10 @@ describe("NodeCollaborationPersistence", () => {
 class FakeFrameMaterializer implements NodeReplicaHeadMaterializer {
   readonly records = new Map<string, { bytes: Uint8Array; ref: FrameObjectRef }>()
   readonly checkpoints = new Map<string, { bytes: Uint8Array; accepted: Omit<NodeAcceptedReplicaHead, "headDigest"> }>()
+  readonly expectedMaterializationDigests = new Map<Digest, Digest>()
   applyCount = 0
   inspectCount = 0
+  failObserveAcceptedFrame = false
 
   readonly create = (scope: DocumentScope, actorId: ActorId, actorSequence: string, operationId: Id128) => {
     const seed = encoder.encode(`${actorId}:${actorSequence}:${operationId}:${this.records.size}`)
@@ -833,11 +1008,16 @@ class FakeFrameMaterializer implements NodeReplicaHeadMaterializer {
       fullUpdate: Uint8Array.from(input.exactBytes),
       stateVector: Uint8Array.of(Number(input.ref.actorSequence)) as StateVector,
       canonicalStateDigest: digestBytes(input.exactBytes),
+      materializationDigest: this.expectedMaterializationDigests.get(input.ref.frameDigest) ?? digest(`materialization:${input.ref.frameDigest}`),
     }
   }
 
   actorHeadsDigest(actorHeads: ReplicaActorHeadSet): Digest {
     return digest(canonical(actorHeads))
+  }
+
+  observeAcceptedFrame(): void {
+    if (this.failObserveAcceptedFrame) throw new Error("simulated causal-closure observer failure")
   }
 
   createCheckpoint(accepted: NodeAcceptedReplicaHead) {
@@ -851,6 +1031,7 @@ class FakeFrameMaterializer implements NodeReplicaHeadMaterializer {
       fullUpdate: Uint8Array.from(accepted.fullUpdate),
       stateVector: Uint8Array.from(accepted.stateVector) as StateVector,
       canonicalStateDigest: accepted.canonicalStateDigest,
+      materializationDigest: accepted.materializationDigest,
     }
     this.checkpoints.set(objectDigest, { bytes, accepted: value })
     return { objectDigest, exactBytes: bytes, accepted: value }
@@ -863,7 +1044,7 @@ class FakeFrameMaterializer implements NodeReplicaHeadMaterializer {
   }
 
   frontierDigest(ref: FrameObjectRef): Digest {
-    return digest(JSON.stringify({
+    return causalFrontierDigest({
       format: "convax.causal-frontier",
       heads: [{
         format: "convax.causal-head-ref",
@@ -872,8 +1053,16 @@ class FakeFrameMaterializer implements NodeReplicaHeadMaterializer {
         frameDigest: ref.frameDigest,
         lamport: ref.actorSequence,
       }],
-    }))
+    })
   }
+}
+
+function internalReachabilitySet(store: NodeCollaborationPersistence): ReadonlySet<Digest> {
+  const caches = (store as unknown as {
+    materializedHeadCaches: Map<string, { reachableFrameDigests: ReadonlySet<Digest> }>
+  }).materializedHeadCaches
+  if (caches.size !== 1) throw new Error("expected exactly one materialized head cache")
+  return [...caches.values()][0]!.reachableFrameDigests
 }
 
 async function createFixture(
@@ -931,6 +1120,7 @@ async function initialize(store: NodeCollaborationPersistence, scope: DocumentSc
       fullUpdate: new Uint8Array(),
       stateVector: Uint8Array.of(0) as StateVector,
       canonicalStateDigest: digest("empty"),
+      materializationDigest: digest("empty-materialization"),
     },
   })
 }
@@ -952,6 +1142,7 @@ function genesisProofInput(scope: DocumentScope, proof: string) {
       fullUpdate: new Uint8Array(),
       stateVector: Uint8Array.of(0) as StateVector,
       canonicalStateDigest: digest("empty"),
+      materializationDigest: digest("empty-materialization"),
     },
   }
 }

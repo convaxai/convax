@@ -4,7 +4,10 @@ import { classifyCanvasFileKind } from "./file-import"
 import { getCanvasResourcePresentationSize } from "./media-sizing"
 import type { CanvasGhostNode } from "./optimistic-overlay"
 import { projectCanvasGhostNodeForReactFlow } from "./optimistic-overlay-react-flow"
-import { resolveCanvasResourcePlacements } from "./resource-placement"
+import {
+  canvasDocumentPlacementIndex,
+  resolveIndexedCanvasResourcePlacements,
+} from "./resource-placement"
 import type { CanvasOptimisticResourcePresentation } from "./services"
 import type { CanvasDocument, CanvasPoint, CanvasSize } from "./types"
 
@@ -100,6 +103,7 @@ export function createOptimisticResourceGhosts(input: {
   intrinsicSizes?: readonly ({ readonly height: number; readonly width: number } | null)[]
   previewUrls?: readonly (string | null)[]
   parentPresentationKey?: string
+  resolvedPositions?: readonly CanvasPoint[]
   createPresentationKey?: () => string
 }): readonly CanvasGhostNode[] {
   return createGhostsFromSlots({
@@ -118,6 +122,7 @@ export function createOptimisticPreparedResourceGhosts(input: {
   document: CanvasDocument
   parentPresentationKey?: string
   presentations: readonly CanvasOptimisticResourcePresentation[]
+  resolvedPositions?: readonly CanvasPoint[]
 }): readonly CanvasGhostNode[] {
   return createGhostsFromSlots({
     ...input,
@@ -141,6 +146,7 @@ export function createOptimisticAlignedResourceGhosts(input: {
   parentPresentationKey?: string
   presentations: readonly (CanvasOptimisticResourcePresentation | null)[]
   previewUrls?: readonly (string | null)[]
+  resolvedPositions?: readonly CanvasPoint[]
   sources: readonly CanvasResourceSource[]
 }): readonly CanvasGhostNode[] {
   const minimumSlotCount = input.files.length + input.sources.length
@@ -176,6 +182,7 @@ export function createOptimisticEmptyNodeGhosts(input: {
   document: CanvasDocument
   kind: "image" | "text" | "video"
   parentPresentationKey?: string
+  resolvedPositions?: readonly CanvasPoint[]
   createPresentationKey?: () => string
 }): readonly CanvasGhostNode[] {
   const createKey = input.createPresentationKey ?? (() => `ghost-resource:${globalThis.crypto.randomUUID()}`)
@@ -183,7 +190,8 @@ export function createOptimisticEmptyNodeGhosts(input: {
   // the manual pending placeholder. Both authoritative paths use this policy.
   const size = getCanvasResourcePresentationSize(input.kind)
   const anchor = normalizeResourceAnchor(input.anchor, input.anchorOrigin, size)
-  const [position] = resolveGhostPlacements(input.document, anchor, [size], input.parentPresentationKey)
+  const [position] = input.resolvedPositions ??
+    resolveGhostPlacements(input.document, anchor, [size], input.parentPresentationKey)
   const title = input.kind === "image" ? "Image" : input.kind === "video" ? "Video" : "Text"
   return Object.freeze([
     Object.freeze({
@@ -350,17 +358,22 @@ function createGhostsFromSlots(input: {
   createPresentationKey?: () => string
   document: CanvasDocument
   parentPresentationKey?: string
+  resolvedPositions?: readonly CanvasPoint[]
   slots: readonly CanvasOptimisticResourceGhostSlot[]
 }): readonly CanvasGhostNode[] {
   if (input.slots.length === 0) return Object.freeze([])
   const createKey = input.createPresentationKey ?? (() => `ghost-resource:${globalThis.crypto.randomUUID()}`)
   const anchor = normalizeResourceAnchor(input.anchor, input.anchorOrigin, input.slots[0]?.size)
-  const positions = resolveGhostPlacements(
-    input.document,
-    anchor,
-    input.slots.map(({ size }) => size),
-    input.parentPresentationKey,
-  )
+  const positions = input.resolvedPositions ??
+    resolveGhostPlacements(
+      input.document,
+      anchor,
+      input.slots.map(({ size }) => size),
+      input.parentPresentationKey,
+    )
+  if (positions.length !== input.slots.length || positions.some((position) => !finiteGhostPoint(position))) {
+    throw new RangeError("Optimistic resource placement is invalid")
+  }
   return Object.freeze(
     input.slots.map(({ presentation, size }, index) =>
       Object.freeze({
@@ -390,15 +403,17 @@ function resolveGhostPlacements(
   sizes: readonly { height: number; width: number }[],
   parentPresentationKey?: string,
 ) {
-  const positions = resolveCanvasResourcePlacements({
+  const positions = resolveIndexedCanvasResourcePlacements({
     anchor,
-    obstacles: document.nodes
-      .filter((node) => node.parentId === parentPresentationKey)
-      .map((node) => ({ ...node.position, ...getCanvasNodePresentationSize(node) })),
+    index: canvasDocumentPlacementIndex(document, parentPresentationKey),
     sizes,
   })
   if (!positions) throw new RangeError("Optimistic resource placement is unavailable")
   return positions
+}
+
+function finiteGhostPoint(value: CanvasPoint) {
+  return Number.isFinite(value.x) && Number.isFinite(value.y)
 }
 
 function normalizedMimeType(value: string) {

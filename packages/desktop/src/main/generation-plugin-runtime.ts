@@ -1359,7 +1359,7 @@ export class GenerationPluginRuntime implements PluginCapabilityRuntimeInspectio
           rmSync(target, { force: true, recursive: true })
           this.#privateProfileDirectories.delete(entry.name)
         }
-        if (stale.length > 0) await syncDirectoryEntry(root, this.#platform)
+        if (stale.length > 0) await syncDirectoryEntry(root)
         return true
       })
       if (completed) return

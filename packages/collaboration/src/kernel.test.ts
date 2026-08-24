@@ -28,7 +28,9 @@ import type {
   OwnerExternalFactPort,
   SelectedDocumentOwnerArtifactDefinition,
 } from "./contracts"
-import { canonicalStateDigest, ordinarySha256 } from "./digest"
+import { ordinarySha256 } from "./digest"
+import { materializeAcceptedFrame, validateAcceptedHeadMaterializationEvidence } from "./accepted-head"
+import { createOwnerStateCommitmentIssuer } from "./owner-state-commitment"
 import { decodeCausalEditFrame } from "./frame"
 import { decodeRestrictedJcs, encodeRestrictedJcs } from "./jcs"
 import { CollaborationKernel, type LocalIntentRequest } from "./kernel"
@@ -36,13 +38,19 @@ import type { CollaborationLatencyDiagnostic, CollaborationLatencyDiagnosticsPor
 import { createSelectedDocumentOwnerArtifactFactory } from "./owner-runtime"
 import type {
   AcceptedHeadMaterializationEvidence,
+  AcceptedHeadDurableDeltaMetadata,
   AcceptedHeadView,
   CollaborationKernelPorts,
   CollaborationPersistencePort,
   LocalFrameAuthority,
   OperationLookup,
 } from "./ports"
-import { ACCEPTED_FRAME_ORIGIN, encodeFullUpdate, encodeStateVector } from "./yjs-codec"
+import {
+  ACCEPTED_FRAME_ORIGIN,
+  encodeFullUpdate,
+  encodeStateVector,
+  testOnlyYjsCodecWorkCounts,
+} from "./yjs-codec"
 import { loadVerifiedTestAuthority } from "./authority.test-support"
 
 const encoder = new TextEncoder()
@@ -65,6 +73,15 @@ const CANONICALIZER_DESCRIPTOR = Object.freeze({
   canonicalStateCodec: "restricted-jcs-utf8" as const,
   exactBytePolicy: "parse-reencode-byte-equal" as const,
   unknownStatePolicy: "reject" as const,
+  stateCommitment: Object.freeze({
+    format: "convax.owner-state-commitment-descriptor" as const,
+    commitmentCodec: "sha256-merkle-patricia-v1" as const,
+    canonicalKeyPathPolicy: "nfc-utf8-no-nul-bounded-v1" as const,
+    maxCanonicalNameUtf8Bytes: "128" as const,
+    maxCanonicalKeyUtf8Bytes: "1024" as const,
+    scalarNames: Object.freeze(["format"]),
+    collectionNames: Object.freeze(["root"]),
+  }),
 })
 const CANONICALIZER = ownerCanonicalizerDescriptorDigest(CANONICALIZER_DESCRIPTOR)
 const D1 = ordinarySha256(encoder.encode("membership"))
@@ -88,6 +105,19 @@ function ownerDefinition(
   return {
     owner: "canvas",
     createDefinitions(processValues) {
+      const validateState = (document: Y.Doc) => {
+        const value = document.getMap("root").toJSON()
+        const state = processValues.wrapValidatedState(value)
+        const commitment = processValues.stateCommitment.build({
+          descriptor: CANONICALIZER_DESCRIPTOR.stateCommitment,
+          scalars: [{ name: "format", value: CANONICAL_STATE_FORMAT }],
+          collections: [{
+            name: "root",
+            entries: Object.entries(value).map(([key, entryValue]) => ({ key, value: entryValue })),
+          }],
+        })
+        return processValues.bindStateCommitment(document, state, commitment)
+      }
       const protocol = {
         owner: "canvas" as const,
         schemaDigest: SCHEMA,
@@ -102,7 +132,7 @@ function ownerDefinition(
         validateBase(document: Y.Doc) {
           const keys = [...document.getMap("root").keys()]
           return keys.every((key) => key === "value")
-            ? processValues.wrapValidatedState(document.getMap("root").toJSON())
+            ? validateState(document)
             : ("rejected" as const)
         },
         applyIntent(_base: unknown, candidate: Y.Doc, context: { intentDigest: typeof D1 }, intent: unknown) {
@@ -113,7 +143,7 @@ function ownerDefinition(
         },
         validatePost(_base: unknown, candidate: Y.Doc) {
           return typeof candidate.getMap("root").get("value") === "string"
-            ? processValues.wrapValidatedState(candidate.getMap("root").toJSON())
+            ? validateState(candidate)
             : ("rejected" as const)
         },
         canonicalStateBytes(document: Y.Doc) {
@@ -154,24 +184,52 @@ class MemoryPersistence implements CollaborationPersistencePort {
   readonly objects = new Map<string, Uint8Array>()
   readonly accepted = new Map<string, FrameObjectRef>()
   readonly refsByDigest = new Map<string, FrameObjectRef>()
-  failAt: "object" | "outbox" | "journal" | "head" | null = null
+  failAt: "atomic" | null = null
   stale = false
-  throwAfterHeadCommit = false
-  mutateMaterializationDuringJournal = false
+  loseResponseAfterAtomicCommit = false
   fastHeadVerification = false
   headLoadCount = 0
   headVerificationCount = 0
+  atomicCommitCallCount = 0
+  responseLossRecoveredCount = 0
+  lastCommitRequest: Parameters<CollaborationPersistencePort["commitAcceptedFrame"]>[0] | undefined
   materializationEvidence: AcceptedHeadMaterializationEvidence | undefined
-  private pendingJournal: FrameObjectRef | null = null
+  durableDelta: AcceptedHeadDurableDeltaMetadata | undefined
+  nextLoadedHead: AcceptedHeadView | undefined
+  hotFullUpdateEncodes = 0
+  private readonly atomicResults = new Map<string, Awaited<ReturnType<CollaborationPersistencePort["commitAcceptedFrame"]>>>()
+  private readonly atomicExpectedHeads = new Map<string, Digest>()
+  private readonly materializedDocument = new Y.Doc()
   head: AcceptedHeadView
 
   constructor() {
     this.head = emptyHead()
+    Y.applyUpdate(this.materializedDocument, this.head.fullUpdate)
   }
 
   async loadReplicaHead(): Promise<AcceptedHeadView> {
     this.headLoadCount += 1
+    if (this.nextLoadedHead) {
+      const loaded = this.nextLoadedHead
+      this.nextLoadedHead = undefined
+      return loaded
+    }
+    this.head = {
+      ...this.head,
+      fullUpdate: encodeFullUpdate(this.materializedDocument),
+      stateVector: encodeStateVector(this.materializedDocument),
+    }
     return this.head
+  }
+  seed(document: Y.Doc, canonicalStateDigest: Digest): void {
+    Y.applyUpdate(this.materializedDocument, encodeFullUpdate(document))
+    this.head = {
+      ...this.head,
+      fullUpdate: encodeFullUpdate(document),
+      stateVector: encodeStateVector(document),
+      canonicalStateDigest,
+      materializationDigest: ordinarySha256(encoder.encode(`seed:${canonicalStateDigest}`)),
+    }
   }
   async verifyReplicaHeadCurrent(input: {
     readonly expectedHeadDigest: Digest
@@ -183,74 +241,85 @@ class MemoryPersistence implements CollaborationPersistencePort {
       ? "verified"
       : "reload-required"
   }
-  async putImmutableFrame(ref: FrameObjectRef, value: Uint8Array): Promise<void> {
-    this.events.push("object")
-    if (this.failAt === "object") throw new Error("object crash")
-    this.objects.set(ref.frameDigest, Uint8Array.from(value))
-    this.refsByDigest.set(ref.frameDigest, ref)
-  }
-  async putReplicationOutboxRef(): Promise<void> {
-    this.events.push("outbox")
-    if (this.failAt === "outbox") throw new Error("outbox crash")
-  }
-  async appendFrameJournal(ref: FrameObjectRef, materialization?: AcceptedHeadMaterializationEvidence) {
-    this.events.push("journal")
-    if (this.failAt === "journal") throw new Error("journal crash")
-    this.pendingJournal = ref
-    this.materializationEvidence = materialization
-    if (this.mutateMaterializationDuringJournal && materialization) {
-      materialization.fullUpdate.fill(0xff)
-      materialization.stateVector.fill(0xff)
+  async commitAcceptedFrame(input: Parameters<CollaborationPersistencePort["commitAcceptedFrame"]>[0]) {
+    this.events.push("atomic")
+    this.atomicCommitCallCount += 1
+    this.lastCommitRequest = input
+    const existing = this.atomicResults.get(input.ref.frameDigest)
+    if (existing) {
+      if (this.atomicExpectedHeads.get(input.ref.frameDigest) !== input.expectedHead.headDigest) {
+        return { status: "rejected" as const, code: "store-corrupt" as const }
+      }
+      return existing
     }
-    return { ref, journalRecordDigest: ordinarySha256(encoder.encode(`journal:${ref.frameDigest}`)) }
-  }
-  async compareAndCommitReplicaHead(input: Parameters<CollaborationPersistencePort["compareAndCommitReplicaHead"]>[0]) {
-    this.events.push("head")
-    if (this.failAt === "head") throw new Error("head crash")
+    if (this.failAt === "atomic") throw new Error("atomic crash")
+    const validated = validateAcceptedHeadMaterializationEvidence({
+      previous: input.expectedHead,
+      ref: input.ref,
+      evidence: input.accepted,
+    })
+    if (validated === "rejected") return { status: "rejected" as const, code: "store-corrupt" as const }
+    this.materializationEvidence = input.accepted
+    this.durableDelta = validated.durableDelta
     if (this.stale) {
-      return {
+      const quarantined = {
         status: "quarantined" as const,
         evidence: {
+          format: "convax.accepted-frame-atomic-quarantine-evidence" as const,
           ref: input.ref,
-          journalRecordDigest: input.journal.journalRecordDigest,
-          expectedReplicaHeadRecordDigest: input.expectedReplicaHeadRecordDigest,
+          expectedReplicaHeadRecordDigest: input.expectedHead.headDigest,
           observedReplicaHeadRecordDigest: ordinarySha256(encoder.encode("other-head")),
+          quarantinedFrameRecordDigest: ordinarySha256(encoder.encode(`quarantined-frame:${input.ref.frameDigest}`)),
           quarantineCommitRecordDigest: ordinarySha256(encoder.encode("quarantine")),
           shardDispositionHeadRecordDigest: this.head.headDigest,
+          atomicCommitRecordDigest: ordinarySha256(encoder.encode(`atomic-quarantine:${input.ref.frameDigest}`)),
         },
       }
+      this.atomicResults.set(input.ref.frameDigest, quarantined)
+      this.atomicExpectedHeads.set(input.ref.frameDigest, input.expectedHead.headDigest)
+      return quarantined
     }
-    const ref = this.pendingJournal!
+    const ref = input.ref
+    this.objects.set(ref.frameDigest, Uint8Array.from(input.exactFrameBytes))
+    this.refsByDigest.set(ref.frameDigest, ref)
     const headDigest = ordinarySha256(encoder.encode(`head:${ref.frameDigest}`))
     this.accepted.set(`${ref.actorId}:${ref.operationId}`, ref)
     const frame = decodeCausalEditFrame(await authority(), this.objects.get(ref.frameDigest)!)
-    const document = new Y.Doc()
-    Y.applyUpdate(document, this.head.fullUpdate)
-    Y.applyUpdate(document, frame.sections.yjsUpdate)
-    const causalHead = headRef(frame)
-    const frontier = Object.freeze({ format: "convax.causal-frontier" as const, heads: Object.freeze([causalHead]) })
+    Y.applyUpdate(this.materializedDocument, frame.sections.yjsUpdate)
+    const transition = validated.transition
     this.head = {
       ...this.head,
       headDigest,
-      frontier,
-      frontierDigest: causalFrontierDigest(frontier),
-      actorHeads: { format: "convax.replica-actor-head-set", scope: SCOPE, heads: [causalHead] },
-      fullUpdate: encodeFullUpdate(document),
-      stateVector: encodeStateVector(document),
-      canonicalStateDigest: canonicalStateDigest(SCHEMA, canonicalStateBytes(document)),
+      frontier: transition.frontier,
+      frontierDigest: transition.frontierDigest,
+      actorHeads: transition.actorHeads,
+      stateVector: transition.stateVector,
+      canonicalStateDigest: transition.canonicalStateDigest,
+      materializationDigest: transition.materializationDigest,
     }
-    document.destroy()
-    if (this.throwAfterHeadCommit) throw new Error("post-head response loss")
-    return {
+    const committed = {
       status: "committed" as const,
       evidence: {
+        format: "convax.accepted-frame-atomic-commit-evidence" as const,
         ref,
-        journalRecordDigest: input.journal.journalRecordDigest,
-        expectedReplicaHeadRecordDigest: input.expectedReplicaHeadRecordDigest,
+        frameRecordDigest: ordinarySha256(encoder.encode(`frame-record:${ref.frameDigest}`)),
+        outboxRecordDigest: ordinarySha256(encoder.encode(`outbox:${ref.frameDigest}`)),
+        journalRecordDigest: ordinarySha256(encoder.encode(`journal:${ref.frameDigest}`)),
+        expectedReplicaHeadRecordDigest: input.expectedHead.headDigest,
         resultingReplicaHeadRecordDigest: headDigest,
-        resultingFrontierDigest: input.resultingFrontierDigest,
+        resultingFrontierDigest: transition.frontierDigest,
+        resultingMaterializationDigest: transition.materializationDigest,
+        atomicCommitRecordDigest: ordinarySha256(encoder.encode(`atomic:${ref.frameDigest}`)),
       },
     }
+    this.atomicResults.set(ref.frameDigest, committed)
+    this.atomicExpectedHeads.set(ref.frameDigest, input.expectedHead.headDigest)
+    if (this.loseResponseAfterAtomicCommit) {
+      this.loseResponseAfterAtomicCommit = false
+      this.responseLossRecoveredCount += 1
+      throw new Error("committed response lost")
+    }
+    return this.atomicResults.get(ref.frameDigest)!
   }
   async isReachableFromAcceptedHead(ref: FrameObjectRef): Promise<boolean> {
     return this.accepted.has(`${ref.actorId}:${ref.operationId}`)
@@ -284,7 +353,8 @@ function emptyHead(): AcceptedHeadView {
     actorHeads: Object.freeze({ format: "convax.replica-actor-head-set", scope: SCOPE, heads: Object.freeze([]) }),
     fullUpdate: encodeFullUpdate(doc),
     stateVector: encodeStateVector(doc),
-    canonicalStateDigest: canonicalStateDigest(SCHEMA, canonicalStateBytes(doc)),
+    canonicalStateDigest: canonicalStateDigestFor(doc.getMap("root").toJSON()),
+    materializationDigest: ordinarySha256(encoder.encode("genesis-materialization")),
   })
   doc.destroy()
   return result
@@ -414,7 +484,7 @@ describe("Current protocol owner boundary", () => {
     })
   })
 
-  test("rejects wrong-format and defensively copies reused canonical-state bytes", async () => {
+  test("does not invoke the retired flat canonical-state encoder on open", async () => {
     const selectedAuthority = await authority()
     const definition = ownerDefinition()
     const wrongFormat = createSelectedDocumentOwnerArtifactFactory(selectedAuthority, "canvas").createRuntime({
@@ -431,9 +501,8 @@ describe("Current protocol owner boundary", () => {
       },
     })
     if ("status" in wrongFormat) throw new Error(wrongFormat.code)
-    await expect(openKernel(new MemoryPersistence(), undefined, undefined, wrongFormat)).rejects.toThrow(
-      "wrong top-level format",
-    )
+    const wrongFormatKernel = await openKernel(new MemoryPersistence(), undefined, undefined, wrongFormat)
+    wrongFormatKernel.dispose()
     const shared = encodeRestrictedJcs({ format: CANONICAL_STATE_FORMAT, value: {} })
     const reused = createSelectedDocumentOwnerArtifactFactory(selectedAuthority, "canvas").createRuntime({
       ...definition,
@@ -485,27 +554,97 @@ describe("replicaDoc/candidateDoc durability", () => {
     const kernel = await openKernel(persistence)
     const loadsAfterOpen = persistence.headLoadCount
     await commit(kernel, "fast-head-verification")
-    expect(persistence.headVerificationCount).toBe(2)
+    expect(persistence.headVerificationCount).toBe(1)
     expect(persistence.headLoadCount).toBe(loadsAfterOpen)
     kernel.dispose()
   })
 
-  test("fails closed when the private accepted-head full-update cache is mutated", async () => {
+  test("does not consult the cold accepted-head full-update cache on a warm commit", async () => {
     const persistence = new MemoryPersistence()
     const kernel = await openKernel(persistence)
     const privateHead = (kernel as unknown as { head: { fullUpdate: Uint8Array } }).head
     privateHead.fullUpdate[0] ^= 0xff
-    await expect(commit(kernel, "mutated-head-cache", id(117))).rejects.toThrow("full-update cache was mutated")
-    expect(persistence.events).toEqual([])
+    const result = await commit(kernel, "mutated-head-cache", id(117))
+    expect(result.status).toBe("saved-locally")
     kernel.dispose()
   })
 
-  test("installs the private issued state after persistence mutates public evidence during await", async () => {
+  test("cold reload clones the full update and consumes the exact owner commitment before caching it", async () => {
     const persistence = new MemoryPersistence()
-    persistence.mutateMaterializationDuringJournal = true
+    const kernel = await openKernel(persistence)
+    await commit(kernel, "cat", id(115))
+    const durable = await persistence.loadReplicaHead()
+    const tamperedFullUpdate = replaceAsciiOnce(durable.fullUpdate, "cat", "dog")
+    persistence.nextLoadedHead = { ...durable, fullUpdate: tamperedFullUpdate }
+    const cold = kernel as unknown as {
+      headMaterialized: boolean
+      reloadCurrentHeadMaterialization(): Promise<void>
+    }
+    expect(cold.headMaterialized).toBe(false)
+    await expect(cold.reloadCurrentHeadMaterialization()).rejects.toThrow(
+      "canonical-state digest mismatches accepted durable evidence",
+    )
+    expect(cold.headMaterialized).toBe(false)
+    kernel.dispose()
+  })
+
+  test("cold reload rejects a full update whose declared state vector is not its exact base", async () => {
+    const persistence = new MemoryPersistence()
+    const kernel = await openKernel(persistence)
+    await commit(kernel, "state-vector-bound", id(116))
+    const durable = await persistence.loadReplicaHead()
+    persistence.nextLoadedHead = { ...durable, stateVector: emptyHead().stateVector }
+    const cold = kernel as unknown as {
+      headMaterialized: boolean
+      reloadCurrentHeadMaterialization(): Promise<void>
+    }
+    await expect(cold.reloadCurrentHeadMaterialization()).rejects.toMatchObject({ code: "stale-local-head" })
+    expect(cold.headMaterialized).toBe(false)
+    kernel.dispose()
+  })
+
+  test("cold recovery replays the exact signed frame and rejects tampered durable delta metadata", async () => {
+    const selectedAuthority = await authority()
+    const runtime = createSelectedDocumentOwnerArtifactFactory(selectedAuthority, "canvas").createRuntime(
+      ownerDefinition(),
+    )
+    if ("status" in runtime) throw new Error(runtime.code)
+    const persistence = new MemoryPersistence()
+    const previous = persistence.head
+    const kernel = await openKernel(persistence, undefined, undefined, runtime)
+    const saved = await commit(kernel, "cold-replay", id(114))
+    const ref = persistence.lastCommitRequest!.ref
+    const recovered = materializeAcceptedFrame({
+      authority: selectedAuthority,
+      owner: runtime,
+      previous,
+      ref,
+      exactFrameBytes: saved.frame.bytes,
+      durableDelta: persistence.durableDelta,
+      causalClosure: { contains: () => false },
+      createDocument: () => new Y.Doc(),
+    })
+    expect(recovered.canonicalStateDigest).toBe(canonicalStateDigestFor({ value: "cold-replay" }))
+    expect(recovered.materializationDigest).toBe(persistence.durableDelta!.resultingMaterializationDigest)
+    expect(() => materializeAcceptedFrame({
+      authority: selectedAuthority,
+      owner: runtime,
+      previous,
+      ref,
+      exactFrameBytes: saved.frame.bytes,
+      durableDelta: { ...persistence.durableDelta!, canonicalStateDigest: ordinarySha256(encoder.encode("tampered")) },
+      causalClosure: { contains: () => false },
+      createDocument: () => new Y.Doc(),
+    })).toThrow("durable delta metadata commitment mismatches")
+    kernel.dispose()
+  })
+
+  test("installs the private issued state even if an adapter later mutates its durable projection clone", async () => {
+    const persistence = new MemoryPersistence()
     const kernel = await openKernel(persistence)
     const result = await commit(kernel, "private-after-await", id(119))
     expect(result.status).toBe("saved-locally")
+    persistence.durableDelta!.stateVector.fill(0xff)
     const projection = kernel.getProjectionSnapshot()
     expect(projection.stateVector).toEqual(persistence.head.stateVector)
     expect(projection.canonicalStateDigest).toBe(canonicalStateDigestFor({ value: "private-after-await" }))
@@ -534,13 +673,13 @@ describe("replicaDoc/candidateDoc durability", () => {
       await expect(commit(kernel, "observer-delete", id(116))).rejects.toThrow(
         "authoritative in-memory application failed",
       )
-      expect(persistence.events).toEqual(["object", "outbox", "journal", "head"])
+      expect(persistence.events).toEqual(["atomic"])
       const projection = kernel.getProjectionSnapshot()
       const rebuilt = new Y.Doc()
       Y.applyUpdate(rebuilt, projection.fullUpdate)
       expect(projection.stateVector).toEqual(persistence.head.stateVector)
       expect(encodeStateVector(rebuilt)).toEqual(persistence.head.stateVector)
-      expect(canonicalStateDigest(SCHEMA, canonicalStateBytes(rebuilt))).toBe(persistence.head.canonicalStateDigest)
+      expect(canonicalStateDigestFor(rebuilt.getMap("root").toJSON())).toBe(persistence.head.canonicalStateDigest)
       expect(projection.canonicalStateDigest).toBe(canonicalStateDigestFor({ value: "observer-delete" }))
     } finally {
       replica.off("afterTransaction", observer)
@@ -548,18 +687,14 @@ describe("replicaDoc/candidateDoc durability", () => {
     }
   })
 
-  test("accepts a durable exact delta when an existing delete set changes the apply event encoding", async () => {
+  test("persists the exact single-transaction update without rescanning a pre-existing delete set", async () => {
     const persistence = new MemoryPersistence()
     const seeded = new Y.Doc()
     seeded.getMap("root").set("value", "deleted-base-value")
     seeded.getMap("root").delete("value")
-    persistence.head = Object.freeze({
-      ...persistence.head,
-      fullUpdate: encodeFullUpdate(seeded),
-      stateVector: encodeStateVector(seeded),
-      canonicalStateDigest: canonicalStateDigest(SCHEMA, canonicalStateBytes(seeded)),
-    })
-    seeded.destroy()
+    const seededCanonicalDigest = canonicalStateDigestFor(seeded.getMap("root").toJSON())
+    const seededFullUpdate = encodeFullUpdate(seeded)
+    persistence.seed(seeded, seededCanonicalDigest)
     const selectedAuthority = await authority()
     const runtime = createSelectedDocumentOwnerArtifactFactory(selectedAuthority, "canvas").createRuntime({
       ...ownerDefinition(),
@@ -574,15 +709,59 @@ describe("replicaDoc/candidateDoc durability", () => {
     }
     replica.on("update", observer)
     try {
+      const before = testOnlyYjsCodecWorkCounts()
       const result = await commit(kernel, "after-delete-set", id(118))
       expect(result.status).toBe("saved-locally")
       expect(applyEvent).toBeDefined()
-      expect(applyEvent).not.toEqual(result.frame.sections.yjsUpdate)
+      expect(applyEvent).toEqual(result.frame.sections.yjsUpdate)
+      expect(testOnlyYjsCodecWorkCounts().candidateDeltaFullDocumentEncodes - before.candidateDeltaFullDocumentEncodes).toBe(0)
+
+      const receiverPersistence = new MemoryPersistence()
+      receiverPersistence.seed(seeded, seededCanonicalDigest)
+      const receiver = await openKernel(receiverPersistence, {
+        exactBaseResolver: {
+          reconstructExactBase: async () => ({
+            fullUpdate: seededFullUpdate,
+            stateVector: result.frame.sections.baseStateVector,
+            frontier: result.frame.context.baseFrontier,
+            actorHeads: {
+              format: "convax.replica-actor-head-set",
+              scope: SCOPE,
+              heads: [],
+            },
+            canonicalStateDigest: result.frame.header.core.baseCanonicalStateDigest,
+          }),
+        },
+      })
+      expect((await receiver.receiveFrame(result.frame.bytes)).status).toBe("accepted")
+      receiver.dispose()
     } finally {
+      seeded.destroy()
       replica.off("update", observer)
       kernel.dispose()
     }
   })
+
+  test("keeps fixed-size local commits independent of retained Yjs struct history", async () => {
+    const persistence = new MemoryPersistence()
+    persistence.fastHeadVerification = true
+    const kernel = await openKernel(persistence)
+    const checkpoints = new Set([256, 1_024, 4_096])
+    const deltaByteLengths = new Map<number, number>()
+    const before = testOnlyYjsCodecWorkCounts()
+    try {
+      for (let index = 1; index <= 4_096; index += 1) {
+        const result = await commit(kernel, `v${index.toString(36).padStart(3, "0")}`, operationId(index))
+        expect(result.status).toBe("saved-locally")
+        if (checkpoints.has(index)) deltaByteLengths.set(index, result.frame.sections.yjsUpdate.byteLength)
+      }
+      expect(testOnlyYjsCodecWorkCounts().candidateDeltaFullDocumentEncodes - before.candidateDeltaFullDocumentEncodes).toBe(0)
+      expect(deltaByteLengths.get(1_024)).toBeLessThanOrEqual(deltaByteLengths.get(256)! + 8)
+      expect(deltaByteLengths.get(4_096)).toBeLessThanOrEqual(deltaByteLengths.get(256)! + 8)
+    } finally {
+      kernel.dispose()
+    }
+  }, 120_000)
 
   test("arms owner candidate capture before the local transaction", async () => {
     const selectedAuthority = await authority()
@@ -616,7 +795,7 @@ describe("replicaDoc/candidateDoc durability", () => {
     const persistence = new MemoryPersistence()
     const kernel = await openKernel(persistence, undefined, undefined, runtime)
     expect((await commit(kernel, "capture-fallback", id(118))).status).toBe("saved-locally")
-    expect(persistence.events).toEqual(["object", "outbox", "journal", "head"])
+    expect(persistence.events).toEqual(["atomic"])
     kernel.dispose()
   })
 
@@ -649,7 +828,7 @@ describe("replicaDoc/candidateDoc durability", () => {
     const kernel = await openKernel(persistence, undefined, undefined, runtime)
 
     expect((await commit(kernel, "one", id(120))).status).toBe("saved-locally")
-    expect(persistence.events).toEqual(["object", "outbox", "journal", "head"])
+    expect(persistence.events).toEqual(["atomic"])
     const beforeSecondCommit = baseValidations
     expect((await commit(kernel, "two", id(121))).status).toBe("saved-locally")
     expect(baseValidations).toBe(beforeSecondCommit + 1)
@@ -660,7 +839,6 @@ describe("replicaDoc/candidateDoc durability", () => {
   test("keeps the validated local candidate byte-identical to exact-base delta replay", async () => {
     const selectedAuthority = await authority()
     const definition = ownerDefinition()
-    let candidateFullUpdate: Uint8Array | undefined
     let candidateStateVector: StateVector | undefined
     let candidateCanonicalDigest: Digest | undefined
     const runtime = createSelectedDocumentOwnerArtifactFactory(selectedAuthority, "canvas").createRuntime({
@@ -674,9 +852,8 @@ describe("replicaDoc/candidateDoc durability", () => {
             ...definitions.protocol,
             validatePost(base, candidate, result) {
               const validated = validatePost(base, candidate, result)
-              candidateFullUpdate = encodeFullUpdate(candidate)
               candidateStateVector = encodeStateVector(candidate)
-              candidateCanonicalDigest = canonicalStateDigest(SCHEMA, canonicalStateBytes(candidate))
+              candidateCanonicalDigest = canonicalStateDigestFor(candidate.getMap("root").toJSON())
               return validated
             },
           },
@@ -689,13 +866,13 @@ describe("replicaDoc/candidateDoc durability", () => {
     await commit(kernel, "candidate-replay")
     const evidence = persistence.materializationEvidence
     expect(evidence).toBeDefined()
-    expect(evidence?.fullUpdate).toEqual(candidateFullUpdate)
-    expect(evidence?.stateVector).toEqual(candidateStateVector)
+    expect(persistence.durableDelta?.stateVector).toEqual(candidateStateVector)
     expect(evidence?.canonicalStateDigest).toBe(candidateCanonicalDigest)
+    expect(evidence?.work.fullUpdateEncodes).toBe(0)
     kernel.dispose()
   })
 
-  test("uses one local candidate clone and records zero canonical-delta-validation calls", async () => {
+  test("builds the private candidate during cold open and performs no first-mutation clone", async () => {
     let documentCreations = 0
     const diagnostics: CollaborationLatencyDiagnostic[] = []
     const kernel = await openKernel(
@@ -717,24 +894,37 @@ describe("replicaDoc/candidateDoc durability", () => {
     const afterOpen = documentCreations
     await commit(kernel, "one-candidate-clone", id(123))
     await Promise.resolve()
-    expect(documentCreations - afterOpen).toBe(1)
+    expect(documentCreations - afterOpen).toBe(0)
+    expect((kernel as unknown as { standbyCandidate: object | null }).standbyCandidate).not.toBeNull()
     expect(diagnostics[0]!.stages["canonical-delta-validation"].callCount).toBe(0)
     kernel.dispose()
   })
 
   test("consumes one private digest-bound standby candidate without cloning in the next warm commit", async () => {
     let documentCreations = 0
-    const kernel = await openKernel(new MemoryPersistence(), {
+    const persistence = new MemoryPersistence()
+    persistence.fastHeadVerification = true
+    const kernel = await openKernel(persistence, {
       createDocument: () => {
         documentCreations += 1
         return new Y.Doc()
       },
     })
     await commit(kernel, "standby-base", id(130))
-    await new Promise((resolve) => setTimeout(resolve, 0))
+    expect(persistence.materializationEvidence?.work).toEqual({
+      fullUpdateEncodes: 0,
+      historicalBytesVisited: 0,
+      candidateFullClones: 0,
+    })
     const afterStandbyBuild = documentCreations
     await commit(kernel, "standby-consumed", id(131))
     expect(documentCreations).toBe(afterStandbyBuild)
+    expect(persistence.materializationEvidence?.work).toEqual({
+      fullUpdateEncodes: 0,
+      historicalBytesVisited: 0,
+      candidateFullClones: 0,
+    })
+    expect(persistence.hotFullUpdateEncodes).toBe(0)
     kernel.dispose()
   })
 
@@ -755,7 +945,7 @@ describe("replicaDoc/candidateDoc durability", () => {
     privateKernel.standbyCandidate!.document.transact(() => undefined, "unexpected-standby-observer")
     const beforeFallback = documentCreations
     await commit(kernel, "standby-mutation-fallback", id(133))
-    expect(documentCreations).toBe(beforeFallback + 1)
+    expect(documentCreations).toBe(beforeFallback + 2)
     kernel.dispose()
   })
 
@@ -776,7 +966,7 @@ describe("replicaDoc/candidateDoc durability", () => {
     privateKernel.standbyCandidate!.durableHeadDigest = ordinarySha256(encoder.encode("wrong-standby-head"))
     const beforeFallback = documentCreations
     await commit(kernel, "standby-drift-fallback", id(135))
-    expect(documentCreations).toBe(beforeFallback + 1)
+    expect(documentCreations).toBe(beforeFallback + 2)
     kernel.dispose()
   })
 
@@ -802,14 +992,12 @@ describe("replicaDoc/candidateDoc durability", () => {
     await new Promise((resolve) => setTimeout(resolve, 0))
     const privateKernel = kernel as unknown as {
       standbyCandidate: object | null
-      standbyCandidateTimer: ReturnType<typeof setTimeout> | null
     }
     expect(privateKernel.standbyCandidate).not.toBeNull()
-    persistence.failAt = "journal"
-    await expect(commit(kernel, "standby-crash", id(138))).rejects.toThrow("journal crash")
+    persistence.failAt = "atomic"
+    await expect(commit(kernel, "standby-crash", id(138))).rejects.toThrow("atomic crash")
     await new Promise((resolve) => setTimeout(resolve, 0))
     expect(privateKernel.standbyCandidate).toBeNull()
-    expect(privateKernel.standbyCandidateTimer).toBeNull()
     kernel.dispose()
   })
 
@@ -830,11 +1018,11 @@ describe("replicaDoc/candidateDoc durability", () => {
     privateKernel.standbyCandidate!.frontierDigest = parseDigest("00".repeat(32))
     const beforeFallback = documentCreations
     await commit(kernel, "standby-frontier-fallback", id(140))
-    expect(documentCreations).toBe(beforeFallback + 1)
+    expect(documentCreations).toBe(beforeFallback + 2)
     kernel.dispose()
   })
 
-  test("discards standby full-update-digest binding drift and falls back to an exact clone", async () => {
+  test("discards standby materialization-digest binding drift and falls back to an exact clone", async () => {
     let documentCreations = 0
     const kernel = await openKernel(new MemoryPersistence(), {
       createDocument: () => {
@@ -845,13 +1033,13 @@ describe("replicaDoc/candidateDoc durability", () => {
     await commit(kernel, "standby-fulldigest-base", id(141))
     await new Promise((resolve) => setTimeout(resolve, 0))
     const privateKernel = kernel as unknown as {
-      standbyCandidate: { fullUpdateDigest: Digest } | null
+      standbyCandidate: { materializationDigest: Digest } | null
     }
     expect(privateKernel.standbyCandidate).not.toBeNull()
-    privateKernel.standbyCandidate!.fullUpdateDigest = parseDigest("01".repeat(32))
+    privateKernel.standbyCandidate!.materializationDigest = parseDigest("01".repeat(32))
     const beforeFallback = documentCreations
     await commit(kernel, "standby-fulldigest-fallback", id(142))
-    expect(documentCreations).toBe(beforeFallback + 1)
+    expect(documentCreations).toBe(beforeFallback + 2)
     kernel.dispose()
   })
 
@@ -872,7 +1060,7 @@ describe("replicaDoc/candidateDoc durability", () => {
     privateKernel.standbyCandidate!.stateVectorDigest = parseDigest("02".repeat(32))
     const beforeFallback = documentCreations
     await commit(kernel, "standby-svdigest-fallback", id(144))
-    expect(documentCreations).toBe(beforeFallback + 1)
+    expect(documentCreations).toBe(beforeFallback + 2)
     kernel.dispose()
   })
 
@@ -893,7 +1081,7 @@ describe("replicaDoc/candidateDoc durability", () => {
     privateKernel.standbyCandidate!.documentGeneration += 1
     const beforeFallback = documentCreations
     await commit(kernel, "standby-gen-fallback", id(146))
-    expect(documentCreations).toBe(beforeFallback + 1)
+    expect(documentCreations).toBe(beforeFallback + 2)
     kernel.dispose()
   })
 
@@ -914,11 +1102,11 @@ describe("replicaDoc/candidateDoc durability", () => {
     privateKernel.standbyCandidate!.scopeDigest = parseDigest("03".repeat(32))
     const beforeFallback = documentCreations
     await commit(kernel, "standby-scope-fallback", id(148))
-    expect(documentCreations).toBe(beforeFallback + 1)
+    expect(documentCreations).toBe(beforeFallback + 2)
     kernel.dispose()
   })
 
-  test("falls back for a second wrong-origin transaction and multiple update events in validatePost", async () => {
+  test("rejects a second wrong-origin transaction in validatePost before durability", async () => {
     const selectedAuthority = await authority()
     const definition = ownerDefinition()
     const runtime = createSelectedDocumentOwnerArtifactFactory(selectedAuthority, "canvas").createRuntime({
@@ -939,22 +1127,16 @@ describe("replicaDoc/candidateDoc durability", () => {
       },
     })
     if ("status" in runtime) throw new Error(runtime.code)
-    const diagnostics: CollaborationLatencyDiagnostic[] = []
-    const kernel = await openKernel(new MemoryPersistence(), undefined, undefined, runtime, {
-      record: (value) => {
-        diagnostics.push(value)
-      },
-    })
-    await commit(kernel, "initial-value", id(124))
-    await Promise.resolve()
-    expect(diagnostics[0]!.stages["canonical-delta-validation"].callCount).toBe(1)
-    expect((kernel as unknown as { replicaDoc: Y.Doc }).replicaDoc.getMap("root").get("value")).toBe(
-      "validated-second-transaction",
+    const persistence = new MemoryPersistence()
+    const kernel = await openKernel(persistence, undefined, undefined, runtime)
+    await expect(commit(kernel, "initial-value", id(124))).rejects.toThrow(
+      "exactly one sealed transaction update",
     )
+    expect(persistence.events).toEqual([])
     kernel.dispose()
   })
 
-  test("rejects canonicalizer mutation after a validatePost mutation forced the full fallback", async () => {
+  test("does not let a post-validator mutation reach the retired flat canonicalizer or durability", async () => {
     const selectedAuthority = await authority()
     const definition = ownerDefinition()
     const runtime = createSelectedDocumentOwnerArtifactFactory(selectedAuthority, "canvas").createRuntime({
@@ -983,12 +1165,14 @@ describe("replicaDoc/candidateDoc durability", () => {
     if ("status" in runtime) throw new Error(runtime.code)
     const persistence = new MemoryPersistence()
     const kernel = await openKernel(persistence, undefined, undefined, runtime)
-    await expect(commit(kernel, "force-fallback", id(127))).rejects.toThrow("changed after owner post-validation")
+    await expect(commit(kernel, "force-fallback", id(127))).rejects.toThrow(
+      "exactly one sealed transaction update",
+    )
     expect(persistence.events).toEqual([])
     kernel.dispose()
   })
 
-  test("rejects canonicalizer mutation after post-validation before durability", async () => {
+  test("does not invoke the retired flat canonicalizer before durability", async () => {
     const selectedAuthority = await authority()
     const definition = ownerDefinition()
     const runtime = createSelectedDocumentOwnerArtifactFactory(selectedAuthority, "canvas").createRuntime({
@@ -1012,14 +1196,13 @@ describe("replicaDoc/candidateDoc durability", () => {
     if ("status" in runtime) throw new Error(runtime.code)
     const persistence = new MemoryPersistence()
     const kernel = await openKernel(persistence, undefined, undefined, runtime)
-    await expect(commit(kernel, "canonicalizer-mutation", id(125))).rejects.toThrow(
-      "changed after owner post-validation",
-    )
-    expect(persistence.events).toEqual([])
+    const result = await commit(kernel, "canonicalizer-mutation", id(125))
+    expect(result.status).toBe("saved-locally")
+    expect(kernel.getProjectionSnapshot().canonicalStateDigest).toBe(canonicalStateDigestFor({ value: "canonicalizer-mutation" }))
     kernel.dispose()
   })
 
-  test("falls back when validatePost drifts the candidate client id", async () => {
+  test("rejects candidate client-id drift in validatePost before durability", async () => {
     const selectedAuthority = await authority()
     const definition = ownerDefinition()
     const runtime = createSelectedDocumentOwnerArtifactFactory(selectedAuthority, "canvas").createRuntime({
@@ -1041,15 +1224,12 @@ describe("replicaDoc/candidateDoc durability", () => {
       },
     })
     if ("status" in runtime) throw new Error(runtime.code)
-    const diagnostics: CollaborationLatencyDiagnostic[] = []
-    const kernel = await openKernel(new MemoryPersistence(), undefined, undefined, runtime, {
-      record: (value) => {
-        diagnostics.push(value)
-      },
-    })
-    await commit(kernel, "client-drift", id(126))
-    await Promise.resolve()
-    expect(diagnostics[0]!.stages["canonical-delta-validation"].callCount).toBe(1)
+    const persistence = new MemoryPersistence()
+    const kernel = await openKernel(persistence, undefined, undefined, runtime)
+    await expect(commit(kernel, "client-drift", id(126))).rejects.toThrow(
+      "exactly one sealed transaction update",
+    )
+    expect(persistence.events).toEqual([])
     kernel.dispose()
   })
 
@@ -1078,7 +1258,7 @@ describe("replicaDoc/candidateDoc durability", () => {
     if ("status" in runtime) throw new Error(runtime.code)
     const persistence = new MemoryPersistence()
     const kernel = await openKernel(persistence, undefined, undefined, runtime)
-    await expect(commit(kernel, "original-client-struct", id(128))).rejects.toThrow("other than the signer replica id")
+    await expect(commit(kernel, "original-client-struct", id(128))).rejects.toThrow("exact commitment-bound sealed state")
     expect(persistence.events).toEqual([])
     kernel.dispose()
   })
@@ -1126,13 +1306,22 @@ describe("replicaDoc/candidateDoc durability", () => {
     kernel.dispose()
   })
 
-  test("crosses immutable object, outbox, journal and sole-head commit before replica projection", async () => {
+  test("uses one atomic persistence call for object, outbox, journal and sole-head before projection", async () => {
     const persistence = new MemoryPersistence()
     const projected: string[] = []
     const kernel = await openKernel(persistence, undefined, projected)
     const result = await commit(kernel, "one")
     expect(result.status).toBe("saved-locally")
-    expect(persistence.events).toEqual(["object", "outbox", "journal", "head"])
+    expect(persistence.events).toEqual(["atomic"])
+    expect(persistence.atomicCommitCallCount).toBe(1)
+    expect("fullUpdate" in persistence.lastCommitRequest!.expectedHead).toBe(false)
+    expect(persistence.lastCommitRequest!.outboxRequirement).toBe(
+      "replicate-exact-frame-until-acknowledged",
+    )
+    expect("putImmutableFrame" in persistence).toBe(false)
+    expect("putReplicationOutboxRef" in persistence).toBe(false)
+    expect("appendFrameJournal" in persistence).toBe(false)
+    expect("compareAndCommitReplicaHead" in persistence).toBe(false)
     expect(kernel.getProjectionSnapshot().canonicalStateDigest).toBe(canonicalStateDigestFor({ value: "one" }))
     expect(projected).toEqual([result.frame.frameDigest])
     kernel.dispose()
@@ -1169,14 +1358,10 @@ describe("replicaDoc/candidateDoc durability", () => {
         "delta-encode",
         "frame-decode",
         "frame-encode",
-        "head",
         "head-check",
-        "journal",
-        "object",
         "operation-lookup",
-        "outbox",
+        "atomic-accepted-frame-commit",
         "owner-prepare",
-        "post-head-check",
         "projection",
         "queue",
         "reducer",
@@ -1184,10 +1369,10 @@ describe("replicaDoc/candidateDoc durability", () => {
         "sign",
       ].sort(),
     )
-    expect(diagnostics[0]!.stages.object.durationMs).toBeGreaterThanOrEqual(0)
-    expect(diagnostics[0]!.stages.object.callCount).toBe(1)
+    expect(diagnostics[0]!.stages["atomic-accepted-frame-commit"].durationMs).toBeGreaterThanOrEqual(0)
+    expect(diagnostics[0]!.stages["atomic-accepted-frame-commit"].callCount).toBe(1)
     expect(diagnostics[0]!.stages["canonical-delta-validation"].callCount).toBe(0)
-    expect(diagnostics[0]!.stages["base-state-encode"].callCount).toBe(3)
+    expect(diagnostics[0]!.stages["base-state-encode"].callCount).toBe(2)
     expect(diagnostics[0]!.apiObservedDurationMs).toBeGreaterThanOrEqual(diagnostics[0]!.totalDurationMs)
     expect(diagnostics[0]!.sampleDurationMs).toBeGreaterThanOrEqual(0)
     kernel.dispose()
@@ -1240,7 +1425,7 @@ describe("replicaDoc/candidateDoc durability", () => {
       },
     })
     await expect(commit(sampleFailure, "durable")).resolves.toMatchObject({ status: "saved-locally" })
-    expect(persistence.events).toEqual(["object", "outbox", "journal", "head"])
+    expect(persistence.events).toEqual(["atomic"])
     sampleFailure.dispose()
   })
 
@@ -1278,7 +1463,7 @@ describe("replicaDoc/candidateDoc durability", () => {
 
     expect(diagnosed.frame.bytes).toEqual(plain.frame.bytes)
     expect(withDiagnosticsPersistence.events).toEqual(withoutDiagnosticsPersistence.events)
-    expect(withDiagnosticsPersistence.events).toEqual(["object", "outbox", "journal", "head"])
+    expect(withDiagnosticsPersistence.events).toEqual(["atomic"])
     withoutDiagnostics.dispose()
     withDiagnostics.dispose()
   })
@@ -1296,9 +1481,9 @@ describe("replicaDoc/candidateDoc durability", () => {
     kernel.dispose()
   })
 
-  test("post-head response loss reloads the accepted closure before returning the duplicate", async () => {
+  test("post-fsync response loss is recovered inside the atomic port and never reported as failure", async () => {
     const persistence = new MemoryPersistence()
-    persistence.throwAfterHeadCommit = true
+    persistence.loseResponseAfterAtomicCommit = true
     const kernel = await openKernel(persistence)
     const createFacts = factPortFactories.get(kernel)!
     let prepareCount = 0
@@ -1312,8 +1497,12 @@ describe("replicaDoc/candidateDoc durability", () => {
         }
       },
     }
-    await expect(kernel.commitLocalIntent(request)).rejects.toThrow("post-head response loss")
-    persistence.throwAfterHeadCommit = false
+    const first = await kernel.commitLocalIntent(request)
+    expect(first.status).toBe("saved-locally")
+    expect(persistence.responseLossRecoveredCount).toBe(1)
+    expect(persistence.atomicCommitCallCount).toBe(2)
+    expect(persistence.events).toEqual(["atomic", "atomic"])
+    persistence.loseResponseAfterAtomicCommit = false
     const retry = await kernel.commitLocalIntent(request)
     expect(retry.status).toBe("duplicate")
     expect(prepareCount).toBe(1)
@@ -1322,10 +1511,8 @@ describe("replicaDoc/candidateDoc durability", () => {
     )
     const privateKernel = kernel as unknown as {
       standbyCandidate: object | null
-      standbyCandidateTimer: ReturnType<typeof setTimeout> | null
     }
     expect(privateKernel.standbyCandidate).toBeNull()
-    expect(privateKernel.standbyCandidateTimer).toBeNull()
     kernel.dispose()
   })
 
@@ -1380,32 +1567,24 @@ describe("replicaDoc/candidateDoc durability", () => {
     kernel.dispose()
   })
 
-  for (const stage of ["object", "outbox", "journal", "head"] as const) {
-    test(`crash at ${stage} leaves replicaDoc unchanged`, async () => {
-      const persistence = new MemoryPersistence()
-      persistence.failAt = stage
-      const projected: string[] = []
-      const kernel = await openKernel(persistence, undefined, projected)
-      const before = kernel.getProjectionSnapshot()
-      await expect(commit(kernel, stage)).rejects.toThrow(`${stage} crash`)
-      const after = kernel.getProjectionSnapshot()
-      expect(after.canonicalStateDigest).toBe(before.canonicalStateDigest)
-      expect(after.stateVector).toEqual(before.stateVector)
-      expect(projected).toEqual([])
-      persistence.failAt = null
-      const retry = await commit(kernel, `retry-${stage}`)
-      if (stage === "object") {
-        expect(retry.status).toBe("saved-locally")
-        expect(kernel.getProjectionSnapshot().canonicalStateDigest).toBe(
-          canonicalStateDigestFor({ value: `retry-${stage}` }),
-        )
-      } else {
-        expect(retry.status).toBe("recovered-final-frame")
-        expect(kernel.getProjectionSnapshot().canonicalStateDigest).toBe(canonicalStateDigestFor({ value: stage }))
-      }
-      kernel.dispose()
-    })
-  }
+  test("an atomic durability failure leaves no partial object, outbox, journal, head, or projection", async () => {
+    const persistence = new MemoryPersistence()
+    persistence.failAt = "atomic"
+    const projected: string[] = []
+    const kernel = await openKernel(persistence, undefined, projected)
+    const before = kernel.getProjectionSnapshot()
+    await expect(commit(kernel, "atomic")).rejects.toThrow("atomic crash")
+    const after = kernel.getProjectionSnapshot()
+    expect(after.canonicalStateDigest).toBe(before.canonicalStateDigest)
+    expect(after.stateVector).toEqual(before.stateVector)
+    expect(projected).toEqual([])
+    expect(persistence.objects.size).toBe(0)
+    expect(persistence.accepted.size).toBe(0)
+    persistence.failAt = null
+    const retry = await commit(kernel, "retry-atomic")
+    expect(retry.status).toBe("saved-locally")
+    kernel.dispose()
+  })
 
   test("a stale sole durable head discards the candidate", async () => {
     const persistence = new MemoryPersistence()
@@ -1417,23 +1596,19 @@ describe("replicaDoc/candidateDoc durability", () => {
     kernel.dispose()
   })
 
-  test("crash at each durability barrier preserves exact durable-frame and journal bytes", async () => {
-    for (const stage of ["outbox", "journal", "head"] as const) {
-      const persistence = new MemoryPersistence()
-      persistence.failAt = stage
-      const kernel = await openKernel(persistence)
-      const idValue = parseId128(encodeBase64url(Uint8Array.from({ length: 16 }, (_, i) => i * 7 + 1)))
-      await expect(commit(kernel, `crash-${stage}`, idValue)).rejects.toThrow(`${stage} crash`)
-      persistence.failAt = null
-      const retry = await commit(kernel, `recover-${stage}`, idValue)
-      expect(retry.status).toBe("recovered-final-frame")
-      const storedRef = persistence.refsByDigest.get(retry.frame.frameDigest)
-      expect(storedRef).toBeDefined()
-      const storedBytes = persistence.objects.get(retry.frame.frameDigest)
-      expect(storedBytes).toBeDefined()
-      expect(storedBytes).toEqual(retry.frame.bytes)
-      kernel.dispose()
-    }
+  test("the successful atomic retry preserves the one exact final frame", async () => {
+    const persistence = new MemoryPersistence()
+    persistence.failAt = "atomic"
+    const kernel = await openKernel(persistence)
+    const idValue = parseId128(encodeBase64url(Uint8Array.from({ length: 16 }, (_, i) => i * 7 + 1)))
+    await expect(commit(kernel, "crash-atomic", idValue)).rejects.toThrow("atomic crash")
+    persistence.failAt = null
+    const retry = await commit(kernel, "recover-atomic", idValue)
+    expect(retry.status).toBe("saved-locally")
+    const storedRef = persistence.refsByDigest.get(retry.frame.frameDigest)
+    expect(storedRef).toBeDefined()
+    expect(persistence.objects.get(retry.frame.frameDigest)).toEqual(retry.frame.bytes)
+    kernel.dispose()
   })
 })
 
@@ -1478,18 +1653,24 @@ describe("incoming exact-base arrival order", () => {
     expect(pending).toEqual([secondFrame.frameDigest])
     expect((await receiver.receiveFrame(firstFrame.bytes)).status).toBe("accepted")
     expect(receiverDocumentCreations - afterReceiverOpen).toBe(4)
-    expect(receiverStore.events).toEqual(["object", "outbox", "journal", "head"])
+    expect(receiverStore.events).toEqual(["atomic"])
     expect(projected).toEqual([firstFrame.frameDigest])
     expect((await receiver.receiveFrame(secondFrame.bytes)).status).toBe("accepted")
-    expect(receiverStore.events).toEqual(["object", "outbox", "journal", "head", "object", "outbox", "journal", "head"])
+    expect(receiverStore.events).toEqual(["atomic", "atomic"])
     expect(projected).toEqual([firstFrame.frameDigest, secondFrame.frameDigest])
     expect(receiver.getProjectionSnapshot().canonicalStateDigest).toBe(canonicalStateDigestFor({ value: "two" }))
     const privateReceiver = receiver as unknown as {
       standbyCandidate: object | null
-      standbyCandidateTimer: ReturnType<typeof setTimeout> | null
     }
-    expect(privateReceiver.standbyCandidate).toBeNull()
-    expect(privateReceiver.standbyCandidateTimer).toBeNull()
+    expect(privateReceiver.standbyCandidate).not.toBeNull()
+    const creationsBeforeWarmLocal = receiverDocumentCreations
+    expect((await commit(receiver, "three", id(153))).status).toBe("saved-locally")
+    expect(receiverStore.materializationEvidence?.work).toEqual({
+      fullUpdateEncodes: 0,
+      historicalBytesVisited: 0,
+      candidateFullClones: 0,
+    })
+    expect(receiverDocumentCreations).toBe(creationsBeforeWarmLocal)
     source.dispose()
     receiver.dispose()
   })
@@ -1581,7 +1762,7 @@ describe("incoming and recovery frame complete validation regression", () => {
 
     const result = await receiver.receiveFrame(sourceFrame.bytes)
     expect(result.status).toBe("accepted")
-    expect(receiverStore.events).toEqual(["object", "outbox", "journal", "head"])
+    expect(receiverStore.events).toEqual(["atomic"])
     expect(projected).toEqual([sourceFrame.frameDigest])
     expect(receiver.getProjectionSnapshot().canonicalStateDigest).toBe(
       canonicalStateDigestFor({ value: "cross-kernel-validator" }),
@@ -1621,8 +1802,30 @@ function canonicalStateBytes(document: Y.Doc): Uint8Array {
   return encodeRestrictedJcs({ format: CANONICAL_STATE_FORMAT, value: document.getMap("root").toJSON() })
 }
 
+function replaceAsciiOnce(bytes: Uint8Array, from: string, to: string): Uint8Array {
+  const source = encoder.encode(from)
+  const replacement = encoder.encode(to)
+  if (source.byteLength !== replacement.byteLength) throw new Error("replacement must preserve byte length")
+  const result = Uint8Array.from(bytes)
+  const index = result.findIndex((byte, offset) =>
+    byte === source[0] && source.every((candidate, inner) => result[offset + inner] === candidate),
+  )
+  if (index < 0) throw new Error(`missing encoded value: ${from}`)
+  result.set(replacement, index)
+  return result
+}
+
 function canonicalStateDigestFor(value: unknown) {
-  return canonicalStateDigest(SCHEMA, encodeRestrictedJcs({ format: CANONICAL_STATE_FORMAT, value }))
+  const issuer = createOwnerStateCommitmentIssuer({ owner: "canvas", ownerSchemaDigest: SCHEMA })
+  const root = value as Record<string, unknown>
+  return issuer.digest(issuer.build({
+    descriptor: CANONICALIZER_DESCRIPTOR.stateCommitment,
+    scalars: [{ name: "format", value: CANONICAL_STATE_FORMAT }],
+    collections: [{
+      name: "root",
+      entries: Object.entries(root).map(([key, entryValue]) => ({ key, value: entryValue })),
+    }],
+  }))
 }
 
 function requiredValidationArtifacts() {
@@ -1655,4 +1858,10 @@ function requiredValidationArtifacts() {
 
 function id(seed: number): Id128 {
   return parseId128(encodeBase64url(new Uint8Array(16).fill(seed)))
+}
+
+function operationId(value: number): Id128 {
+  const bytes = new Uint8Array(16)
+  new DataView(bytes.buffer).setUint32(12, value)
+  return parseId128(encodeBase64url(bytes))
 }

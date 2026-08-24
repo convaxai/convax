@@ -7,8 +7,7 @@ import {
   canvasResourceReadConnectedImageIpcChannel,
   canvasTextResourceIpcChannel,
 } from "../desktop-protocol"
-import { createCanvasDocument, createTextNode } from "@convax/canvas/core"
-import { encodeBase64url, parseActorId, parseDigest, parseId128 } from "@convax/collaboration"
+import { encodeBase64url, parseActorId, parseDigest, parseId128, parseUint64 } from "@convax/collaboration"
 import { createCanvasResourcePreloadClient, createCanvasTextResourcePreloadClient } from "./canvas-resource-client"
 
 function request(overrides: Record<string, unknown> = {}) {
@@ -25,11 +24,7 @@ function request(overrides: Record<string, unknown> = {}) {
 }
 
 const resourceSessionId = parseId128(encodeBase64url(new Uint8Array(16).fill(3)))
-const resourceHydrationScope = Object.freeze({
-  ref: Object.freeze({ canvasId: "canvas-main", scopeId: "project-one" }),
-  sessionId: resourceSessionId,
-})
-
+const certifiedCanvasId = `cv_${"5".repeat(64)}`
 const operationReceipt = {
   format: "convax.canvas-operation-receipt" as const,
   actorId: parseActorId(encodeBase64url(new Uint8Array(32).fill(1))),
@@ -42,23 +37,93 @@ const operationReceipt = {
   historyMaterialDigest: parseDigest("c".repeat(64)),
 }
 
+const appendedSuffix = encodeBase64url(new Uint8Array(32).fill(7))
+const appendedEntity = Object.freeze({
+  kind: "node" as const,
+  id: `n_${appendedSuffix}`,
+  incarnation: `ni_${appendedSuffix}`,
+})
+const certifiedReceipt = Object.freeze({
+  ...operationReceipt,
+  intentKind: "canvas.resources.add" as const,
+  resultEntities: Object.freeze([appendedEntity]),
+})
+
+function certifiedResourceAddResult() {
+  const patch = {
+    format: "convax.canvas-certified-projection-patch" as const,
+    kind: "resource-append" as const,
+    canvasId: certifiedCanvasId,
+    ownerSchemaDigest: parseDigest("1".repeat(64)),
+    baseStateCommitmentDigest: parseDigest("2".repeat(64)),
+    resultStateCommitmentDigest: parseDigest("3".repeat(64)),
+    receipt: certifiedReceipt,
+    nodes: [
+      {
+        ref: appendedEntity,
+        role: "file" as const,
+        position: { x: 20, y: 40 },
+        size: { width: 320, height: 180 },
+        data: {
+          format: "convax.canvas-node-data" as const,
+          kind: "resource" as const,
+          title: "Brief.md",
+          resource: {
+            format: "convax.canvas-resource-ref" as const,
+            uri:
+              `convax-project://project_0123456789abcdef0123456789abcdef/epochs/` +
+              `AQEBAQEBAQEBAQEBAQEBAQ/entries/pf_${"1".repeat(64)}` +
+              `?blob=sha256%3A${"2".repeat(64)}&path=Notes%2FBrief.md`,
+            mediaClass: "text" as const,
+            mime: "text/markdown",
+            byteLength: parseUint64("5"),
+            contentDigest: parseDigest("2".repeat(64)),
+            ownerProofDigest: parseDigest("4".repeat(64)),
+          },
+        },
+        plugin: null,
+        parent: null,
+        generationLifecycle: "none" as const,
+      },
+    ],
+    edges: [],
+  }
+  return {
+    createdNodeIds: [appendedEntity.id],
+    delivery: {
+      format: "convax.canvas-resource-certified-projection-delivery" as const,
+      status: "certified" as const,
+      ref: { canvasId: certifiedCanvasId, scopeId: "project-one" },
+      sessionId: resourceSessionId,
+      acceptedFrameDigest: parseDigest("d".repeat(64)),
+      canUndo: true,
+      canRedo: false,
+      patch,
+      resourceHierarchy: {
+        format: "convax.canvas-resource-hierarchy-delta" as const,
+        projectionIdentity: {
+          format: "convax.canvas-certified-projection-identity" as const,
+          canvasId: patch.canvasId,
+          ownerSchemaDigest: patch.ownerSchemaDigest,
+          stateCommitmentDigest: patch.resultStateCommitmentDigest,
+        },
+        entries: [{
+          entity: appendedEntity,
+          nodeId: appendedEntity.id,
+          classification: { kind: "not-path-backed" as const },
+        }],
+      },
+      runtimePatches: [{ nodeId: appendedEntity.id, state: { status: "ready" as const, text: "hello" } }],
+    },
+    operationReceipt: certifiedReceipt,
+    warnings: [],
+  }
+}
+
 function resourceResult(createdNodeIds: readonly string[] = ["created"]) {
   void createdNodeIds
   return {
-    delivery: {
-      status: "accepted" as const,
-      acceptedFrameDigest: parseDigest("d".repeat(64)),
-      projection: {
-        format: "convax.canvas-session-projection" as const,
-        ref: { canvasId: "canvas-main", scopeId: "project-one" },
-        sessionId: resourceSessionId,
-        document: createCanvasDocument({ id: "canvas-main" }),
-        edgeEntities: [],
-        nodeEntities: [],
-        canUndo: true,
-        canRedo: false,
-      },
-    },
+    delivery: { status: "unavailable" as const },
     operationReceipt,
     warnings: [],
   }
@@ -67,20 +132,7 @@ function resourceResult(createdNodeIds: readonly string[] = ["created"]) {
 function resourceAddResult(createdNodeIds: readonly string[] = ["created"]) {
   return {
     createdNodeIds,
-    delivery: {
-      status: "accepted" as const,
-      acceptedFrameDigest: parseDigest("d".repeat(64)),
-      projection: {
-        format: "convax.canvas-session-projection" as const,
-        ref: { canvasId: "canvas-main", scopeId: "project-one" },
-        sessionId: resourceSessionId,
-        document: createCanvasDocument({ id: "canvas-main" }),
-        edgeEntities: [],
-        nodeEntities: [],
-        canUndo: true,
-        canRedo: false,
-      },
-    },
+    delivery: { status: "unavailable" as const },
     operationReceipt,
     warnings: [],
   }
@@ -103,6 +155,51 @@ function setup(
 }
 
 describe("preload Canvas resource client", () => {
+  test("accepts only a closed owner-certified patch and its exact transient runtime sidecar", async () => {
+    const response = certifiedResourceAddResult()
+    const { client } = setup(mock(async () => structuredClone(response)))
+
+    await expect(client.add(request({ canvasId: certifiedCanvasId }))).resolves.toMatchObject({
+      createdNodeIds: [appendedEntity.id],
+      delivery: {
+        format: "convax.canvas-resource-certified-projection-delivery",
+        status: "certified",
+        patch: { baseStateCommitmentDigest: parseDigest("2".repeat(64)) },
+        runtimePatches: [{ nodeId: appendedEntity.id, state: { status: "ready", text: "hello" } }],
+      },
+    })
+
+    const withoutRuntime = certifiedResourceAddResult()
+    withoutRuntime.delivery.runtimePatches = []
+    const droppedSidecar = setup(mock(async () => withoutRuntime))
+    await expect(droppedSidecar.client.add(request({ canvasId: certifiedCanvasId }))).resolves.toMatchObject({
+      delivery: { status: "certified", runtimePatches: [] },
+    })
+
+    const widened = certifiedResourceAddResult()
+    ;(widened.delivery as unknown as Record<string, unknown>).projection = {}
+    const invalid = setup(mock(async () => widened))
+    await expect(invalid.client.add(request({ canvasId: certifiedCanvasId }))).rejects.toThrow("field set")
+
+    const withoutHierarchy = certifiedResourceAddResult()
+    delete (withoutHierarchy.delivery as unknown as Record<string, unknown>).resourceHierarchy
+    await expect(
+      setup(mock(async () => withoutHierarchy)).client.add(request({ canvasId: certifiedCanvasId })),
+    ).rejects.toThrow("field set")
+
+    const widenedHierarchy = certifiedResourceAddResult()
+    ;(widenedHierarchy.delivery.resourceHierarchy as unknown as Record<string, unknown>).nativePath = "/private/a"
+    await expect(
+      setup(mock(async () => widenedHierarchy)).client.add(request({ canvasId: certifiedCanvasId })),
+    ).rejects.toThrow("unknown or missing fields")
+
+    const mismatchedHierarchy = certifiedResourceAddResult()
+    mismatchedHierarchy.delivery.resourceHierarchy.projectionIdentity.stateCommitmentDigest = parseDigest("9".repeat(64))
+    await expect(
+      setup(mock(async () => mismatchedHierarchy)).client.add(request({ canvasId: certifiedCanvasId })),
+    ).rejects.toThrow("crossed owner projection identity")
+  })
+
   test("relinks from one portable Project source through its mounted session without references, native paths, or bodies", async () => {
     const { client, invoke } = setup()
 
@@ -115,7 +212,7 @@ describe("preload Canvas resource client", () => {
         sessionId: resourceSessionId,
         source: { kind: "host-file", path: "media/replacement.png" },
       }),
-    ).resolves.toMatchObject({ delivery: { projection: { document: { id: "canvas-main" } } } })
+    ).resolves.toMatchObject({ delivery: { status: "unavailable" } })
 
     expect(invoke).toHaveBeenCalledWith("canvas:resource-relink", {
       canvasId: "canvas-main",
@@ -148,7 +245,7 @@ describe("preload Canvas resource client", () => {
     }
 
     await expect(client.relink(input)).resolves.toMatchObject({
-      delivery: { projection: { document: { id: "canvas-main" } } },
+      delivery: { status: "unavailable" },
     })
     expect(invoke.mock.calls[0]).toEqual([
       "canvas:resource-local-file-register",
@@ -180,7 +277,7 @@ describe("preload Canvas resource client", () => {
         projectId: "project-one",
         sessionId: resourceSessionId,
       }),
-    ).resolves.toMatchObject({ delivery: { projection: { document: { id: "canvas-main" } } } })
+    ).resolves.toMatchObject({ delivery: { status: "unavailable" } })
 
     expect(invoke).toHaveBeenCalledWith("canvas:resource-save-editable-copy", {
       canvasId: "canvas-main",
@@ -195,78 +292,85 @@ describe("preload Canvas resource client", () => {
     expect(serialized).not.toContain("path")
   })
 
-  test("requests stale runtime hydration without exposing a native path", async () => {
-    const document = createCanvasDocument({
-      id: "canvas-main",
-      nodes: [
-        createTextNode({
-          id: "note",
-          metadata: { convaxProjectResource: { kind: "project-file", path: "Notes/a.md" } },
-          position: { x: 0, y: 0 },
-          resourceState: { status: "stale" },
-        }),
-      ],
-    })
-    const hydrated = {
-      ...document,
-      nodes: document.nodes.map((node) => ({
-        ...node,
-        data: { ...node.data, resourceState: { status: "ready", text: "fresh" } },
-      })),
+  test("requests exact session-bound stale targets and accepts only their runtime patches", async () => {
+    const suffix = encodeBase64url(new Uint8Array(32).fill(4))
+    const target = {
+      entity: { id: `n_${suffix}`, incarnation: `ni_${suffix}`, kind: "node" as const },
+      nodeId: `n_${suffix}`,
     }
-    const invoke = mock(async () => hydrated)
-    const { client } = setup(invoke)
-
-    await expect(client.hydrateStale(resourceHydrationScope)).resolves.toEqual(hydrated)
-    expect(invoke).toHaveBeenCalledWith(canvasResourceHydrateStaleIpcChannel, {
-      ref: { canvasId: "canvas-main", scopeId: "project-one" },
-      sessionId: resourceSessionId,
-    })
-  })
-
-  test("forwards a bounded target list for a targeted stale runtime hydration", async () => {
-    const hydrated = createCanvasDocument({ id: "canvas-main" })
-    const invoke = mock(async () => hydrated)
+    const response = { patches: [{ nodeId: target.nodeId, state: { status: "ready" as const, text: "fresh" } }] }
+    const invoke = mock(async () => response)
     const { client } = setup(invoke)
 
     await expect(
-      client.hydrateStale({ ...resourceHydrationScope, nodeIds: ["target-note", "target-image"] }),
-    ).resolves.toEqual(hydrated)
+      client.hydrateStale({
+        ref: { canvasId: "canvas-main", scopeId: "project-one" },
+        sessionId: resourceSessionId,
+        targets: [target],
+      }),
+    ).resolves.toEqual(response)
     expect(invoke).toHaveBeenCalledWith(canvasResourceHydrateStaleIpcChannel, {
       ref: { canvasId: "canvas-main", scopeId: "project-one" },
       sessionId: resourceSessionId,
-      nodeIds: ["target-note", "target-image"],
+      targets: [target],
     })
+    expect(JSON.stringify(invoke.mock.calls)).not.toContain("Notes/a.md")
+  })
+
+  test("rejects widened, mismatched, incomplete, or malformed runtime hydration patches", async () => {
+    const suffix = encodeBase64url(new Uint8Array(32).fill(5))
+    const target = {
+      entity: { id: `n_${suffix}`, incarnation: `ni_${suffix}`, kind: "node" as const },
+      nodeId: `n_${suffix}`,
+    }
+    const input = {
+      ref: { canvasId: "canvas-main", scopeId: "project-one" },
+      sessionId: resourceSessionId,
+      targets: [target],
+    }
+    for (const response of [
+      { patches: [], extra: true },
+      { patches: [] },
+      { patches: [{ nodeId: "different", state: { status: "ready" } }] },
+      { patches: [{ extra: true, nodeId: target.nodeId, state: { status: "ready" } }] },
+      { patches: [{ nodeId: target.nodeId, state: { nativePath: "/private/a", status: "ready" } }] },
+      { patches: [{ nodeId: target.nodeId, state: { status: "ready", text: 42 } }] },
+    ]) {
+      const { client } = setup(mock(async () => response))
+      await expect(client.hydrateStale(input)).rejects.toThrow(/Canvas resource refresh/)
+    }
   })
 
   test("rejects malformed or over-bound hydration targets before crossing IPC", async () => {
-    const invoke = mock(async () => createCanvasDocument({ id: "canvas-main" }))
+    const suffix = encodeBase64url(new Uint8Array(32).fill(6))
+    const target = {
+      entity: { id: `n_${suffix}`, incarnation: `ni_${suffix}`, kind: "node" as const },
+      nodeId: `n_${suffix}`,
+    }
+    const invoke = mock(async () => ({ patches: [] }))
     const { client } = setup(invoke)
 
     await expect(
       client.hydrateStale({
-        ...resourceHydrationScope,
-        nodeIds: Array.from({ length: 4_097 }, (_, index) => `node-${index}`),
+        ref: { canvasId: "canvas-main", scopeId: "project-one" },
+        sessionId: resourceSessionId,
+        targets: Array.from({ length: 4_097 }, () => target),
       }),
-    ).rejects.toThrow("Could not refresh Canvas resources")
-    await expect(client.hydrateStale({ ...resourceHydrationScope, nodeIds: ["same", "same"] })).rejects.toThrow(
-      "Could not refresh Canvas resources",
-    )
-    await expect(client.hydrateStale({ ...resourceHydrationScope, nodeIds: ["x".repeat(257)] })).rejects.toThrow(
-      "Could not refresh Canvas resources",
-    )
+    ).rejects.toThrow("Canvas resource refresh targets are invalid")
     await expect(
       client.hydrateStale({
-        ...resourceHydrationScope,
-        ref: { ...resourceHydrationScope.ref, unsupported: true },
-      } as never),
-    ).rejects.toThrow("Could not refresh Canvas resources")
-    await expect(client.hydrateStale({ canvasId: "canvas-main", nodeIds: ["legacy"] } as never)).rejects.toThrow(
-      "Could not refresh Canvas resources",
-    )
+        ref: { canvasId: "canvas-main", scopeId: "project-one" },
+        sessionId: resourceSessionId,
+        targets: [target, target],
+      }),
+    ).rejects.toThrow("Canvas resource refresh target is invalid")
     await expect(
-      client.hydrateStale({ ...resourceHydrationScope, sessionId: "not-a-session" } as never),
-    ).rejects.toThrow("Could not refresh Canvas resources")
+      client.hydrateStale({
+        ref: { canvasId: "canvas-main", scopeId: "project-one" },
+        sessionId: "not-a-session",
+        targets: [target],
+      } as never),
+    ).rejects.toThrow("Canvas resource refresh session id")
 
     expect(invoke).not.toHaveBeenCalled()
   })
@@ -413,7 +517,7 @@ describe("preload Canvas resource client", () => {
           sources: [],
         }),
       ),
-    ).resolves.toMatchObject({ delivery: { projection: { document: { id: "canvas-main" } } } })
+    ).resolves.toMatchObject({ delivery: { status: "unavailable" } })
   })
 
   test("an invalid token does not consume valid peers, while an IPC failure consumes the whole valid batch", async () => {
@@ -492,7 +596,7 @@ describe("preload Canvas resource client", () => {
           sources: [],
         }),
       ),
-    ).resolves.toMatchObject({ delivery: { projection: { document: { id: "canvas-main" } } } })
+    ).resolves.toMatchObject({ delivery: { status: "unavailable" } })
   })
 
   test("does not mint a token for an in-memory File without a native path", () => {

@@ -1,6 +1,11 @@
 import type * as Y from "yjs"
 import type { CanonicalJcsEvidence, CanonicalJcsEvidenceIssuer } from "./canonical-jcs-evidence"
 import type {
+  OwnerStateCommitment,
+  OwnerStateCommitmentDescriptor,
+  OwnerStateCommitmentIssuer,
+} from "./owner-state-commitment"
+import type {
   ActorId,
   CanvasId,
   Digest,
@@ -50,7 +55,7 @@ export interface YjsWireCodec {
   readonly package: "yjs"
   readonly packageIntegrity: "sha512-Eq+5BRfbeGyqGVrTJL3bEcr8gKkxPuyuoHmAwpk52fDb8kOVMrfVSTRPd6yiGgX5Fskb96qCRjzjbRjrL4YEnw=="
   readonly stateVectorCodec: "Y.encodeStateVector"
-  readonly updateCodec: "Y.encodeStateAsUpdate"
+  readonly updateCodec: "Y.Doc.update-event"
   readonly updateVersion: "v1"
   readonly version: "13.6.31"
 }
@@ -196,6 +201,7 @@ export interface OwnerCanonicalizerDescriptor {
   readonly canonicalStateCodec: OwnerCanonicalStateCodec
   readonly exactBytePolicy: "parse-reencode-byte-equal"
   readonly unknownStatePolicy: "reject"
+  readonly stateCommitment: OwnerStateCommitmentDescriptor
 }
 
 export interface ActualWrite {
@@ -334,6 +340,12 @@ export interface OwnerProcessValueFactory<K extends DocumentOwnerKind> {
     document: Y.Doc,
     state: OwnerValidatedState<K>,
     evidence: CanonicalJcsEvidence,
+  ): OwnerValidatedState<K>
+  readonly stateCommitment: OwnerStateCommitmentIssuer
+  bindStateCommitment(
+    document: Y.Doc,
+    state: OwnerValidatedState<K>,
+    commitment: OwnerStateCommitment,
   ): OwnerValidatedState<K>
   readonly [ownerProcessValueFactoryBrand]: true
 }

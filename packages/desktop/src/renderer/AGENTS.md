@@ -21,10 +21,21 @@ or durable domain authority.
   persistence, placement, conflict, or recovery logic.
 - Canvas domain state is Main's authoritative session projection. Immediate
   feedback is a separate Canvas-owned presentation overlay: ghosts are
-  non-interactive and never enter selection, clipboard, commands or IPC. Install a
-  local response projection before covering its frame digest, skip the matching
-  invalidation query, and preserve one trailing query for unknown frames arriving
-  during refresh.
+  non-interactive and never enter selection, clipboard, commands or IPC. Full
+  open/query responses reset Canvas's disposable indexed projection cursor. A local
+  resource append applies only an exact-base Canvas-certified patch and publishes
+  its bounded node/edge changes before covering the frame digest; it never reads the
+  cursor's cold full getter, clears/refills entity maps, or reconstructs all React
+  Flow arrays. Base mismatch, rejection, or cache loss performs one full query;
+  matching local invalidation performs none, while unknown frames retain the
+  trailing refresh.
+- Prepared and hydrated resource runtime is Canvas-owned transient presentation.
+  Apply the unchanged owner patch first, then install prepared state only when its
+  sibling sidecar matches every exact patch-created node and live owner identity; a
+  mismatch drops runtime only. Send stale hydration as bounded
+  batches of exact live node incarnations and merge returned patches only while each
+  node is still stale and metadata-identical; never replace or request the whole
+  Canvas for resource presentation.
 - Every local Canvas mutation may reserve only a Canvas-owned opaque provisional root
   before the durable lane; Renderer never applies the business command or constructs
   a candidate document. Geometry may attach its already-known presentation result;
@@ -144,6 +155,15 @@ or durable domain authority.
 - Project-directory browsing is a transient read-only projection over the existing
   Project Files capability. Projected entries are not persisted, selected,
   connected, moved, or added to Canvas history.
+- A path-bearing Project filesystem event invalidates only overlapping mounted
+  Project-file nodes by querying the Canvas-owned disposable resource-hierarchy
+  index. It never reads the full projection or scans/hydrates every node on this
+  path. Treat an ancestor directory event as overlap for descendant files, and a
+  subtree resource as overlapping descendant events. A truly pathless bulk event
+  or an unavailable exact index retains the conservative all-resource fallback so
+  external changes are not silently lost. Renderer normalizes only the host-neutral
+  watcher key and never derives a path from a Canvas resource URI or treats an event
+  as an authoritative file mutation.
 - Project file rows render only bounded thumbnail data. Mounted image and video rows
   schedule bounded-concurrency thumbnail-purpose leases, capture one small Chromium
   cover,

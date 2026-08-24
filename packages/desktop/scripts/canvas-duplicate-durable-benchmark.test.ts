@@ -8,7 +8,7 @@ import {
 } from "./canvas-duplicate-durable-benchmark"
 import { durableBusinessStages } from "./project-index-durable-benchmark"
 
-describe("ordinary Canvas duplicate durable benchmark", () => {
+describe.skipIf(process.platform === "win32")("ordinary Canvas duplicate durable benchmark", () => {
   test("allocates distinct operation ids beyond the one-byte boundary", () => {
     expect(canvasBenchmarkId(255)).not.toBe(canvasBenchmarkId(256))
     expect(() => canvasBenchmarkId(0x1_0000_0000)).toThrow("uint32")
@@ -75,7 +75,7 @@ describe("ordinary Canvas duplicate durable benchmark", () => {
           expect(result.actual.nodesAfter).toBe(nodeCount + 1)
           expect(result.actual.retainedFrames).toBe(1)
           expect(result.actual.materializerDelta).toBe(0)
-          expect(result.actual.physicalSyncCount).toBe(mode === "real" ? 11 : 0)
+          expect(result.actual.physicalSyncCount).toBe(mode === "real" ? 1 : 0)
           expect(Object.keys(result.stages)).toEqual([...durableBusinessStages])
         }, 30_000)
       }

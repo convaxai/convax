@@ -89,6 +89,11 @@ export interface ProjectIndexCurrentResourceProjectionEntry {
   readonly storageClass: "project-file" | "managed-blob"
 }
 
+export interface ProjectIndexCurrentResourceProofTarget {
+  readonly uri: string
+  readonly ownerProofDigest: Digest
+}
+
 /** Browser-safe ProjectIndex owner query used by native GC and blob bootstrap. */
 export interface ProjectIndexCurrentBlobReferencePort {
   queryCurrentResources(input: {
@@ -97,6 +102,15 @@ export interface ProjectIndexCurrentBlobReferencePort {
   queryCurrentBlobDigests(input: {
     readonly projectId: ProjectId
   }): Promise<ReadonlySet<Digest>>
+  /**
+   * Selects only exact Canvas-owned resource proofs from the live owner
+   * snapshot. An absent result means the proof is unknown or no longer current;
+   * implementations never widen this query to another resource family.
+   */
+  queryCurrentResourcesExact?(input: {
+    readonly projectId: ProjectId
+    readonly targets: readonly ProjectIndexCurrentResourceProofTarget[]
+  }): Promise<readonly ProjectIndexCurrentResourceProjectionEntry[]>
 }
 
 /**
@@ -107,6 +121,10 @@ export interface ProjectIndexCurrentBlobReferencePort {
 export interface ProjectIndexCurrentResourceReferenceQueryPort {
   queryCurrentResourceReferences(input: {
     readonly projectId: ProjectId
+  }): Promise<readonly ProjectIndexResourceReference[]>
+  queryCurrentResourceReferencesExact?(input: {
+    readonly projectId: ProjectId
+    readonly targets: readonly ProjectIndexCurrentResourceProofTarget[]
   }): Promise<readonly ProjectIndexResourceReference[]>
 }
 

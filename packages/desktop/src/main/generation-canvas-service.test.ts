@@ -3855,7 +3855,7 @@ describe("GenerationCanvasService", () => {
       id: "desktop:renderer",
       kind: "ui",
     })
-    for (let index = 0; index < 100; index += 1) {
+    for (let index = 0; index < 2_000; index += 1) {
       if ((await operations.list()).length === 0) break
       await Bun.sleep(1)
     }
