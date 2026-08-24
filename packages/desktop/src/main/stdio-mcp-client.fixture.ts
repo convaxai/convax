@@ -18,9 +18,6 @@ const generationTaskId = process.argv
   .find((argument) => argument.startsWith("--generation-task-id="))
   ?.slice("--generation-task-id=".length)
 const generationRecovery = process.argv.includes("--generation-recovery")
-const jsonRpcTraceFile = process.argv
-  .find((argument) => argument.startsWith("--json-rpc-trace-file="))
-  ?.slice("--json-rpc-trace-file=".length)
 const pauseStdinAfterToolsList = process.argv.includes("--pause-stdin-after-tools-list")
 const forkDescendantFile = process.argv
   .find((argument) => argument.startsWith("--fork-descendant="))
@@ -50,7 +47,6 @@ if (ignoreSigterm) {
 }
 
 function send(value: unknown) {
-  if (jsonRpcTraceFile) fs.appendFileSync(jsonRpcTraceFile, `send ${JSON.stringify(value)}\n`)
   process.stdout.write(`${JSON.stringify(value)}\n`)
 }
 
@@ -228,11 +224,7 @@ process.stdin.on("data", (chunk: string) => {
     if (newline < 0) return
     const line = buffer.slice(0, newline).trim()
     buffer = buffer.slice(newline + 1)
-    if (line) {
-      const request = JSON.parse(line) as JsonRpcRequest
-      if (jsonRpcTraceFile) fs.appendFileSync(jsonRpcTraceFile, `receive ${JSON.stringify(request)}\n`)
-      void handle(request)
-    }
+    if (line) void handle(JSON.parse(line) as JsonRpcRequest)
   }
 })
 import { spawn } from "node:child_process"
