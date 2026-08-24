@@ -743,25 +743,39 @@ describe("replicaDoc/candidateDoc durability", () => {
   })
 
   test("keeps fixed-size local commits independent of retained Yjs struct history", async () => {
-    const persistence = new MemoryPersistence()
-    persistence.fastHeadVerification = true
-    const kernel = await openKernel(persistence)
-    const checkpoints = new Set([256, 1_024, 4_096])
+    const checkpoints = [256, 1_024, 4_096] as const
     const deltaByteLengths = new Map<number, number>()
+    const retainedUpdateByteLengths = new Map<number, number>()
     const before = testOnlyYjsCodecWorkCounts()
-    try {
-      for (let index = 1; index <= 4_096; index += 1) {
-        const result = await commit(kernel, `v${index.toString(36).padStart(3, "0")}`, operationId(index))
-        expect(result.status).toBe("saved-locally")
-        if (checkpoints.has(index)) deltaByteLengths.set(index, result.frame.sections.yjsUpdate.byteLength)
+    for (const checkpoint of checkpoints) {
+      const persistence = new MemoryPersistence()
+      persistence.fastHeadVerification = true
+      const seeded = new Y.Doc()
+      const retained = new Y.Map<string>()
+      seeded.getMap("root").set("value", retained)
+      for (let index = 1; index <= checkpoint; index += 1) {
+        seeded.transact(() => {
+          retained.set(`entry-${index.toString(36).padStart(3, "0")}`, `v${index.toString(36).padStart(3, "0")}`)
+        })
       }
-      expect(testOnlyYjsCodecWorkCounts().candidateDeltaFullDocumentEncodes - before.candidateDeltaFullDocumentEncodes).toBe(0)
-      expect(deltaByteLengths.get(1_024)).toBeLessThanOrEqual(deltaByteLengths.get(256)! + 8)
-      expect(deltaByteLengths.get(4_096)).toBeLessThanOrEqual(deltaByteLengths.get(256)! + 8)
-    } finally {
-      kernel.dispose()
+      retainedUpdateByteLengths.set(checkpoint, encodeFullUpdate(seeded).byteLength)
+      persistence.seed(seeded, canonicalStateDigestFor(seeded.getMap("root").toJSON()))
+      const kernel = await openKernel(persistence)
+      try {
+        const result = await commit(kernel, `after-${checkpoint}`, operationId(checkpoint))
+        expect(result.status).toBe("saved-locally")
+        deltaByteLengths.set(checkpoint, result.frame.sections.yjsUpdate.byteLength)
+      } finally {
+        kernel.dispose()
+        seeded.destroy()
+      }
     }
-  }, 120_000)
+    expect(retainedUpdateByteLengths.get(1_024)).toBeGreaterThan(retainedUpdateByteLengths.get(256)!)
+    expect(retainedUpdateByteLengths.get(4_096)).toBeGreaterThan(retainedUpdateByteLengths.get(1_024)!)
+    expect(testOnlyYjsCodecWorkCounts().candidateDeltaFullDocumentEncodes - before.candidateDeltaFullDocumentEncodes).toBe(0)
+    expect(deltaByteLengths.get(1_024)).toBeLessThanOrEqual(deltaByteLengths.get(256)! + 8)
+    expect(deltaByteLengths.get(4_096)).toBeLessThanOrEqual(deltaByteLengths.get(256)! + 8)
+  }, 30_000)
 
   test("arms owner candidate capture before the local transaction", async () => {
     const selectedAuthority = await authority()

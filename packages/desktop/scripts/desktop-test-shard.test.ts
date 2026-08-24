@@ -40,12 +40,11 @@ describe("Desktop test sharding", () => {
 
     expect(testJob).toContain("platform: linux\n            test_scope: workspace\n            desktop_shard: 1/1")
     expect(testJob).toContain("platform: windows non-desktop\n            test_scope: non-desktop")
-    expect(testJob).toContain(
-      "platform: windows shard 1/2\n            test_scope: desktop\n            desktop_shard: 1/2",
-    )
-    expect(testJob).toContain(
-      "platform: windows shard 2/2\n            test_scope: desktop\n            desktop_shard: 2/2",
-    )
+    for (let index = 1; index <= 4; index += 1) {
+      expect(testJob).toContain(
+        `platform: windows shard ${index}/4\n            test_scope: desktop\n            desktop_shard: ${index}/4`,
+      )
+    }
     expect(testJob).toContain("run: bun turbo test --filter='!@convax/desktop'")
     expect(testJob).toContain("run: bun --cwd packages/desktop test")
     expect(testJob).toContain("CONVAX_DESKTOP_TEST_SHARD: ${{ matrix.desktop_shard }}")
