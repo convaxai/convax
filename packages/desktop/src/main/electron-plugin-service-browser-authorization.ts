@@ -245,7 +245,6 @@ export async function createElectronAuthorizationSession(
               closeCookiePollTimer = undefined
               inspect()
             }, Math.min(closedWindowCookiePollIntervalMs, remaining))
-            closeCookiePollTimer.unref?.()
             return
           }
           closeCheckPending = false

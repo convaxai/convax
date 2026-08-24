@@ -313,7 +313,6 @@ export class ServiceAwareGenerationTools implements GenerationToolExecutionPort 
       () => controller.abort(new DOMException("Plugin model catalog timed out", "AbortError")),
       this.#availabilityTimeoutMs,
     )
-    timeout.unref?.()
     let rejectCanceled!: (reason: Error) => void
     const canceled = new Promise<never>((_resolve, reject) => {
       rejectCanceled = reject
@@ -370,7 +369,6 @@ export class ServiceAwareGenerationTools implements GenerationToolExecutionPort 
       () => controller.abort(new DOMException("Plugin service availability check timed out", "AbortError")),
       this.#availabilityTimeoutMs,
     )
-    timeout.unref?.()
     let rejectCanceled!: (reason: Error) => void
     const canceled = new Promise<never>((_resolve, reject) => {
       rejectCanceled = reject
