@@ -5,12 +5,13 @@ import {
   selectDesktopTestShard,
 } from "./desktop-test-shard"
 
-const isolatedModuleMockTests = [
+const isolatedTests = [
   "electron.vite.config.test.ts",
   "src/main/canvas-external-media-drag-ipc.test.ts",
   "src/main/electron-plugin-service-browser-authorization.test.ts",
   "src/main/main-window-controls-ipc.test.ts",
   "src/main/plugin-capability-ipc.test.ts",
+  "src/main/stdio-mcp-client.test.ts",
   "src/main/workspace-system-status-ipc.test.ts",
   "src/renderer/canvas-card-conversation-panel-interaction.test.tsx",
   "src/renderer/pet-settings-host.test.tsx",
@@ -89,7 +90,7 @@ async function forwardTestOutput(
   inspect(decoder.decode())
 }
 
-const isolatedSet = new Set<string>(isolatedModuleMockTests)
+const isolatedSet = new Set<string>(isolatedTests)
 const regularTests: string[] = []
 const testFiles = new Bun.Glob("**/*.test.{ts,tsx}")
 for await (const file of testFiles.scan({ cwd: import.meta.dir + "/..", onlyFiles: true })) {
@@ -100,7 +101,7 @@ regularTests.sort()
 
 const shard = parseDesktopTestShard(Bun.env.CONVAX_DESKTOP_TEST_SHARD)
 const shardedRegularTests = selectDesktopTestShard(regularTests, shard)
-const shardedIsolatedTests = selectDesktopTestShard(isolatedModuleMockTests, shard)
+const shardedIsolatedTests = selectDesktopTestShard(isolatedTests, shard)
 console.log(
   `Running Desktop test shard ${shard.index}/${shard.total}: ${shardedRegularTests.length} regular and ${shardedIsolatedTests.length} isolated files`,
 )

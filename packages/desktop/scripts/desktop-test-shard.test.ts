@@ -46,9 +46,10 @@ describe("Desktop test sharding", () => {
 
   test("runs non-Desktop Windows tests once and partitions Desktop without omissions", async () => {
     const repositoryRoot = path.join(import.meta.dir, "..", "..", "..")
-    const [workflow, turbo] = await Promise.all([
+    const [workflow, turbo, desktopSuite] = await Promise.all([
       readFile(path.join(repositoryRoot, ".github", "workflows", "package-boundaries.yml"), "utf8"),
       readFile(path.join(repositoryRoot, "turbo.json"), "utf8"),
+      readFile(path.join(import.meta.dir, "desktop-test-suite.ts"), "utf8"),
     ])
     const normalizedWorkflow = workflow.replace(/\r\n/gu, "\n")
     const testJob = normalizedWorkflow.split("\n  desktop-package:")[0]?.split("\n  test:")[1]
@@ -65,5 +66,6 @@ describe("Desktop test sharding", () => {
     expect(testJob).toContain("run: bun --cwd packages/desktop test")
     expect(testJob).toContain("CONVAX_DESKTOP_TEST_SHARD: ${{ matrix.desktop_shard }}")
     expect(desktopTestTask).toContain('"env": ["CONVAX_DESKTOP_TEST_SHARD"]')
+    expect(desktopSuite).toContain('"src/main/stdio-mcp-client.test.ts"')
   })
 })

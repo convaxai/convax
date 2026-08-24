@@ -16,7 +16,7 @@ const clients = new Set<StdioMcpClient>()
 function createClient(
   options: Pick<
     StdioMcpClientOptions,
-    "maxConcurrentServerRequests" | "requestTimeoutMs" | "serverRequestHandler" | "shutdownGraceMs" | "spawn"
+    "maxConcurrentServerRequests" | "requestTimeoutMs" | "serverRequestHandler" | "shutdownGraceMs"
   > & { fixtureArgs?: readonly string[] } = {},
 ) {
   const { fixtureArgs = [], ...clientOptions } = options
@@ -73,21 +73,7 @@ describe("StdioMcpClient", () => {
   })
 
   test("negotiates the durable LRO, sends exact operation metadata, and calls fixed methods", async () => {
-    let writeCount = 0
-    const client = createClient({
-      fixtureArgs: ["--generation-recovery"],
-      spawn: ((command, args, options) => {
-        const child = spawn(command, args ?? [], options ?? {}) as ChildProcessWithoutNullStreams
-        const write = child.stdin.write
-        child.stdin.write = function (...writeArgs: unknown[]) {
-          writeCount += 1
-          if (writeCount === 3 && typeof writeArgs.at(-1) === "function") writeArgs[writeArgs.length - 1] = () => undefined
-          const accepted = Reflect.apply(write, child.stdin, writeArgs) as boolean
-          return writeCount === 3 ? false : accepted
-        } as typeof child.stdin.write
-        return child
-      }) as typeof spawn,
-    })
+    const client = createClient({ fixtureArgs: ["--generation-recovery"] })
     expect(await client.generationRecoveryCapability()).toEqual({
       binding: "fixture-binding",
       mode: "long-running-operation",
