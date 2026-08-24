@@ -1,4 +1,3 @@
-import { generateKeyPairSync, randomBytes, sign } from "node:crypto"
 import https from "node:https"
 
 import { afterEach, describe, expect, test } from "bun:test"
@@ -9,94 +8,24 @@ import {
   PinnedHttpsFetcher,
 } from "./pinned-https-fetch"
 
-const encodeDerLength = (length: number): Buffer => {
-  if (length < 0x80) return Buffer.from([length])
-  const bytes: number[] = []
-  for (let remaining = length; remaining > 0; remaining >>>= 8) bytes.unshift(remaining & 0xff)
-  return Buffer.from([0x80 | bytes.length, ...bytes])
-}
-
-const encodeDer = (tag: number, ...parts: Buffer[]): Buffer => {
-  const value = Buffer.concat(parts)
-  return Buffer.concat([Buffer.from([tag]), encodeDerLength(value.length), value])
-}
-
-const encodeDerOid = (...arcs: number[]): Buffer => {
-  const bytes: number[] = []
-  for (const arc of [arcs[0] * 40 + arcs[1], ...arcs.slice(2)]) {
-    const encoded = [arc & 0x7f]
-    for (let remaining = arc >>> 7; remaining > 0; remaining >>>= 7) {
-      encoded.unshift((remaining & 0x7f) | 0x80)
-    }
-    bytes.push(...encoded)
-  }
-  return encodeDer(0x06, Buffer.from(bytes))
-}
-
-const encodeUtcTime = (date: Date): Buffer => {
-  const value = [
-    String(date.getUTCFullYear()).slice(-2),
-    String(date.getUTCMonth() + 1).padStart(2, "0"),
-    String(date.getUTCDate()).padStart(2, "0"),
-    String(date.getUTCHours()).padStart(2, "0"),
-    String(date.getUTCMinutes()).padStart(2, "0"),
-    String(date.getUTCSeconds()).padStart(2, "0"),
-  ].join("")
-  return encodeDer(0x17, Buffer.from(`${value}Z`, "ascii"))
-}
-
-const encodeName = (commonName: string): Buffer =>
-  encodeDer(0x30, encodeDer(0x31, encodeDer(0x30, encodeDerOid(2, 5, 4, 3), encodeDer(0x0c, Buffer.from(commonName)))))
-
-const encodePem = (label: string, value: Buffer): string => {
-  const lines = value.toString("base64").match(/.{1,64}/g)
-  if (!lines) throw new Error(`Could not encode ${label}`)
-  return [`-----BEGIN ${label}-----`, ...lines, `-----END ${label}-----`].join("\n")
-}
-
-const createTlsFixture = (): { cert: string; key: string } => {
-  const { privateKey, publicKey } = generateKeyPairSync("rsa", { modulusLength: 2048 })
-  const signatureAlgorithm = encodeDer(0x30, encodeDerOid(1, 2, 840, 113549, 1, 1, 11), encodeDer(0x05))
-  const certificateName = encodeName("marketplace.test")
-  const now = Date.now()
-  const serial = randomBytes(16)
-  const serialNumber = serial[0] & 0x80 ? Buffer.concat([Buffer.from([0]), serial]) : serial
-  const subjectAltName = encodeDer(
-    0x30,
-    encodeDerOid(2, 5, 29, 17),
-    encodeDer(
-      0x04,
-      encodeDer(
-        0x30,
-        encodeDer(0x82, Buffer.from("marketplace.test", "ascii")),
-        encodeDer(0x82, Buffer.from("owner.github.io", "ascii")),
-      ),
-    ),
-  )
-  const tbsCertificate = encodeDer(
-    0x30,
-    encodeDer(0xa0, encodeDer(0x02, Buffer.from([2]))),
-    encodeDer(0x02, serialNumber),
-    signatureAlgorithm,
-    certificateName,
-    encodeDer(0x30, encodeUtcTime(new Date(now - 60_000)), encodeUtcTime(new Date(now + 24 * 60 * 60 * 1_000))),
-    certificateName,
-    Buffer.from(publicKey.export({ type: "spki", format: "der" })),
-    encodeDer(0xa3, encodeDer(0x30, subjectAltName)),
-  )
-  const certificate = encodeDer(
-    0x30,
-    tbsCertificate,
-    signatureAlgorithm,
-    encodeDer(0x03, Buffer.concat([Buffer.from([0]), sign("sha256", tbsCertificate, privateKey)])),
-  )
-  return {
-    cert: encodePem("CERTIFICATE", certificate),
-    key: privateKey.export({ type: "pkcs8", format: "pem" }).toString(),
-  }
-}
-
-const { cert, key } = createTlsFixture()
+// Keep TLS bytes fixed so the test exercises the fetcher rather than platform
+// crypto key generation. Bun 1.3.14 on Windows can panic while generating the
+// former RSA fixture before any test begins.
+const key = `-----BEGIN PRIVATE KEY-----
+MIGHAgEAMBMGByqGSM49AgEGCCqGSM49AwEHBG0wawIBAQQgeOjkly+Lei/EaMub
+UBIcRQ+JTOv5UUhuLbx+BUlgVnmhRANCAATUURNbgndPrh02b8P92Wm8fRUGQQYE
+2CKb1JFllBeKlaTwDh4wA2LMP9ZPqefTvr8Da2hEGwLLNVkUHwONlev2
+-----END PRIVATE KEY-----`
+const cert = `-----BEGIN CERTIFICATE-----
+MIIBXDCCAQGgAwIBAgIJAO/XEyqbKw2qMAoGCCqGSM49BAMCMBoxGDAWBgNVBAMM
+D293bmVyLmdpdGh1Yi5pbzAeFw0yNjA4MjQxNjUxMDVaFw0zNjA4MjExNjUxMDVa
+MBoxGDAWBgNVBAMMD293bmVyLmdpdGh1Yi5pbzBZMBMGByqGSM49AgEGCCqGSM49
+AwEHA0IABNRRE1uCd0+uHTZvw/3Zabx9FQZBBgTYIpvUkWWUF4qVpPAOHjADYsw/
+1k+p59O+vwNraEQbAss1WRQfA42V6/ajMDAuMCwGA1UdEQQlMCOCD293bmVyLmdp
+dGh1Yi5pb4IQbWFya2V0cGxhY2UudGVzdDAKBggqhkjOPQQDAgNJADBGAiEAh1JQ
+YQdXvzLtVVlFt9gZ9xgTSSfdH4DqRvCpa3nNY5ICIQDzLRi4tjfJ7GOBM4JhV8Te
+gAY5MDm5qgELIH+I6CZk2Q==
+-----END CERTIFICATE-----`
 
 const servers: https.Server[] = []
 afterEach(async () => {
