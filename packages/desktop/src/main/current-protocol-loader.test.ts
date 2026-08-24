@@ -7,7 +7,6 @@ import { CURRENT_PROTOCOL_IDENTITIES, encodeCurrentProtocolDescriptor, parseDige
 
 import { loadCurrentCollaborationProtocol, nodeCurrentProtocolDescriptorSource } from "./current-protocol-loader";
 
-const stagedRoot = path.resolve(import.meta.dir, "../..", ".packaging/collaboration-protocol");
 const roots: string[] = [];
 
 afterEach(async () => {
@@ -23,7 +22,8 @@ describe("Desktop staged current protocol loader", () => {
     expect(authority.protocolDigest).toBe(parseDigest(CURRENT_PROTOCOL_IDENTITIES.protocolDigest));
   });
 
-  test("stages exactly one descriptor file for packaging", async () => {
+  test("loads a staged root containing exactly one descriptor file", async () => {
+    const stagedRoot = await materializeStaging(encodeCurrentProtocolDescriptor());
     const entries = await fs.readdir(stagedRoot, { recursive: true, withFileTypes: true });
 
     expect(entries.filter((entry) => entry.isFile()).map((entry) => entry.name)).toEqual(["current.json"]);
