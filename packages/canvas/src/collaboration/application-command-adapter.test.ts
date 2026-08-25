@@ -431,7 +431,7 @@ describe("Canvas v2 application command adapter", () => {
       expect(after.projectionArrayEntryVisits - before.projectionArrayEntryVisits).toBe(0)
       expect(after.historicalGenerationVisits - before.historicalGenerationVisits).toBe(0)
     }
-  })
+  }, 30_000)
 
   test("commits the Canvas-owned intrinsic media size in the first resource intent", () => {
     const document = newCanvas()

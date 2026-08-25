@@ -1,6 +1,6 @@
 import { EventEmitter } from "node:events"
 
-import { describe, expect, mock, test } from "bun:test"
+import { describe, expect, mock, spyOn, test } from "bun:test"
 
 interface FakeCookie {
   name: string
@@ -600,10 +600,12 @@ describe("Electron Plugin service browser authorization", () => {
   })
 
   test("waits for a delayed exact-origin Cookie commit after the remote page closes itself", async () => {
+    const clearTimer = spyOn(globalThis, "clearTimeout")
     const { pending } = beginAuthorization()
 
     currentWindow().destroy()
     expect(latestAuthorizationSession.clearStorageDataCalls).toBe(0)
+    await flushMicrotasks()
     latestAuthorizationSession.cookies.values = [{ name: "session_id", value: "delayed-approved" }]
     latestAuthorizationSession.cookies.change({ name: "session_id", value: "delayed-approved" })
 
@@ -615,7 +617,9 @@ describe("Electron Plugin service browser authorization", () => {
       "https://accounts.example.com/",
       "https://accounts.example.com/",
     ])
+    expect(clearTimer).toHaveBeenCalled()
     expect(latestAuthorizationSession.clearStorageDataCalls).toBe(1)
+    clearTimer.mockRestore()
   })
 
   test("fails closed after a direct closed event without an approved cookie", async () => {

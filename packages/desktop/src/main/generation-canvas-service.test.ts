@@ -4074,6 +4074,10 @@ describe("GenerationCanvasService", () => {
     expect(await fs.readdir(path.join(privateRoot, "inputs"))).toEqual([storedInput.id])
     expect(harness.calls).toEqual([])
     expect(harness.replacementRequests).toEqual([])
+    for (let index = 0; index < 100; index += 1) {
+      if (report.mock.calls.length > 0) break
+      await Bun.sleep(1)
+    }
     expect(report).toHaveBeenCalledWith("Canvas generation supervise failed", {
       diagnostics: [{ message: "Generation recovery runtime binding changed", name: "Error" }],
     })

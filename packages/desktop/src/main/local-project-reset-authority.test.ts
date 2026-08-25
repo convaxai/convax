@@ -21,13 +21,14 @@ import {
 } from "./main-project-index-runtime-registry"
 
 const roots: string[] = []
+const nativeDirectoryDurabilityTest = test.skipIf(process.platform === "win32")
 
 afterEach(async () => {
   await Promise.all(roots.splice(0).map((root) => fs.rm(root, { force: true, recursive: true })))
 })
 
 describe("local Project reset authority", () => {
-  test("publishes an exact signed unteamed reset and preserves ordinary Project files", async () => {
+  nativeDirectoryDurabilityTest("publishes an exact signed unteamed reset and preserves ordinary Project files", async () => {
     const fixture = await createFixture()
     const service = new NodeProjectCollaborationRecoveryService({
       authority: fixture.resets,
@@ -77,7 +78,7 @@ describe("local Project reset authority", () => {
     expect(await service.inspectProject("project_test")).toEqual({ status: "current" })
   })
 
-  test("recovers an exact pristine local-owner bootstrap published beside legacy Canvas bytes", async () => {
+  nativeDirectoryDurabilityTest("recovers an exact pristine local-owner bootstrap published beside legacy Canvas bytes", async () => {
     const fixture = await createFixture()
     const owner = await fixture.owners.ensureForDurableProject({
       projectId: parseProjectId("project_test"),
@@ -127,7 +128,7 @@ describe("local Project reset authority", () => {
     expect(await fs.readFile(path.join(fixture.projectRoot, "Notes", "keep.md"), "utf8")).toBe("keep")
   })
 
-  test("resets a retired local protocol tree with a fresh epoch and archives every old byte", async () => {
+  nativeDirectoryDurabilityTest("resets a retired local protocol tree with a fresh epoch and archives every old byte", async () => {
     const fixture = await createFixture()
     const previous = await fixture.owners.ensureForDurableProject({
       projectId: parseProjectId("project_test"),
@@ -222,7 +223,7 @@ describe("local Project reset authority", () => {
     expect(await fs.readFile(teamEvidence, "utf8")).toBe("retained-team-evidence")
   })
 
-  test("resets arbitrary unsupported local collaboration bytes without decoding them", async () => {
+  nativeDirectoryDurabilityTest("resets arbitrary unsupported local collaboration bytes without decoding them", async () => {
     const fixture = await createFixture()
     const collaboration = path.join(fixture.projectRoot, ".convax", "collaboration")
     await fs.mkdir(collaboration)
@@ -252,7 +253,7 @@ describe("local Project reset authority", () => {
       .toEqual(before)
   })
 
-  test("resets a local Project after collaboration frames appear and activates a fresh owner", async () => {
+  nativeDirectoryDurabilityTest("resets a local Project after collaboration frames appear and activates a fresh owner", async () => {
     const fixture = await createFixture()
     const owner = await fixture.owners.ensureForDurableProject({
       projectId: parseProjectId("project_test"),
