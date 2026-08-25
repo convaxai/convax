@@ -2,6 +2,7 @@ import {
   forwardRef,
   useEffect,
   useState,
+  type AnimationEvent,
   type ComponentProps,
   type ComponentPropsWithoutRef,
   type FocusEvent,
@@ -49,6 +50,8 @@ const beamStrength: Record<BeamIntensity, number> = {
   strong: 1,
   subtle: 0.45,
 }
+
+const surfaceBeamDurationSeconds = 1.6
 
 function readBeamEnvironment(): BeamEnvironment {
   if (typeof document === "undefined" || typeof window === "undefined") {
@@ -134,7 +137,7 @@ function buttonBeamSize(beam: BeamMotion): BorderBeamSize {
 }
 
 export interface BeamSurfaceProps extends ComponentPropsWithoutRef<"div">, BeamVisualProps {
-  /** Activates the upstream Large (`md`) preset while focus is within an idle surface. */
+  /** Plays one upstream Large (`md`) cycle when focus enters an idle surface. */
   focusBeam?: boolean
 }
 
@@ -158,18 +161,32 @@ export const BeamSurface = forwardRef<HTMLDivElement, BeamSurfaceProps>(function
   ref,
 ) {
   const [focusWithin, setFocusWithin] = useState(false)
+  const [focusCycleActive, setFocusCycleActive] = useState(false)
   const environment = useBeamEnvironment(reducedMotion)
-  const focusActive = focusBeam && beam === "idle" && focusWithin
+  const focusActive = focusBeam && beam === "idle" && focusWithin && focusCycleActive
   const active = (beam !== "idle" || focusActive) && !environment.reducedMotion
   const size = surfaceBeamSize(beam)
 
+  useEffect(() => {
+    if (beam !== "idle") setFocusCycleActive(false)
+  }, [beam])
+
   const handleBlurCapture = (event: FocusEvent<HTMLDivElement>) => {
     onBlurCapture?.(event)
-    if (!event.currentTarget.contains(event.relatedTarget as Node | null)) setFocusWithin(false)
+    if (!event.currentTarget.contains(event.relatedTarget as Node | null)) {
+      setFocusWithin(false)
+      setFocusCycleActive(false)
+    }
   }
   const handleFocusCapture = (event: FocusEvent<HTMLDivElement>) => {
     onFocusCapture?.(event)
-    setFocusWithin(true)
+    if (!event.currentTarget.contains(event.relatedTarget as Node | null)) {
+      setFocusWithin(true)
+      setFocusCycleActive(focusBeam && beam === "idle")
+    }
+  }
+  const handleAnimationIteration = (event: AnimationEvent<HTMLDivElement>) => {
+    if (focusActive && event.animationName.startsWith("beam-spin-")) setFocusCycleActive(false)
   }
 
   return (
@@ -177,9 +194,11 @@ export const BeamSurface = forwardRef<HTMLDivElement, BeamSurfaceProps>(function
       active={active}
       className="ui-beam-root ui-beam-root--surface"
       colorVariant={beamColors[tone]}
+      duration={surfaceBeamDurationSeconds}
       size={size}
       strength={beamStrength[intensity]}
       theme={environment.theme}
+      onAnimationIteration={handleAnimationIteration}
     >
       <div
         {...props}
