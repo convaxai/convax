@@ -216,29 +216,22 @@
 .agent-composer-frame {
   position: relative;
   isolation: isolate;
+  border: 1px solid transparent;
   border-radius: var(--agent-composer-radius);
-  outline: 1px solid transparent;
-  outline-offset: -1px;
   transition:
     background-color 140ms ease,
+    border-color 140ms ease,
     box-shadow 140ms ease,
-    opacity 140ms ease,
-    outline-color 140ms ease,
-    transform 140ms ease;
+    opacity 140ms ease;
 }
 
 .agent-composer-frame:focus-within {
-  outline-color: color-mix(in oklab, var(--ui-brand) 42%, transparent);
+  border-color: color-mix(in oklab, var(--ui-brand) 58%, var(--ui-border-default));
   box-shadow: var(--ui-shadow-medium);
-  transform: translateY(-1px);
 }
 
 .agent-composer-frame[data-agent-composer-has-content="true"] {
   background-color: color-mix(in oklab, var(--ui-surface-raised) 96%, var(--ui-brand));
-}
-
-.agent-composer-frame[data-agent-composer-disabled="true"] {
-  transform: none;
 }
 
 .agent-composer-frame[data-agent-composer-surface="flat"] {

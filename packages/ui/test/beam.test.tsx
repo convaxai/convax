@@ -41,6 +41,7 @@ describe("Beam DOM contract", () => {
     expect(markup).toContain('data-beam-bloom="true"')
     expect(markup).toContain("overflow: hidden")
     expect(markup).toContain("beam-spin-")
+    expect(markup).toContain("1.6s linear infinite")
     expect(markup).toContain("--beam-strength:0.7")
     expect(markup).not.toContain("inset: -30px")
     expect(markup).toContain('data-slot="beam-surface"')
@@ -91,7 +92,63 @@ describe("Beam DOM contract", () => {
     expect(animated).toContain('data-active=""')
   })
 
-  test("activates the upstream Large preset while focus is within an idle surface", async () => {
+  test("plays one complete upstream Large cycle when focus enters an idle surface", async () => {
+    const testWindow = installTestWindow()
+    let root: Root | undefined
+
+    try {
+      const container = document.createElement("div")
+      document.body.append(container)
+      root = createRoot(container)
+      await act(async () =>
+        root?.render(
+          <BeamSurface focusBeam>
+            <textarea aria-label="Prompt" />
+            <button type="button">Action</button>
+          </BeamSurface>,
+        ),
+      )
+      expect(container.querySelector("[data-beam]")?.hasAttribute("data-active")).toBeFalse()
+
+      await act(async () => container.querySelector("textarea")?.focus())
+      await act(async () => undefined)
+      const wrapper = container.querySelector("[data-beam]")
+      expect(wrapper?.hasAttribute("data-active")).toBeTrue()
+      const upstreamStyles = container.querySelector("style")?.textContent ?? ""
+      expect(upstreamStyles).toContain("overflow: hidden")
+      expect(upstreamStyles).toContain("beam-spin-")
+      expect(upstreamStyles).not.toContain("inset: -30px")
+
+      const unrelatedIteration = new Event("animationiteration", { bubbles: true })
+      Object.defineProperty(unrelatedIteration, "animationName", { value: "unrelated-animation" })
+      await act(async () => wrapper?.dispatchEvent(unrelatedIteration))
+      expect(wrapper?.hasAttribute("data-active")).toBeTrue()
+
+      const completedCycle = new Event("animationiteration", { bubbles: true })
+      Object.defineProperty(completedCycle, "animationName", { value: "beam-spin-focus-cycle" })
+      await act(async () => wrapper?.dispatchEvent(completedCycle))
+      await act(async () => undefined)
+      expect(wrapper?.hasAttribute("data-active")).toBeFalse()
+
+      const completedFade = new Event("animationend", { bubbles: true })
+      Object.defineProperty(completedFade, "animationName", { value: "beam-fade-out-focus-cycle" })
+      await act(async () => wrapper?.dispatchEvent(completedFade))
+
+      await act(async () => container.querySelector("button")?.focus())
+      expect(wrapper?.hasAttribute("data-active")).toBeFalse()
+
+      const outside = document.createElement("button")
+      document.body.append(outside)
+      await act(async () => outside.focus())
+      await act(async () => container.querySelector("textarea")?.focus())
+      expect(wrapper?.hasAttribute("data-active")).toBeTrue()
+    } finally {
+      if (root) await act(async () => root?.unmount())
+      await testWindow.restore()
+    }
+  })
+
+  test("keeps an explicit activity beam running and does not replay focus motion afterward", async () => {
     const testWindow = installTestWindow()
     let root: Root | undefined
 
@@ -106,16 +163,29 @@ describe("Beam DOM contract", () => {
           </BeamSurface>,
         ),
       )
-      expect(container.querySelector("[data-beam]")?.hasAttribute("data-active")).toBeFalse()
-
       await act(async () => container.querySelector("textarea")?.focus())
-      await act(async () => undefined)
+
+      await act(async () =>
+        root?.render(
+          <BeamSurface beam="rotate" focusBeam>
+            <textarea aria-label="Prompt" />
+          </BeamSurface>,
+        ),
+      )
       const wrapper = container.querySelector("[data-beam]")
+      const completedCycle = new Event("animationiteration", { bubbles: true })
+      Object.defineProperty(completedCycle, "animationName", { value: "beam-spin-activity-cycle" })
+      await act(async () => wrapper?.dispatchEvent(completedCycle))
       expect(wrapper?.hasAttribute("data-active")).toBeTrue()
-      const upstreamStyles = container.querySelector("style")?.textContent ?? ""
-      expect(upstreamStyles).toContain("overflow: hidden")
-      expect(upstreamStyles).toContain("beam-spin-")
-      expect(upstreamStyles).not.toContain("inset: -30px")
+
+      await act(async () =>
+        root?.render(
+          <BeamSurface focusBeam>
+            <textarea aria-label="Prompt" />
+          </BeamSurface>,
+        ),
+      )
+      expect(wrapper?.hasAttribute("data-active")).toBeFalse()
     } finally {
       if (root) await act(async () => root?.unmount())
       await testWindow.restore()

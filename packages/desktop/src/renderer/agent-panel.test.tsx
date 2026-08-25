@@ -786,10 +786,15 @@ describe("Agent composer source contract", () => {
     expect(source).toContain("data-agent-composer-has-content")
     expect(source).toContain("data-agent-composer-state")
     expect(styles).toContain(".agent-composer-frame:focus-within")
-    expect(styles).toContain('.agent-composer-frame[data-agent-composer-disabled="true"]')
-    expect(styles.match(/\.agent-composer-frame\[data-agent-composer-disabled="true"\]\s*\{[^}]*\}/)?.[0]).not.toContain(
-      "opacity",
+    expect(styles).toContain("border: 1px solid transparent")
+    expect(styles).toContain(
+      "border-color: color-mix(in oklab, var(--ui-brand) 58%, var(--ui-border-default))",
     )
+    const focusStyles = styles.match(/\.agent-composer-frame:focus-within\s*\{[^}]*\}/)?.[0]
+    expect(focusStyles).not.toContain("inset 0 0 0 1px")
+    expect(focusStyles).not.toContain("transform")
+    expect(styles).not.toContain("outline-offset")
+    expect(styles).not.toContain("transform: translateY(-1px)")
     expect(source).toContain('dropActive && "bg-interactive-selected ring-2 ring-primary/40"')
     expect(source).not.toContain('dropActive && "bg-primary/5')
     expect(styles).toContain("@media (prefers-reduced-motion: reduce)")
