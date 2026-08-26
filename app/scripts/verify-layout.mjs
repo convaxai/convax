@@ -1,4 +1,3 @@
-import { execFileSync } from 'node:child_process'
 import { existsSync, readFileSync, readdirSync } from 'node:fs'
 import { join } from 'node:path'
 import YAML from 'yaml'
@@ -8,18 +7,20 @@ function fail(message) {
   throw new Error(`layout gate: ${message}`)
 }
 
-function git(args, cwd = REPOSITORY_ROOT) {
-  return execFileSync('git', args, { cwd, encoding: 'utf8' }).trim()
-}
-
 const upstream = JSON.parse(readFileSync(join(REPOSITORY_ROOT, 'upstream.json'), 'utf8'))
-const gitlink = git(['rev-parse', 'HEAD:deepseek-harness'])
-const checkout = git(['rev-parse', 'HEAD'], join(REPOSITORY_ROOT, 'deepseek-harness'))
-if (gitlink !== upstream.commit || checkout !== upstream.commit) {
-  fail(`submodule pin mismatch: manifest=${upstream.commit}, gitlink=${gitlink}, checkout=${checkout}`)
+const repositoryEntries = new Set(readdirSync(REPOSITORY_ROOT))
+for (const forbiddenEntry of ['.gitmodules', 'deepseek-harness']) {
+  if (repositoryEntries.has(forbiddenEntry)) {
+    fail(`${forbiddenEntry} must stay outside the product repository`)
+  }
 }
-const dirtyUpstream = git(['status', '--porcelain', '--untracked-files=no'], join(REPOSITORY_ROOT, 'deepseek-harness'))
-if (dirtyUpstream !== '') fail('deepseek-harness has tracked modifications')
+if (upstream.repository !== 'https://github.com/deepseek-ai/deepseek-harness.git') {
+  fail('unexpected upstream source repository')
+}
+if (!/^[0-9a-f]{40}$/.test(upstream.commit)) fail('upstream source commit must be a full SHA')
+if (upstream.sourceCheckout !== '../deepseek-harness') {
+  fail('optional upstream source checkout must be the sibling ../deepseek-harness')
+}
 
 const rootManifest = JSON.parse(readFileSync(join(REPOSITORY_ROOT, 'package.json'), 'utf8'))
 if (rootManifest.dependencies?.['@deepseek-ai/dsh'] !== upstream.version) fail('npm DSH runtime is not pinned to upstream version')
@@ -61,4 +62,4 @@ for (const path of [
   if (raw.includes('!!js') || raw.includes('__jsExpr')) fail(`${path} contains executable YAML`)
 }
 
-process.stdout.write('layout gate: upstream pin, runtime versions, patches, and config purity pass\n')
+process.stdout.write('layout gate: external upstream reference, runtime versions, patches, and config purity pass\n')

@@ -7,7 +7,8 @@
 
 主参考改为社区桌面项目
 [`anywhere-labs/deepseek-harness-desktop`](https://github.com/anywhere-labs/deepseek-harness-desktop)：
-固定版本的上游 DeepSeek Harness 以 Git submodule 原样运行、永不修改；
+固定版本的上游 DeepSeek Harness 以 npm 闭包运行；源码 commit 只作为外部
+审计参考记录，不进入产品仓库；
 **桌面本身也是一个 DSH 插件**——窗口、托盘、更新、工作配置由桌面插件的
 Host/Client 双面提供，与第三方插件用同一套 Cordis 组合机制。
 [官方 examples](https://github.com/deepseek-ai/deepseek-harness/tree/master/examples)
@@ -16,7 +17,7 @@ Host/Client 双面提供，与第三方插件用同一套 Cordis 组合机制。
 ```text
 Electron bootstrap（app/desktop 拥有，尽量薄）
   ├── 生成一次性鉴权 token
-  └── 启动 DSH 运行时（固定上游 submodule）
+  └── 启动 DSH 运行时（固定 npm 运行闭包）
         └── Cordis Context（同一棵树）
               ├── 上游内置插件（原样）
               ├── app/desktop Host 面（窗口/托盘/更新/工作配置服务）
@@ -37,7 +38,7 @@ Electron Renderer（sandbox，无 Node）
 
 | 参考仓库要素 | 本项目采用 |
 | --- | --- |
-| `deepseek-harness/` 固定 submodule + 根 `upstream:*` 脚本 | 采用。上游永不在 feature 分支内修改；pin 更新与行为变更分开提交 |
+| `upstream.json` source/npm pin + 可选同级源码 checkout | 采用。产品仓库不带上游源码；pin 更新与行为变更分开提交 |
 | `dsh-plugin-desktop/`（桌面即插件：Host/Client 双面 + Electron bootstrap + 打包） | 采用为 `app/desktop` 的形态基线 |
 | `patches/` 显式上游补丁清单 | 采用，默认为空；每次升级逐条验证可否删除 |
 | 兼容模式规则（上游默认 client 零覆盖必须可跑） | 采用为硬规则；高级呈现只经桌面自有 Client 插件 + profile 组合 |
@@ -66,8 +67,8 @@ app/
     ui/             最小品牌标记 Client 插件（证明装载成功）
     test-consumer/  inject=['appRuntime'] 的测试消费插件
   profiles/         compatibility / default 两个工作配置
-deepseek-harness/   固定上游 Git submodule（M1 引入）
 patches/            上游补丁清单（默认为空）
+upstream.json       npm 运行版本与外部源码 commit 映射
 .agents/
   skills/gate-*/    门禁 skills
   notes/            Agent Note 决策记录
@@ -76,9 +77,10 @@ packages/ apps/ docs/ …  legacy 冻结区
 ```
 
 - 外层用一个包管理器（跟随参考仓库用 Yarn + `nodeLinker: node-modules`，
-  或统一 Bun，M1 前以打包验证结果定夺并记 Agent Note）；上游 submodule
-  保持自己的 pnpm workspace，只经根部 `upstream:*` 脚本进入。
-- 固定依赖：上游以 submodule commit pin；Electron `43.4.0`；打包 Node
+  或统一 Bun，M1 前以打包验证结果定夺并记 Agent Note）；可选的同级上游
+  checkout 保持自己的 pnpm workspace，只经根部 `upstream:*` 脚本进入。
+- 固定依赖：上游 npm 版本与 source commit 同时记录于 `upstream.json`；
+  Electron `43.4.0`；打包 Node
   `24.9.0`（独立打包而非 `ELECTRON_RUN_AS_NODE`，原因是上游原生模块
   ABI 需求；禁止「顺手优化」掉，决策记 Agent Note）。
 
@@ -155,7 +157,7 @@ packages/ apps/ docs/ …  legacy 冻结区
 | 里程碑 | 内容 | 出口条件 |
 | --- | --- | --- |
 | M0（本次） | 契约、计划、门禁 skills、Agent Notes 约定 | 文档齐备，门禁可路由 |
-| M1 | 骨架：submodule 固定、桌面插件、auth-fence、两个 profile、dump-config | 「测试与验收」全绿 |
+| M1 | 骨架：source/npm pin、桌面插件、auth-fence、两个 profile、dump-config | 「测试与验收」全绿 |
 | M1.5 | 两个风险 spike | 证据文档（Agent Note），非功能 |
 | M2 | `@app/canvas` 首版（单机、无协作）；内核包复用决策 | 画布可创建/编辑/持久化 |
 | M3 | 插件安装 UX：评估接入 dsh-community-market 开放 Schema 数据源 | 用户可装第三方插件 |
@@ -197,5 +199,6 @@ packages/ apps/ docs/ …  legacy 冻结区
 - Cordis 插件按可信本地代码处理，不承诺恶意插件隔离；控制面鉴权与保守
   权限姿势不因此豁免——它们防的是插件体系之外的本机进程与模型行为。
 - 先 macOS ARM64，后 Windows x64；不同架构分别安装依赖与打包。
-- 上游以 submodule commit 精确固定；本地修补只存在于 `patches/` 显式
-  清单；升级必须走 gate-upstream 门禁全程。
+- 上游 npm 运行版本与 source commit 精确映射，源码 checkout 不进入产品
+  仓库；本地修补只存在于 `patches/` 显式清单；升级必须走 gate-upstream
+  门禁全程。

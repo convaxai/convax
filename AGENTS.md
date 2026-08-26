@@ -11,7 +11,7 @@
 | 路径 | 状态 |
 | --- | --- |
 | `app/` | 新项目代码：`desktop/`（桌面插件）、`plugins/`、`profiles/`（骨架期逐步落地） |
-| `deepseek-harness/` | 固定上游 Git submodule（M1 引入），永不修改 |
+| `upstream.json` | 上游源码 commit 与 npm 运行版本的映射真源 |
 | `patches/` | 上游补丁显式清单，默认为空 |
 | `PLAN.md` | 计划真源 |
 | `.agents/skills/gate-*` | 门禁 skills |
@@ -31,8 +31,10 @@
 
 ## 硬规则（新项目）
 
-1. **上游 submodule 永不在 feature 分支内修改**；pin 更新与桌面行为变更
-   分开提交。本地修补只能以 `patches/` 显式清单存在并留审计记录。
+1. **产品仓库不保存上游源码 checkout。** 可选审计源码只能位于同级
+   `../deepseek-harness`；源码 commit 与 npm 版本记录在 `upstream.json`，
+   pin 更新与桌面行为变更分开提交。本地修补只能以 `patches/` 显式清单
+   存在并留审计记录。
 2. **桌面即插件。** Electron bootstrap 归 `app/desktop` 所有且尽量薄；
    窗口、托盘、更新、工作配置以 Cordis 服务暴露，开放给第三方插件的
    服务必须逐项文档化，默认不开放。
@@ -64,7 +66,7 @@
 | --- | --- |
 | `cordis.yml`、任何 `*.patch.yml`、profile、插件挂载、`provide`/`inject` 服务名 | [`gate-composition`](.agents/skills/gate-composition/SKILL.md) |
 | `auth-fence`、preload 暴露面、导航白名单、权限 profile、端口/host 参数、控制面可达性 | [`gate-security`](.agents/skills/gate-security/SKILL.md) |
-| 上游 submodule pin、`patches/` 增删、Electron / 打包 Node 版本 | [`gate-upstream`](.agents/skills/gate-upstream/SKILL.md) |
+| `upstream.json`、`@deepseek-ai/*` 版本、`patches/`、Electron / 打包 Node 版本 | [`gate-upstream`](.agents/skills/gate-upstream/SKILL.md) |
 
 ## 工作流
 
@@ -72,7 +74,7 @@
 2. 架构与流程决策写 Agent Note（`.agents/notes/`）；契约只保留规则，
    理由与取舍进 Note。计划、边界或硬规则变化必须与实现在同一变更内
    更新 `PLAN.md` / 本文件。
-3. 大方向变更前先提交；submodule pin 更新单独成提交。
+3. 大方向变更前先提交；上游 source/npm pin 更新单独成提交。
 4. 提交信息用中文 conventional 格式（如 `feat(desktop): 增加健康检查重启`）。
 5. 验证以 `app/` 的 package scripts 为准；骨架期最低要求：
    `dump-config` 无意外 diff + 壳测试 + 插件生命周期测试全绿。

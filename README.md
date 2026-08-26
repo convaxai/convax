@@ -39,9 +39,19 @@ not open a GUI.
 Node/DSH closure with an empty `PATH`, isolated home and working directories,
 and no dependency symlink escaping the app's `Resources` directory.
 
-The source-audit checkout is the immutable `deepseek-harness/` submodule. Run
-its own toolchain only through `yarn upstream:install` and
-`yarn upstream:build`.
+The product repository contains no upstream source checkout. Runtime and
+packaging use the exact `@deepseek-ai/*` npm closure recorded in
+`upstream.json`. For optional source inspection, place a matching checkout
+beside this repository:
+
+```bash
+git clone https://github.com/deepseek-ai/deepseek-harness.git ../deepseek-harness
+git -C ../deepseek-harness checkout b150a551b8d465e31e418e1b2eaf5e79bbb7d28e
+yarn upstream:build
+```
+
+Normal install, check, development, and packaging commands do not require that
+sibling checkout.
 
 ## Product boundaries
 

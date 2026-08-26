@@ -2,6 +2,7 @@
   "repository": "https://github.com/deepseek-ai/deepseek-harness.git",
   "commit": "b150a551b8d465e31e418e1b2eaf5e79bbb7d28e",
   "version": "0.1.1-rc.2",
+  "sourceCheckout": "../deepseek-harness",
   "referenceDesktop": {
     "repository": "https://github.com/anywhere-labs/deepseek-harness-desktop.git",
     "commit": "2172b1b2f2b0de4c2b3a1d8b55f11f8083a9305e"
